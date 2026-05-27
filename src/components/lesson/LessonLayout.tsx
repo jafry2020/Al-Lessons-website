@@ -1,17 +1,22 @@
 import Link from "next/link";
-import { ChevronRight, Clock, BookOpen, ArrowRight } from "lucide-react";
+import { ChevronRight, Clock, BookOpen, ArrowRight, Check } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { ImportantQuestions } from "./ImportantQuestions";
 import { PitfallsCallout } from "./Callouts";
+import { markLessonComplete } from "@/lib/lesson-actions";
 import type { LessonRecord } from "@/lib/content";
 
 interface Props {
   lesson: LessonRecord;
+  /** Null when the viewer is signed out OR has never opened this lesson. */
+  progress: { completedAt: Date | null } | null;
   children: React.ReactNode;
 }
 
-export function LessonLayout({ lesson, children }: Props) {
+export function LessonLayout({ lesson, progress, children }: Props) {
   const fm = lesson.frontmatter;
+  const isComplete = !!progress?.completedAt;
+
   return (
     <article className="mx-auto max-w-[1200px] px-6 py-10">
       {/* Breadcrumb */}
@@ -27,10 +32,17 @@ export function LessonLayout({ lesson, children }: Props) {
 
       {/* Header */}
       <header className="mb-10 border-b border-border-subtle pb-10">
-        <Badge tone="accent" className="mb-4">
-          {fm.lessonCode} · {fm.moduleLabel}
-        </Badge>
-        <h1 className="max-w-3xl text-h1 tracking-tight">{fm.title}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="accent">
+            {fm.lessonCode} · {fm.moduleLabel}
+          </Badge>
+          {isComplete && (
+            <Badge tone="success">
+              <Check size={11} /> Completed
+            </Badge>
+          )}
+        </div>
+        <h1 className="mt-4 max-w-3xl text-h1 tracking-tight">{fm.title}</h1>
         <div className="mt-5 flex flex-wrap items-center gap-5 text-body-sm text-text-secondary">
           <span className="inline-flex items-center gap-2">
             <Clock size={14} /> {fm.estMinutes} min read
@@ -75,9 +87,26 @@ export function LessonLayout({ lesson, children }: Props) {
             >
               ← Back to track
             </Link>
-            <button className="inline-flex h-11 items-center gap-2 rounded-md bg-accent-500 px-5 font-medium text-white shadow-sm transition-colors hover:bg-accent-600">
-              Mark complete & continue <ArrowRight size={16} />
-            </button>
+
+            <form action={markLessonComplete}>
+              <input type="hidden" name="track" value={fm.track} />
+              <input type="hidden" name="module" value={fm.module} />
+              <input type="hidden" name="lesson" value={fm.lesson} />
+              <button
+                type="submit"
+                className="inline-flex h-11 items-center gap-2 rounded-md bg-accent-500 px-5 font-medium text-white shadow-sm transition-colors hover:bg-accent-600"
+              >
+                {isComplete ? (
+                  <>
+                    <Check size={16} /> Completed · next lesson
+                  </>
+                ) : (
+                  <>
+                    Mark complete & continue <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </form>
           </div>
         </div>
       </div>
