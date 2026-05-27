@@ -46,10 +46,7 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`[content] ${message}`);
 }
 
-function validateFrontmatter(
-  data: Record<string, unknown>,
-  filePath: string
-): LessonFrontmatter {
+function validateFrontmatter(data: Record<string, unknown>, filePath: string): LessonFrontmatter {
   const where = path.relative(process.cwd(), filePath);
   assert(typeof data.title === "string", `${where}: missing 'title'`);
   assert(typeof data.track === "string", `${where}: missing 'track'`);

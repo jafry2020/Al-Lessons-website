@@ -80,7 +80,7 @@
 /* -------------------------------------------------------------------------- */
 
 html {
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -103,9 +103,14 @@ body {
   border-radius: 6px;
 }
 
-/* Headings use Geist Sans where loaded, falling back to Inter. */
-h1, h2, h3, h4, h5, h6 {
-  font-family: "Geist", "Inter", system-ui, sans-serif;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
 }
 
 /* Subtle scrollbars in dark mode */

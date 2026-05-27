@@ -1,10 +1,6 @@
 import type { MDXComponents } from "mdx/types";
 import { GlossaryTerm } from "./GlossaryTerm";
-import {
-  AnalogyCallout,
-  WorkedExample,
-  PitfallsCallout,
-} from "./Callouts";
+import { AnalogyCallout, WorkedExample, PitfallsCallout } from "./Callouts";
 import { InlineQuiz } from "./InlineQuiz";
 import { FillInBlankCode } from "./FillInBlankCode";
 import { HintLadder } from "./HintLadder";
@@ -33,34 +29,23 @@ export const mdxComponents: MDXComponents = {
   GradientDescentHero,
 
   // Markdown overrides: align native MD output with the design system.
-  h2: (props) => <h2 className="text-h2 mt-12 mb-4" {...props} />,
-  h3: (props) => <h3 className="text-h3 mt-10 mb-3" {...props} />,
-  p: (props) => (
-    <p className="text-body-lg text-text-secondary leading-relaxed my-4" {...props} />
-  ),
+  h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,
+  h3: (props) => <h3 className="mb-3 mt-10 text-h3" {...props} />,
+  p: (props) => <p className="my-4 text-body-lg leading-relaxed text-text-secondary" {...props} />,
   ul: (props) => (
-    <ul
-      className="my-4 space-y-2 text-body text-text-secondary list-disc pl-5"
-      {...props}
-    />
+    <ul className="my-4 list-disc space-y-2 pl-5 text-body text-text-secondary" {...props} />
   ),
   ol: (props) => (
-    <ol
-      className="my-4 space-y-2 text-body text-text-secondary list-decimal pl-5"
-      {...props}
-    />
+    <ol className="my-4 list-decimal space-y-2 pl-5 text-body text-text-secondary" {...props} />
   ),
-  strong: (props) => <strong className="text-text-primary font-semibold" {...props} />,
+  strong: (props) => <strong className="font-semibold text-text-primary" {...props} />,
   code: (props) => (
     <code
-      className="font-mono text-[0.9em] bg-subtle border border-border-subtle px-1.5 py-0.5 rounded-sm"
+      className="rounded-sm border border-border-subtle bg-subtle px-1.5 py-0.5 font-mono text-[0.9em]"
       {...props}
     />
   ),
   a: (props) => (
-    <a
-      className="text-accent-500 underline underline-offset-4 hover:text-accent-600"
-      {...props}
-    />
+    <a className="text-accent-500 underline underline-offset-4 hover:text-accent-600" {...props} />
   ),
 };

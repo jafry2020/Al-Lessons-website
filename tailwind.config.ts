@@ -1,11 +1,7 @@
 import type { Config } from "tailwindcss";
 
 export default {
-  content: [
-    "./app/**/*.{ts,tsx}",
-    "./src/**/*.{ts,tsx}",
-    "./content/**/*.mdx",
-  ],
+  content: ["./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}", "./content/**/*.mdx"],
   darkMode: ["class", '[data-theme="dark"]'],
   theme: {
     extend: {
@@ -33,9 +29,9 @@ export default {
         info: "rgb(var(--info) / <alpha-value>)",
       },
       fontFamily: {
-        sans: ['"Geist Sans"', "Inter", "system-ui", "sans-serif"],
-        prose: ["Inter", "system-ui", "sans-serif"],
-        mono: ['"JetBrains Mono"', "ui-monospace", "monospace"],
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        prose: ["var(--font-inter)", "system-ui", "sans-serif"],
+        mono: ["var(--font-jetbrains-mono)", "ui-monospace", "monospace"],
       },
       fontSize: {
         display: ["3.5rem", { lineHeight: "1.05", letterSpacing: "-0.02em", fontWeight: "600" }],

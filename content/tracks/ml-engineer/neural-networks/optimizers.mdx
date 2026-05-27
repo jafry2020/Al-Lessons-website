@@ -95,10 +95,13 @@ importantQuestions:
       - "Don't confuse overshooting with the saddle-escape behavior of noisy SGD — both look like loss bumps in plots."
 ---
 
-<div className="my-10 p-6 rounded-md border border-accent-100 bg-accent-50">
-  <div className="text-overline uppercase text-accent-700 mb-2">TL;DR</div>
-  <p className="text-body-lg text-text-primary leading-relaxed">
-    Every modern neural network is trained by an <em>optimizer</em> that decides how to turn gradients into parameter updates. SGD updates by the raw gradient. Momentum smooths the gradient over time. RMSprop and Adam additionally rescale each parameter's step size. They look similar in equations and behave very differently in practice — this lesson shows you exactly how.
+<div className="my-10 rounded-md border border-accent-100 bg-accent-50 p-6">
+  <div className="mb-2 text-overline uppercase text-accent-700">TL;DR</div>
+  <p className="text-body-lg leading-relaxed text-text-primary">
+    Every modern neural network is trained by an <em>optimizer</em> that decides how to turn
+    gradients into parameter updates. SGD updates by the raw gradient. Momentum smooths the gradient
+    over time. RMSprop and Adam additionally rescale each parameter's step size. They look similar
+    in equations and behave very differently in practice — this lesson shows you exactly how.
   </p>
 </div>
 
@@ -109,16 +112,46 @@ Once <GlossaryTerm term="Backpropagation" definition="The algorithm that compute
 Why bother? Because real loss surfaces are not friendly bowls. They have long ravines, saddle points, and patches where the gradient is huge for one parameter and microscopic for another. The optimizer's job is to navigate that terrain quickly and without falling off.
 
 <AnalogyCallout>
-  Imagine four hikers descending the same mountain in fog. **SGD** steps in whatever direction feels steepest right now — it zigzags down a ridge. **Momentum** is a hiker on a bicycle: once it's rolling downhill, it keeps going even when the slope briefly flattens. **RMSprop** wears one big snowshoe and one small one — it takes tiny steps on icy patches where it's been slipping, and bigger steps on firm ground. **Adam** is the bicycle and the snowshoes.
+  Imagine four hikers descending the same mountain in fog. **SGD** steps in whatever direction feels
+  steepest right now — it zigzags down a ridge. **Momentum** is a hiker on a bicycle: once it's
+  rolling downhill, it keeps going even when the slope briefly flattens. **RMSprop** wears one big
+  snowshoe and one small one — it takes tiny steps on icy patches where it's been slipping, and
+  bigger steps on firm ground. **Adam** is the bicycle and the snowshoes.
 </AnalogyCallout>
 
 <WorkedExample title="One step of Adam, by hand">
-  <p>Suppose we have a single parameter <code>w = 2.0</code>, a gradient <code>g = 1.4</code>, and Adam at the very first step with hyper-parameters <code>β₁ = 0.9</code>, <code>β₂ = 0.999</code>, <code>lr = 0.1</code>.</p>
-  <p><strong>1. Update first moment (momentum):</strong><br/><code>m₁ = 0.9 · 0 + 0.1 · 1.4 = 0.14</code></p>
-  <p><strong>2. Update second moment (squared gradients):</strong><br/><code>v₁ = 0.999 · 0 + 0.001 · 1.4² = 0.001 · 1.96 = 0.00196</code></p>
-  <p><strong>3. Bias correction</strong> (at <code>t = 1</code>):<br/><code>m̂ = 0.14 / (1 − 0.9¹) = 0.14 / 0.1 = 1.4</code><br/><code>v̂ = 0.00196 / (1 − 0.999¹) = 0.00196 / 0.001 = 1.96</code></p>
-  <p><strong>4. Update:</strong><br/><code>w ← 2.0 − 0.1 · 1.4 / (√1.96 + 1e-8) = 2.0 − 0.1 · 1.4 / 1.4 = 1.9</code></p>
-  <p>Notice: with bias correction, the first step is essentially <code>lr · sign(g)</code> — a step of size 0.1, not a step proportional to <code>g</code>'s magnitude. That's the adaptive behavior that distinguishes Adam from SGD.</p>
+  <p>
+    Suppose we have a single parameter <code>w = 2.0</code>, a gradient <code>g = 1.4</code>, and
+    Adam at the very first step with hyper-parameters <code>β₁ = 0.9</code>, <code>β₂ = 0.999</code>
+    , <code>lr = 0.1</code>.
+  </p>
+  <p>
+    <strong>1. Update first moment (momentum):</strong>
+    <br />
+    <code>m₁ = 0.9 · 0 + 0.1 · 1.4 = 0.14</code>
+  </p>
+  <p>
+    <strong>2. Update second moment (squared gradients):</strong>
+    <br />
+    <code>v₁ = 0.999 · 0 + 0.001 · 1.4² = 0.001 · 1.96 = 0.00196</code>
+  </p>
+  <p>
+    <strong>3. Bias correction</strong> (at <code>t = 1</code>):
+    <br />
+    <code>m̂ = 0.14 / (1 − 0.9¹) = 0.14 / 0.1 = 1.4</code>
+    <br />
+    <code>v̂ = 0.00196 / (1 − 0.999¹) = 0.00196 / 0.001 = 1.96</code>
+  </p>
+  <p>
+    <strong>4. Update:</strong>
+    <br />
+    <code>w ← 2.0 − 0.1 · 1.4 / (√1.96 + 1e-8) = 2.0 − 0.1 · 1.4 / 1.4 = 1.9</code>
+  </p>
+  <p>
+    Notice: with bias correction, the first step is essentially <code>lr · sign(g)</code> — a step
+    of size 0.1, not a step proportional to <code>g</code>'s magnitude. That's the adaptive behavior
+    that distinguishes Adam from SGD.
+  </p>
 </WorkedExample>
 
 ## Optimizer race
@@ -143,12 +176,11 @@ s_rms = 0.0
 m_adam, v_adam = 0.0, 0.0
 lr, beta, rho, b1, b2, eps = 0.1, 0.9, 0.9, 0.9, 0.999, 1e-8
 
-for t in range(1, 51):
-    # Same loss: f(w) = (w - 3)**2, gradient = 2 * (w - 3)
-    g_sgd  = 2 * (w_sgd  - 3)
-    g_mom  = 2 * (w_mom  - 3)
-    g_rms  = 2 * (w_rms  - 3)
-    g_adam = 2 * (w_adam - 3)
+for t in range(1, 51): # Same loss: f(w) = (w - 3)\*_2, gradient = 2 _ (w - 3)
+g*sgd = 2 * (w*sgd - 3)
+g_mom = 2 * (w*mom - 3)
+g_rms = 2 * (w*rms - 3)
+g_adam = 2 * (w_adam - 3)
 
     # SGD
     w_sgd -= lr * g_sgd
@@ -168,7 +200,7 @@ for t in range(1, 51):
     v_hat  = v_adam / (1 - b2 ** t)
     w_adam -= lr * m_hat / (np.sqrt(v_hat) + eps)
 
-print(w_sgd, w_mom, w_rms, w_adam)  # all close to 3.0, at different speeds`}</CodeBlock>
+print(w_sgd, w_mom, w_rms, w_adam) # all close to 3.0, at different speeds`}</CodeBlock>
 
 ## Code challenge
 
@@ -190,7 +222,10 @@ print(w_sgd, w_mom, w_rms, w_adam)  # all close to 3.0, at different speeds`}</C
   question="Why does Adam's first step have size roughly equal to lr, regardless of how large the gradient is?"
   options={[
     { text: "Because it clips the gradient to lr before applying it." },
-    { text: "Because of bias correction: at t=1, m̂ ≈ g and v̂ ≈ g², so the ratio m̂ / √v̂ ≈ sign(g).", correct: true },
+    {
+      text: "Because of bias correction: at t=1, m̂ ≈ g and v̂ ≈ g², so the ratio m̂ / √v̂ ≈ sign(g).",
+      correct: true,
+    },
     { text: "Because Adam ignores the gradient magnitude and only uses its sign." },
     { text: "Because the moving averages have not yet been initialized." },
   ]}

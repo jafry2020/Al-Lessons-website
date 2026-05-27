@@ -8,10 +8,9 @@ import { useEffect, useRef, useState } from "react";
 const W = 560;
 const H = 360;
 
-// Loss surface: f(x, y) = 0.5 * (1.2 * x^2 + y^2) (an elongated bowl)
-function loss(x: number, y: number) {
-  return 0.5 * (1.2 * x * x + y * y);
-}
+// Loss surface: f(x, y) = 0.5 * (1.2 * x^2 + y^2) (an elongated bowl).
+// Only the gradient is needed at runtime; the loss itself is implicit in the
+// contour ellipses computed inline below.
 function grad(x: number, y: number) {
   return [1.2 * x, y] as const;
 }
@@ -21,9 +20,7 @@ const toX = (x: number) => ((x + 3) / 6) * W;
 const toY = (y: number) => ((y + 3) / 6) * H;
 
 export function GradientDescentHero() {
-  const [path, setPath] = useState<{ x: number; y: number }[]>([
-    { x: 2.4, y: -2.2 },
-  ]);
+  const [path, setPath] = useState<{ x: number; y: number }[]>([{ x: 2.4, y: -2.2 }]);
   const lr = 0.12;
   const raf = useRef<number>(0);
 
@@ -34,7 +31,7 @@ export function GradientDescentHero() {
         last = t;
         setPath((p) => {
           const head = p[p.length - 1];
-          if (Math.abs(head.x) < 0.05 && Math.abs(head.y) < 0.05 || p.length > 60) {
+          if ((Math.abs(head.x) < 0.05 && Math.abs(head.y) < 0.05) || p.length > 60) {
             const angle = Math.random() * Math.PI * 2;
             const r = 2 + Math.random() * 0.6;
             return [{ x: Math.cos(angle) * r, y: Math.sin(angle) * r }];
@@ -56,7 +53,7 @@ export function GradientDescentHero() {
     <div className="relative w-full max-w-[560px]">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full h-auto rounded-lg border border-border-subtle bg-surface-raised shadow-md"
+        className="h-auto w-full rounded-lg border border-border-subtle bg-surface-raised shadow-md"
         aria-label="Gradient descent demonstration"
       >
         <defs>

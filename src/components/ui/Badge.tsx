@@ -18,7 +18,7 @@ export function Badge({ className, tone = "neutral", ...rest }: Props) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-overline uppercase",
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-overline uppercase",
         tones[tone],
         className
       )}

@@ -14,14 +14,7 @@ interface Props {
   solution: string;
 }
 
-export function FillInBlankCode({
-  prompt,
-  before,
-  after,
-  expected,
-  hints,
-  solution,
-}: Props) {
+export function FillInBlankCode({ prompt, before, after, expected, hints, solution }: Props) {
   const [value, setValue] = useState("");
   const [submitted, setSubmitted] = useState(false);
 
@@ -29,20 +22,20 @@ export function FillInBlankCode({
   const correct = submitted && expected.some((e) => normalize(e) === normalize(value));
 
   return (
-    <div className="my-8 bg-surface border border-border-subtle rounded-md p-6">
-      <div className="text-overline uppercase text-text-secondary mb-2">Code challenge</div>
-      <p className="text-body-lg mb-4">{prompt}</p>
+    <div className="my-8 rounded-md border border-border-subtle bg-surface p-6">
+      <div className="mb-2 text-overline uppercase text-text-secondary">Code challenge</div>
+      <p className="mb-4 text-body-lg">{prompt}</p>
 
-      <div className="font-mono text-body-sm bg-surface-raised border border-border-subtle rounded-sm p-4 overflow-x-auto">
+      <div className="overflow-x-auto rounded-sm border border-border-subtle bg-surface-raised p-4 font-mono text-body-sm">
         <pre className="whitespace-pre text-text-primary">{before}</pre>
-        <div className="flex items-center gap-2 my-1">
+        <div className="my-1 flex items-center gap-2">
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="your answer"
             spellCheck={false}
             className={cn(
-              "w-72 max-w-full px-3 py-1.5 rounded-sm bg-canvas border border-border-strong font-mono text-body-sm text-accent-600",
+              "w-72 max-w-full rounded-sm border border-border-strong bg-canvas px-3 py-1.5 font-mono text-body-sm text-accent-600",
               submitted && correct && "border-success bg-success/10",
               submitted && !correct && "border-danger bg-danger/10"
             )}
@@ -61,7 +54,7 @@ export function FillInBlankCode({
         <button
           onClick={() => setSubmitted(true)}
           disabled={!value}
-          className="h-9 px-4 text-body-sm font-medium rounded-sm bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50"
+          className="h-9 rounded-sm bg-accent-500 px-4 text-body-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50"
         >
           Check answer
         </button>
@@ -71,7 +64,7 @@ export function FillInBlankCode({
               setSubmitted(false);
               setValue("");
             }}
-            className="h-9 px-4 text-body-sm font-medium rounded-sm border border-border-strong hover:bg-subtle"
+            className="h-9 rounded-sm border border-border-strong px-4 text-body-sm font-medium hover:bg-subtle"
           >
             Try again
           </button>

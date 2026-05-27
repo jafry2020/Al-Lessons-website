@@ -26,8 +26,8 @@ export function CodeBlock({ language = "code", children }: Props) {
   };
 
   return (
-    <div className="my-6 rounded-md overflow-hidden border border-border-subtle bg-surface-raised">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle">
+    <div className="my-6 overflow-hidden rounded-md border border-border-subtle bg-surface-raised">
+      <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2">
         <span className="text-overline uppercase text-text-muted">{language}</span>
         <button
           onClick={copy}
@@ -36,7 +36,7 @@ export function CodeBlock({ language = "code", children }: Props) {
           <Copy size={12} /> {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="p-4 overflow-x-auto text-body-sm font-mono leading-relaxed text-text-primary">
+      <pre className="overflow-x-auto p-4 font-mono text-body-sm leading-relaxed text-text-primary">
         <code>{children}</code>
       </pre>
     </div>

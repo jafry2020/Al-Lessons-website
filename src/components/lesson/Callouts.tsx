@@ -3,8 +3,8 @@ import { Lightbulb, AlertTriangle, FlaskConical } from "lucide-react";
 
 export function AnalogyCallout({ children }: { children: ReactNode }) {
   return (
-    <aside className="my-6 border-l-[3px] border-accent-500 pl-5 italic text-text-secondary text-body-lg">
-      <div className="not-italic flex items-center gap-2 text-overline uppercase text-accent-600 mb-2">
+    <aside className="my-6 border-l-[3px] border-accent-500 pl-5 text-body-lg italic text-text-secondary">
+      <div className="mb-2 flex items-center gap-2 text-overline uppercase not-italic text-accent-600">
         <Lightbulb size={14} /> Analogy
       </div>
       {children}
@@ -14,12 +14,12 @@ export function AnalogyCallout({ children }: { children: ReactNode }) {
 
 export function WorkedExample({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="my-8 bg-subtle rounded-md p-6 border border-border-subtle">
-      <div className="flex items-center gap-2 text-overline uppercase text-text-secondary mb-2">
+    <section className="my-8 rounded-md border border-border-subtle bg-subtle p-6">
+      <div className="mb-2 flex items-center gap-2 text-overline uppercase text-text-secondary">
         <FlaskConical size={14} /> Worked example
       </div>
-      <h4 className="text-h4 font-semibold mb-3">{title}</h4>
-      <div className="text-body leading-relaxed space-y-3">{children}</div>
+      <h4 className="mb-3 text-h4 font-semibold">{title}</h4>
+      <div className="space-y-3 text-body leading-relaxed">{children}</div>
     </section>
   );
 }
@@ -27,10 +27,10 @@ export function WorkedExample({ title, children }: { title: string; children: Re
 export function PitfallsCallout({ items }: { items: string[] }) {
   return (
     <aside className="my-8 border-l-[3px] border-warning pl-5">
-      <div className="flex items-center gap-2 text-overline uppercase text-warning mb-2">
+      <div className="mb-2 flex items-center gap-2 text-overline uppercase text-warning">
         <AlertTriangle size={14} /> Common pitfalls
       </div>
-      <ul className="space-y-2 text-body text-text-secondary list-disc pl-5">
+      <ul className="list-disc space-y-2 pl-5 text-body text-text-secondary">
         {items.map((i, idx) => (
           <li key={idx}>{i}</li>
         ))}

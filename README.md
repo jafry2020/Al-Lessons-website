@@ -21,10 +21,10 @@ npm run dev
 
 Open http://localhost:3000.
 
-| Route | Page |
-| --- | --- |
-| `/` | Landing page with live gradient-descent hero |
-| `/tracks/ml-engineer/neural-networks/optimizers` | Sample lesson: A4.5 Optimizers |
+| Route                                            | Page                                         |
+| ------------------------------------------------ | -------------------------------------------- |
+| `/`                                              | Landing page with live gradient-descent hero |
+| `/tracks/ml-engineer/neural-networks/optimizers` | Sample lesson: A4.5 Optimizers               |
 
 ## Other scripts
 

@@ -22,11 +22,11 @@ export function InlineQuiz({ question, options, explanation }: Props) {
   const result = picked === null ? null : options[picked].correct ? "correct" : "wrong";
 
   return (
-    <div className="my-8 bg-surface border border-border-subtle rounded-md p-6">
-      <div className="flex items-center gap-2 text-overline uppercase text-text-secondary mb-3">
+    <div className="my-8 rounded-md border border-border-subtle bg-surface p-6">
+      <div className="mb-3 flex items-center gap-2 text-overline uppercase text-text-secondary">
         Quick check
       </div>
-      <p className="text-h4 mb-5">{question}</p>
+      <p className="mb-5 text-h4">{question}</p>
       <div className="grid gap-2">
         {options.map((opt, i) => {
           const isPicked = picked === i;
@@ -34,12 +34,12 @@ export function InlineQuiz({ question, options, explanation }: Props) {
           const state = !reveal
             ? "idle"
             : isPicked && opt.correct
-            ? "correct"
-            : isPicked && !opt.correct
-            ? "wrong"
-            : opt.correct
-            ? "answer"
-            : "muted";
+              ? "correct"
+              : isPicked && !opt.correct
+                ? "wrong"
+                : opt.correct
+                  ? "answer"
+                  : "muted";
           return (
             <button
               key={i}
@@ -49,21 +49,18 @@ export function InlineQuiz({ question, options, explanation }: Props) {
                 setShowExplain(true);
               }}
               className={cn(
-                "group text-left px-4 py-3 rounded-sm border transition-all flex items-center gap-3",
+                "group flex items-center gap-3 rounded-sm border px-4 py-3 text-left transition-all",
                 state === "idle" &&
-                  "border-border-strong bg-surface hover:bg-subtle hover:border-accent-300",
-                state === "correct" &&
-                  "border-success bg-success/10 text-text-primary",
-                state === "wrong" &&
-                  "border-danger bg-danger/10 text-text-primary animate-shake",
-                state === "answer" &&
-                  "border-success/60 bg-success/5 text-text-primary",
+                  "border-border-strong bg-surface hover:border-accent-300 hover:bg-subtle",
+                state === "correct" && "border-success bg-success/10 text-text-primary",
+                state === "wrong" && "animate-shake border-danger bg-danger/10 text-text-primary",
+                state === "answer" && "border-success/60 bg-success/5 text-text-primary",
                 state === "muted" && "border-border-subtle opacity-60"
               )}
             >
               <span
                 className={cn(
-                  "w-5 h-5 rounded-full border grid place-items-center shrink-0 text-caption font-semibold",
+                  "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-caption font-semibold",
                   state === "idle" && "border-border-strong text-text-muted",
                   state === "correct" && "border-success bg-success text-white",
                   state === "wrong" && "border-danger bg-danger text-white",
@@ -98,10 +95,10 @@ export function InlineQuiz({ question, options, explanation }: Props) {
             {showExplain ? "Hide explanation" : "Show explanation"}
           </button>
           {showExplain && (
-            <div className="mt-3 p-4 bg-subtle rounded-sm border border-border-subtle text-body text-text-secondary animate-fadeUp">
+            <div className="mt-3 animate-fadeUp rounded-sm border border-border-subtle bg-subtle p-4 text-body text-text-secondary">
               <div
                 className={cn(
-                  "text-overline uppercase mb-1",
+                  "mb-1 text-overline uppercase",
                   result === "correct" ? "text-success" : "text-danger"
                 )}
               >

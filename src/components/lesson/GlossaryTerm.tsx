@@ -27,20 +27,20 @@ export function GlossaryTerm({ term, definition, children }: Props) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         onMouseEnter={() => setOpen(true)}
-        className="border-b border-dashed border-border-strong text-text-primary hover:text-accent-500 hover:border-accent-500 transition-colors"
+        className="border-b border-dashed border-border-strong text-text-primary transition-colors hover:border-accent-500 hover:text-accent-500"
       >
         {children ?? term}
       </button>
       {open && (
         <span
           role="tooltip"
-          className="absolute left-0 top-full mt-2 z-30 w-80 p-4 bg-surface-raised border border-border-subtle rounded-md shadow-lg animate-fadeUp text-left"
+          className="absolute left-0 top-full z-30 mt-2 w-80 animate-fadeUp rounded-md border border-border-subtle bg-surface-raised p-4 text-left shadow-lg"
         >
-          <span className="block text-h4 font-semibold mb-1">{term}</span>
-          <span className="block text-body-sm text-text-secondary leading-relaxed">
+          <span className="mb-1 block text-h4 font-semibold">{term}</span>
+          <span className="block text-body-sm leading-relaxed text-text-secondary">
             {definition}
           </span>
-          <span className="block mt-3 pt-3 border-t border-border-subtle">
+          <span className="mt-3 block border-t border-border-subtle pt-3">
             <a href="#" className="text-body-sm text-accent-500 hover:underline">
               Open in glossary →
             </a>

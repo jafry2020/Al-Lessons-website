@@ -15,11 +15,7 @@ export async function generateStaticParams(): Promise<Params[]> {
   return allLessonParams();
 }
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<Params>;
-}): Promise<Metadata> {
+export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
   const p = await params;
   const lesson = await findLesson(p.track, p.module, p.lesson);
   if (!lesson) return {};
@@ -29,11 +25,7 @@ export async function generateMetadata({
   };
 }
 
-export default async function LessonPage({
-  params,
-}: {
-  params: Promise<Params>;
-}) {
+export default async function LessonPage({ params }: { params: Promise<Params> }) {
   const p = await params;
   const lesson = await findLesson(p.track, p.module, p.lesson);
   if (!lesson) notFound();

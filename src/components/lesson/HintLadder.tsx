@@ -18,13 +18,11 @@ export function HintLadder({ hints, solution }: Props) {
       {hints.slice(0, tier).map((h, i) => (
         <div
           key={i}
-          className="flex gap-3 p-3 bg-subtle border border-border-subtle rounded-sm animate-fadeUp"
+          className="flex animate-fadeUp gap-3 rounded-sm border border-border-subtle bg-subtle p-3"
         >
-          <Lightbulb size={16} className="text-warning shrink-0 mt-0.5" />
+          <Lightbulb size={16} className="mt-0.5 shrink-0 text-warning" />
           <div className="text-body-sm text-text-secondary">
-            <span className="text-overline uppercase text-text-muted mr-2">
-              Hint {i + 1}
-            </span>
+            <span className="mr-2 text-overline uppercase text-text-muted">Hint {i + 1}</span>
             {h}
           </div>
         </div>
@@ -44,9 +42,9 @@ export function HintLadder({ hints, solution }: Props) {
       </div>
 
       {showSolution && (
-        <div className="mt-2 p-4 bg-accent-50 border border-accent-100 rounded-sm animate-fadeUp">
-          <div className="text-overline uppercase text-accent-700 mb-2">Solution</div>
-          <div className="text-body text-text-primary font-mono whitespace-pre-wrap">
+        <div className="mt-2 animate-fadeUp rounded-sm border border-accent-100 bg-accent-50 p-4">
+          <div className="mb-2 text-overline uppercase text-accent-700">Solution</div>
+          <div className="whitespace-pre-wrap font-mono text-body text-text-primary">
             {solution}
           </div>
         </div>

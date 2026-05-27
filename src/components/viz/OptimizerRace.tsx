@@ -49,9 +49,24 @@ interface OptimizerConfig {
 
 const OPTIMIZERS: OptimizerConfig[] = [
   { key: "sgd", label: "SGD", description: "Pure gradient descent.", varKey: "viz-7" },
-  { key: "momentum", label: "Momentum", description: "Velocity smooths the path.", varKey: "viz-3" },
-  { key: "rmsprop", label: "RMSprop", description: "Per-parameter adaptive step.", varKey: "viz-2" },
-  { key: "adam", label: "Adam", description: "Momentum + adaptive — the default.", varKey: "viz-1" },
+  {
+    key: "momentum",
+    label: "Momentum",
+    description: "Velocity smooths the path.",
+    varKey: "viz-3",
+  },
+  {
+    key: "rmsprop",
+    label: "RMSprop",
+    description: "Per-parameter adaptive step.",
+    varKey: "viz-2",
+  },
+  {
+    key: "adam",
+    label: "Adam",
+    description: "Momentum + adaptive — the default.",
+    varKey: "viz-1",
+  },
 ];
 
 interface Trajectory {
@@ -141,7 +156,8 @@ export function OptimizerRace() {
     adam: true,
   });
   const [playing, setPlaying] = useState(true);
-  const [tick, setTick] = useState(0);
+  // tick exists only to force re-renders when trajRef mutates in the RAF loop.
+  const [, setTick] = useState(0);
 
   const trajRef = useRef<Record<Optimizer, Trajectory>>(initTrajectories(start));
   const raf = useRef<number>(0);
@@ -246,10 +262,10 @@ export function OptimizerRace() {
 
   return (
     <figure className="my-10">
-      <div className="rounded-lg border border-border-subtle bg-surface-raised overflow-hidden shadow-md">
+      <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface-raised shadow-md">
         <svg
           viewBox={`0 0 ${W} ${H}`}
-          className="w-full h-auto cursor-crosshair"
+          className="h-auto w-full cursor-crosshair"
           onClick={onSurfaceClick}
           aria-label="Optimizer race on a 2D loss surface"
         >
@@ -266,8 +282,22 @@ export function OptimizerRace() {
           ))}
 
           {/* Axes */}
-          <line x1={0} y1={toScreenY(0)} x2={W} y2={toScreenY(0)} stroke="rgb(var(--border-subtle))" strokeWidth={1} />
-          <line x1={toScreenX(0)} y1={0} x2={toScreenX(0)} y2={H} stroke="rgb(var(--border-subtle))" strokeWidth={1} />
+          <line
+            x1={0}
+            y1={toScreenY(0)}
+            x2={W}
+            y2={toScreenY(0)}
+            stroke="rgb(var(--border-subtle))"
+            strokeWidth={1}
+          />
+          <line
+            x1={toScreenX(0)}
+            y1={0}
+            x2={toScreenX(0)}
+            y2={H}
+            stroke="rgb(var(--border-subtle))"
+            strokeWidth={1}
+          />
 
           {/* Trajectories */}
           {OPTIMIZERS.map((o) => {
@@ -303,8 +333,21 @@ export function OptimizerRace() {
 
           {/* Start marker */}
           <g>
-            <circle cx={toScreenX(start.x)} cy={toScreenY(start.y)} r={4} fill="none" stroke="rgb(var(--text-primary))" strokeWidth={1.5} />
-            <text x={toScreenX(start.x) + 8} y={toScreenY(start.y) - 8} fontSize="11" fill="rgb(var(--text-secondary))" fontFamily="JetBrains Mono, monospace">
+            <circle
+              cx={toScreenX(start.x)}
+              cy={toScreenY(start.y)}
+              r={4}
+              fill="none"
+              stroke="rgb(var(--text-primary))"
+              strokeWidth={1.5}
+            />
+            <text
+              x={toScreenX(start.x) + 8}
+              y={toScreenY(start.y) - 8}
+              fontSize="11"
+              fill="rgb(var(--text-secondary))"
+              fontFamily="JetBrains Mono, monospace"
+            >
               start
             </text>
           </g>
@@ -312,25 +355,31 @@ export function OptimizerRace() {
           {/* Minimum marker */}
           <g>
             <circle cx={toScreenX(3)} cy={toScreenY(0.5)} r={5} fill="rgb(var(--success))" />
-            <text x={toScreenX(3) + 10} y={toScreenY(0.5) + 4} fontSize="11" fill="rgb(var(--text-secondary))" fontFamily="JetBrains Mono, monospace">
+            <text
+              x={toScreenX(3) + 10}
+              y={toScreenY(0.5) + 4}
+              fontSize="11"
+              fill="rgb(var(--text-secondary))"
+              fontFamily="JetBrains Mono, monospace"
+            >
               minimum (3, 0.5)
             </text>
           </g>
         </svg>
 
         {/* Controls */}
-        <div className="border-t border-border-subtle p-4 bg-surface">
-          <div className="flex flex-wrap items-center gap-4 mb-4">
+        <div className="border-t border-border-subtle bg-surface p-4">
+          <div className="mb-4 flex flex-wrap items-center gap-4">
             <button
               onClick={() => setPlaying((p) => !p)}
-              className="h-9 px-3 text-body-sm font-medium rounded-sm bg-accent-500 text-white hover:bg-accent-600 inline-flex items-center gap-2"
+              className="inline-flex h-9 items-center gap-2 rounded-sm bg-accent-500 px-3 text-body-sm font-medium text-white hover:bg-accent-600"
             >
               {playing ? <Pause size={14} /> : <Play size={14} />}
               {playing ? "Pause" : "Play"}
             </button>
             <button
               onClick={reset}
-              className="h-9 px-3 text-body-sm font-medium rounded-sm border border-border-strong hover:bg-subtle inline-flex items-center gap-2"
+              className="inline-flex h-9 items-center gap-2 rounded-sm border border-border-strong px-3 text-body-sm font-medium hover:bg-subtle"
             >
               <RotateCcw size={14} /> Reset
             </button>
@@ -349,7 +398,7 @@ export function OptimizerRace() {
                 }}
                 className="w-40 accent-accent-500"
               />
-              <span className="font-mono text-text-primary w-12">{lr.toFixed(3)}</span>
+              <span className="w-12 font-mono text-text-primary">{lr.toFixed(3)}</span>
             </label>
 
             <div className="text-caption text-text-muted">
@@ -363,18 +412,18 @@ export function OptimizerRace() {
                 key={o.key}
                 onClick={() => setEnabled({ ...enabled, [o.key]: !enabled[o.key] })}
                 className={cn(
-                  "px-3 h-9 rounded-sm text-body-sm font-medium inline-flex items-center gap-2 border transition-colors",
+                  "inline-flex h-9 items-center gap-2 rounded-sm border px-3 text-body-sm font-medium transition-colors",
                   enabled[o.key]
                     ? "border-border-strong bg-surface text-text-primary"
                     : "border-border-subtle bg-subtle text-text-muted line-through"
                 )}
               >
                 <span
-                  className="w-2.5 h-2.5 rounded-full"
+                  className="h-2.5 w-2.5 rounded-full"
                   style={{ background: `rgb(var(--${o.varKey}))` }}
                 />
                 {o.label}
-                <span className="text-text-muted font-normal text-caption">
+                <span className="text-caption font-normal text-text-muted">
                   · {trajRef.current[o.key]?.pts.length ?? 0} steps
                 </span>
               </button>
@@ -382,10 +431,9 @@ export function OptimizerRace() {
           </div>
         </div>
       </div>
-      <figcaption className="text-caption text-text-muted mt-3 max-w-prose">
-        Beale function (a classic optimizer benchmark). The minimum sits in a narrow,
-        curving valley — exactly the kind of loss landscape that exposes which optimizer
-        keeps its footing.
+      <figcaption className="mt-3 max-w-prose text-caption text-text-muted">
+        Beale function (a classic optimizer benchmark). The minimum sits in a narrow, curving valley
+        — exactly the kind of loss landscape that exposes which optimizer keeps its footing.
       </figcaption>
     </figure>
   );
