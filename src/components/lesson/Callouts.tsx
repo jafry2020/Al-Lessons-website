@@ -1,6 +1,17 @@
 import type { ReactNode } from "react";
 import { Lightbulb, AlertTriangle, FlaskConical } from "lucide-react";
 
+export function TldrCallout({ children }: { children: ReactNode }) {
+  return (
+    <section className="my-10 rounded-md border border-accent-100 bg-accent-50 p-6">
+      <div className="mb-2 text-overline uppercase text-accent-700">TL;DR</div>
+      <div className="text-body-lg leading-relaxed text-text-primary [&>p]:my-0 [&>p]:text-text-primary">
+        {children}
+      </div>
+    </section>
+  );
+}
+
 export function AnalogyCallout({ children }: { children: ReactNode }) {
   return (
     <aside className="my-6 border-l-[3px] border-accent-500 pl-5 text-body-lg italic text-text-secondary">

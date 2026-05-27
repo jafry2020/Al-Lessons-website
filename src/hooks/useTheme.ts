@@ -4,23 +4,30 @@ import { useEffect, useState, useCallback } from "react";
 
 type Theme = "light" | "dark";
 
-function getInitial(): Theme {
-  if (typeof window === "undefined") return "light";
-  const stored = window.localStorage.getItem("theme") as Theme | null;
-  if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
+/**
+ * Reads the active theme from the DOM (set by the inline script in
+ * app/layout.tsx) after mount. Returns null on the very first render so
+ * the caller can render an inert placeholder and avoid hydration mismatch.
+ */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(getInitial);
+  const [theme, setTheme] = useState<Theme | null>(null);
 
+  // Sync from DOM after mount — the inline script in layout.tsx has already
+  // applied either the stored preference or the OS-level setting.
   useEffect(() => {
+    const current = document.documentElement.getAttribute("data-theme");
+    setTheme(current === "dark" ? "dark" : "light");
+  }, []);
+
+  // Apply changes back to the DOM and persist.
+  useEffect(() => {
+    if (theme === null) return;
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem("theme", theme);
   }, [theme]);
 
   const toggle = useCallback(() => {
-    setTheme((t) => (t === "light" ? "dark" : "light"));
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
   return { theme, toggle };

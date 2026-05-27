@@ -1,6 +1,6 @@
 import type { MDXComponents } from "mdx/types";
 import { GlossaryTerm } from "./GlossaryTerm";
-import { AnalogyCallout, WorkedExample, PitfallsCallout } from "./Callouts";
+import { TldrCallout, AnalogyCallout, WorkedExample, PitfallsCallout } from "./Callouts";
 import { InlineQuiz } from "./InlineQuiz";
 import { FillInBlankCode } from "./FillInBlankCode";
 import { HintLadder } from "./HintLadder";
@@ -16,6 +16,7 @@ import { GradientDescentHero } from "../viz/GradientDescentHero";
 export const mdxComponents: MDXComponents = {
   // Lesson shortcodes
   GlossaryTerm,
+  TldrCallout,
   AnalogyCallout,
   WorkedExample,
   PitfallsCallout,

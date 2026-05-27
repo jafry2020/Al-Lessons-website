@@ -95,15 +95,12 @@ importantQuestions:
       - "Don't confuse overshooting with the saddle-escape behavior of noisy SGD — both look like loss bumps in plots."
 ---
 
-<div className="my-10 rounded-md border border-accent-100 bg-accent-50 p-6">
-  <div className="mb-2 text-overline uppercase text-accent-700">TL;DR</div>
-  <p className="text-body-lg leading-relaxed text-text-primary">
-    Every modern neural network is trained by an <em>optimizer</em> that decides how to turn
-    gradients into parameter updates. SGD updates by the raw gradient. Momentum smooths the gradient
-    over time. RMSprop and Adam additionally rescale each parameter's step size. They look similar
-    in equations and behave very differently in practice — this lesson shows you exactly how.
-  </p>
-</div>
+<TldrCallout>
+  Every modern neural network is trained by an *optimizer* that decides how to turn gradients into
+  parameter updates. SGD updates by the raw gradient. Momentum smooths the gradient over time.
+  RMSprop and Adam additionally rescale each parameter's step size. They look similar in equations
+  and behave very differently in practice — this lesson shows you exactly how.
+</TldrCallout>
 
 ## The core idea
 
@@ -120,38 +117,23 @@ Why bother? Because real loss surfaces are not friendly bowls. They have long ra
 </AnalogyCallout>
 
 <WorkedExample title="One step of Adam, by hand">
-  <p>
-    Suppose we have a single parameter <code>w = 2.0</code>, a gradient <code>g = 1.4</code>, and
-    Adam at the very first step with hyper-parameters <code>β₁ = 0.9</code>, <code>β₂ = 0.999</code>
-    , <code>lr = 0.1</code>.
-  </p>
-  <p>
-    <strong>1. Update first moment (momentum):</strong>
-    <br />
-    <code>m₁ = 0.9 · 0 + 0.1 · 1.4 = 0.14</code>
-  </p>
-  <p>
-    <strong>2. Update second moment (squared gradients):</strong>
-    <br />
-    <code>v₁ = 0.999 · 0 + 0.001 · 1.4² = 0.001 · 1.96 = 0.00196</code>
-  </p>
-  <p>
-    <strong>3. Bias correction</strong> (at <code>t = 1</code>):
-    <br />
-    <code>m̂ = 0.14 / (1 − 0.9¹) = 0.14 / 0.1 = 1.4</code>
-    <br />
-    <code>v̂ = 0.00196 / (1 − 0.999¹) = 0.00196 / 0.001 = 1.96</code>
-  </p>
-  <p>
-    <strong>4. Update:</strong>
-    <br />
-    <code>w ← 2.0 − 0.1 · 1.4 / (√1.96 + 1e-8) = 2.0 − 0.1 · 1.4 / 1.4 = 1.9</code>
-  </p>
-  <p>
-    Notice: with bias correction, the first step is essentially <code>lr · sign(g)</code> — a step
-    of size 0.1, not a step proportional to <code>g</code>'s magnitude. That's the adaptive behavior
-    that distinguishes Adam from SGD.
-  </p>
+
+Suppose we have a single parameter `w = 2.0`, a gradient `g = 1.4`, and Adam
+at the very first step with hyper-parameters `β₁ = 0.9`, `β₂ = 0.999`,
+`lr = 0.1`.
+
+**1. Update first moment (momentum):** &nbsp; `m₁ = 0.9 · 0 + 0.1 · 1.4 = 0.14`
+
+**2. Update second moment (squared gradients):** &nbsp; `v₁ = 0.999 · 0 + 0.001 · 1.4² = 0.001 · 1.96 = 0.00196`
+
+**3. Bias correction** (at `t = 1`): &nbsp; `m̂ = 0.14 / (1 − 0.9¹) = 0.14 / 0.1 = 1.4` &nbsp;·&nbsp; `v̂ = 0.00196 / (1 − 0.999¹) = 0.00196 / 0.001 = 1.96`
+
+**4. Update:** &nbsp; `w ← 2.0 − 0.1 · 1.4 / (√1.96 + 1e-8) = 2.0 − 0.1 · 1.4 / 1.4 = 1.9`
+
+Notice: with bias correction, the first step is essentially `lr · sign(g)` —
+a step of size 0.1, not a step proportional to `g`'s magnitude. That's the
+adaptive behavior that distinguishes Adam from SGD.
+
 </WorkedExample>
 
 ## Optimizer race

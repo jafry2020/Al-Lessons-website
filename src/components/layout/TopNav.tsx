@@ -53,7 +53,16 @@ export function TopNav() {
             aria-label="Toggle theme"
             className="grid h-9 w-9 place-items-center rounded-sm text-text-secondary transition-colors hover:bg-subtle hover:text-text-primary"
           >
-            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+            {theme === null ? (
+              // Inert placeholder before mount — keeps the button sized and
+              // avoids a hydration mismatch with whichever theme the inline
+              // script in layout.tsx applied.
+              <span aria-hidden className="block h-[18px] w-[18px]" />
+            ) : theme === "light" ? (
+              <Moon size={18} />
+            ) : (
+              <Sun size={18} />
+            )}
           </button>
           <button className="h-9 rounded-sm border border-border-strong px-3 text-body-sm font-medium transition-colors hover:bg-subtle">
             Sign in
