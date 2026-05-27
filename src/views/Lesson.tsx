@@ -1,4 +1,6 @@
-import { Link } from "react-router-dom";
+"use client";
+
+import Link from "next/link";
 import { ChevronRight, Clock, BookOpen, ArrowRight, Copy } from "lucide-react";
 import { GlossaryTerm } from "@/components/lesson/GlossaryTerm";
 import { AnalogyCallout, WorkedExample, PitfallsCallout } from "@/components/lesson/Callouts";
@@ -167,7 +169,7 @@ export function Lesson() {
     <article className="max-w-[1200px] mx-auto px-6 py-10">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-caption text-text-muted mb-6">
-        <Link to="/" className="hover:text-text-primary">ML Engineer Path</Link>
+        <Link href="/" className="hover:text-text-primary">ML Engineer Path</Link>
         <ChevronRight size={12} />
         <span className="text-text-secondary">Module 4 · Neural Networks</span>
         <ChevronRight size={12} />
@@ -410,7 +412,7 @@ export function Lesson() {
           />
 
           <div className="mt-12 pt-8 border-t border-border-subtle flex items-center justify-between">
-            <Link to="/" className="text-body-sm text-text-secondary hover:text-text-primary inline-flex items-center gap-1">
+            <Link href="/" className="text-body-sm text-text-secondary hover:text-text-primary inline-flex items-center gap-1">
               ← Back to track
             </Link>
             <button className="h-11 px-5 inline-flex items-center gap-2 rounded-md bg-accent-500 text-white font-medium hover:bg-accent-600 transition-colors shadow-sm">

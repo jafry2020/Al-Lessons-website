@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, Pause, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/cn";

@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from "react";
 import { Lightbulb, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/Button";

@@ -1,15 +1,26 @@
-import { Link, NavLink } from "react-router-dom";
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Moon, Sun, BookOpen } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/cn";
 
+const NAV_ITEMS = [
+  { href: "/", label: "Tracks" },
+  { href: "/", label: "Visualizations" },
+  { href: "/", label: "Q&A" },
+  { href: "/", label: "Glossary" },
+];
+
 export function TopNav() {
   const { theme, toggle } = useTheme();
+  const pathname = usePathname();
 
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-canvas/80 border-b border-border-subtle">
       <div className="max-w-[1200px] mx-auto px-6 h-16 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2 group">
+        <Link href="/" className="flex items-center gap-2 group">
           <div className="w-7 h-7 rounded-md bg-accent-500 grid place-items-center text-white">
             <BookOpen size={16} strokeWidth={2} />
           </div>
@@ -17,27 +28,23 @@ export function TopNav() {
         </Link>
 
         <nav className="hidden md:flex items-center gap-1">
-          {[
-            { to: "/", label: "Tracks" },
-            { to: "/", label: "Visualizations" },
-            { to: "/", label: "Q&A" },
-            { to: "/", label: "Glossary" },
-          ].map((item) => (
-            <NavLink
-              key={item.label}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
+          {NAV_ITEMS.map((item) => {
+            const isActive = pathname === item.href;
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                className={cn(
                   "px-3 h-9 inline-flex items-center text-body-sm font-medium rounded-sm transition-colors",
                   isActive
                     ? "text-text-primary bg-subtle"
                     : "text-text-secondary hover:text-text-primary hover:bg-subtle"
-                )
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
 
         <div className="flex items-center gap-2">

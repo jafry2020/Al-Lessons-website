@@ -1,17 +1,16 @@
-# Synapse — AI Learning Platform Prototype
+# Synapse — AI Learning Platform
 
-A working prototype of an interactive AI/ML/GenAI learning platform.
-This repo contains the deliverable from D5 of the design package:
+A polished, content- and visualization-driven learning platform for AI, ML, and
+GenAI — built on the stack chosen in the design package.
 
-- A polished marketing **homepage** with a live gradient-descent visualization.
-- One **fully built sample lesson** — *Optimizers (A4.5)* — demonstrating every
-  element of the lesson template: glossary tooltips, analogy, worked example,
-  interactive visualization, static code block, fill-in-the-blank code
-  challenge with tiered hint ladder, inline quiz, ten Important Questions, and
-  pitfalls callout.
-- The full design system applied: violet accent, Geist/Inter/JetBrains Mono
-  typography, dark & light themes, semantic color tokens, accessible focus
-  states.
+## Stack
+
+- **Next.js 15** (App Router) + React 18 + TypeScript
+- **Tailwind CSS** with design tokens defined as CSS variables in `app/globals.css`
+  (light + dark themes, hand-tuned dark palette)
+- **Framer Motion** for micro-interactions
+- **lucide-react** for icons
+- No code-execution sandbox, no chatbot, no community surfaces (per MVP scope)
 
 ## Run it
 
@@ -20,43 +19,53 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:5173.
+Open http://localhost:3000.
 
-- `/` — landing page
-- `/tracks/ml-engineer/neural-networks/optimizers` — sample lesson
+| Route | Page |
+| --- | --- |
+| `/` | Landing page with live gradient-descent hero |
+| `/tracks/ml-engineer/neural-networks/optimizers` | Sample lesson: A4.5 Optimizers |
 
-## Stack
+## Other scripts
 
-This prototype uses the stack chosen in D3 (minus what isn't needed to demo):
-
-- **Vite + React 18 + TypeScript** — kept simple for a single-package preview;
-  the production target is **Next.js 15 (App Router)** with the same component
-  layer.
-- **Tailwind CSS** with all design tokens defined as CSS variables in
-  `src/styles/globals.css` (mapped to Tailwind via `tailwind.config.ts`).
-- **Framer Motion** + custom keyframes for micro-interactions.
-- **lucide-react** for icons.
-- **react-router-dom** for the two routes.
-
-No code execution sandbox, no chatbot, no community surfaces — per project scope.
+```bash
+npm run build       # Production build
+npm run start       # Run the production build
+npm run typecheck   # TypeScript only, no emit
+```
 
 ## File map
 
 ```
+app/
+├── layout.tsx                    Root layout, theme bootstrap, TopNav + Footer
+├── page.tsx                      Landing (server, imports the Landing view)
+├── globals.css                   Design tokens (light + dark) + Tailwind
+├── icon.svg                      Favicon (auto-linked by Next.js)
+└── tracks/ml-engineer/neural-networks/optimizers/page.tsx
+                                  Sample lesson route (server, imports Lesson view)
+
 src/
-├── App.tsx                       Route wiring
-├── main.tsx                      React entry
-├── styles/globals.css            Design tokens + base styles (light & dark)
-├── hooks/useTheme.ts             Dark/light toggle
-├── lib/cn.ts                     clsx helper
 ├── components/
-│   ├── ui/                       Button, Badge, Card primitives
-│   ├── layout/                   TopNav, Footer
+│   ├── ui/                       Button, Card, Badge
+│   ├── layout/                   TopNav (client), Footer
 │   ├── lesson/                   GlossaryTerm, Callouts, InlineQuiz,
-│   │                             FillInBlankCode, HintLadder,
-│   │                             ImportantQuestions
-│   └── viz/                      GradientDescentHero, OptimizerRace
-└── pages/
-    ├── Landing.tsx               Homepage
-    └── Lesson.tsx                Sample lesson (A4.5 Optimizers)
+│   │                             HintLadder, FillInBlankCode, ImportantQuestions
+│   └── viz/                      GradientDescentHero, OptimizerRace (both client)
+├── views/                        Landing (server), Lesson (client)
+├── hooks/useTheme.ts             Theme toggle (client)
+└── lib/cn.ts                     clsx helper
 ```
+
+Client components are marked with `"use client"` at the top of the file. Everything
+else is a server component by default and renders to static HTML where possible.
+
+## Scope decisions baked in
+
+- **Two tracks**, fully independent: ML Engineer Path, GenAI Builder Path.
+- **No code execution.** Code blocks are static + copy-able. Fill-in-the-blank
+  challenges grade by string match.
+- **No community.** Doubt-clarification via glossary tooltips, tiered hint
+  ladders, worked solutions, and the curated Q&A bank.
+- **No chatbot / AI tutor.** Anywhere.
+- **Free at MVP.** No paywall components.

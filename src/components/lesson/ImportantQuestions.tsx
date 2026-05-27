@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from "react";
 import { ChevronDown, BookMarked } from "lucide-react";
 import { cn } from "@/lib/cn";

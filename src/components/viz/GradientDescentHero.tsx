@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useRef, useState } from "react";
 
 // A live, looping gradient-descent demo on a bowl-shaped loss surface.

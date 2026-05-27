@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { ArrowRight, Brain, Sparkles, Zap, GraduationCap, BarChart3, Layers } from "lucide-react";
 import { GradientDescentHero } from "@/components/viz/GradientDescentHero";
 import { Card } from "@/components/ui/Card";
@@ -25,7 +25,7 @@ export function Landing() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
-                to="/tracks/ml-engineer/neural-networks/optimizers"
+                href="/tracks/ml-engineer/neural-networks/optimizers"
                 className="h-12 px-5 inline-flex items-center gap-2 rounded-md bg-accent-500 text-white font-medium hover:bg-accent-600 transition-colors shadow-sm"
               >
                 Start a sample lesson <ArrowRight size={16} />
@@ -139,7 +139,7 @@ export function Landing() {
         </p>
         <div className="mt-7">
           <Link
-            to="/tracks/ml-engineer/neural-networks/optimizers"
+            href="/tracks/ml-engineer/neural-networks/optimizers"
             className="h-12 px-6 inline-flex items-center gap-2 rounded-md bg-accent-500 text-white font-medium hover:bg-accent-600 transition-colors shadow-sm"
           >
             Open the sample lesson <ArrowRight size={16} />
