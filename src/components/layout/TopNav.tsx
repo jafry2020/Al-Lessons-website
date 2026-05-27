@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Moon, Sun, BookOpen } from "lucide-react";
@@ -13,7 +14,14 @@ const NAV_ITEMS = [
   { href: "/", label: "Glossary" },
 ];
 
-export function TopNav() {
+interface Props {
+  // Right-side account slot — the layout passes either a <UserMenu/> (when
+  // signed in) or a sign-in link. Keeping it as a prop lets TopNav stay a
+  // client component while the session lookup happens server-side.
+  accountSlot: ReactNode;
+}
+
+export function TopNav({ accountSlot }: Props) {
   const { theme, toggle } = useTheme();
   const pathname = usePathname();
 
@@ -54,9 +62,6 @@ export function TopNav() {
             className="grid h-9 w-9 place-items-center rounded-sm text-text-secondary transition-colors hover:bg-subtle hover:text-text-primary"
           >
             {theme === null ? (
-              // Inert placeholder before mount — keeps the button sized and
-              // avoids a hydration mismatch with whichever theme the inline
-              // script in layout.tsx applied.
               <span aria-hidden className="block h-[18px] w-[18px]" />
             ) : theme === "light" ? (
               <Moon size={18} />
@@ -64,9 +69,7 @@ export function TopNav() {
               <Sun size={18} />
             )}
           </button>
-          <button className="h-9 rounded-sm border border-border-strong px-3 text-body-sm font-medium transition-colors hover:bg-subtle">
-            Sign in
-          </button>
+          {accountSlot}
         </div>
       </div>
     </header>

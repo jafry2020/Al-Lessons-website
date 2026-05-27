@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import Link from "next/link";
 import { TopNav } from "@/components/layout/TopNav";
 import { Footer } from "@/components/layout/Footer";
+import { UserMenu } from "@/components/layout/UserMenu";
+import { auth } from "@/lib/auth";
+import { signOutAction } from "@/lib/actions";
 import "./globals.css";
 
 // Self-host fonts via next/font: no FOIT, no Google Fonts CDN dependency.
@@ -38,7 +42,19 @@ const themeScript = `
 })();
 `;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const session = await auth();
+  const accountSlot = session?.user ? (
+    <UserMenu user={session.user} signOutAction={signOutAction} />
+  ) : (
+    <Link
+      href="/signin"
+      className="inline-flex h-9 items-center rounded-sm border border-border-strong px-3 text-body-sm font-medium transition-colors hover:bg-subtle"
+    >
+      Sign in
+    </Link>
+  );
+
   return (
     <html
       lang="en"
@@ -50,7 +66,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <div className="flex min-h-screen flex-col bg-canvas text-text-primary">
-          <TopNav />
+          <TopNav accountSlot={accountSlot} />
           <main className="flex-1">{children}</main>
           <Footer />
         </div>

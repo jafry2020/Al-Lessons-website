@@ -11,6 +11,15 @@ jobs:
     name: Lint, typecheck, build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Prisma generate (run by postinstall) and `next build` both touch
+    # env-validated code paths. The values themselves don't need to be real
+    # — no DB connection is made during build.
+    env:
+      DATABASE_URL: postgresql://user:pass@ci-placeholder/synapse?sslmode=require
+      AUTH_SECRET: ci-placeholder-secret-not-used-at-build-time
+      AUTH_TRUST_HOST: "true"
+      GITHUB_CLIENT_ID: ci-placeholder
+      GITHUB_CLIENT_SECRET: ci-placeholder
     steps:
       - uses: actions/checkout@v4
 

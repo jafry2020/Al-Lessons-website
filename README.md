@@ -5,17 +5,42 @@ GenAI — built on the stack chosen in the design package.
 
 ## Stack
 
-- **Next.js 15** (App Router) + React 18 + TypeScript
+- **Next.js 15** (App Router) + React 19 + TypeScript
+- **Auth.js v5** with GitHub OAuth (Prisma adapter, database sessions)
+- **Postgres** (Neon) + **Prisma** ORM
 - **Tailwind CSS** with design tokens defined as CSS variables in `app/globals.css`
   (light + dark themes, hand-tuned dark palette)
 - **Framer Motion** for micro-interactions
 - **lucide-react** for icons
 - No code-execution sandbox, no chatbot, no community surfaces (per MVP scope)
 
+## Setup
+
+One-time setup before running locally:
+
+```bash
+npm install --legacy-peer-deps
+cp .env.example .env.local
+# fill in .env.local — see below for each value
+npx prisma generate
+npx prisma migrate dev --name init   # creates tables on first run
+```
+
+### Environment variables
+
+All values live in `.env.local` (gitignored). See `.env.example` for the
+full list with comments. You'll need:
+
+| Variable                                   | How to get it                                                                                                                                               |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                             | Sign up at https://neon.tech (free), create a project, copy the **Pooled** connection string.                                                               |
+| `AUTH_SECRET`                              | Run `openssl rand -base64 33` or paste any long random string.                                                                                              |
+| `AUTH_TRUST_HOST`                          | Set to `true` for local dev.                                                                                                                                |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Create an OAuth App at https://github.com/settings/developers. Homepage `http://localhost:3000`, callback `http://localhost:3000/api/auth/callback/github`. |
+
 ## Run it
 
 ```bash
-npm install
 npm run dev
 ```
 
