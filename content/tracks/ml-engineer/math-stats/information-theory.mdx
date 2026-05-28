@@ -1,0 +1,277 @@
+---
+title: "Information theory primer"
+description: "Shannon entropy, cross-entropy, and KL divergence — the three concepts that explain where the cross-entropy loss function comes from and why it works better than alternatives."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: math-stats
+moduleLabel: "Module 1 · Math & Stats Deeper"
+lesson: information-theory
+lessonCode: "A1.4"
+estMinutes: 22
+prereqs:
+  - "A0.4 Probability for machine learning"
+  - "A1.1 Distributions in the wild"
+objectives:
+  - "Compute Shannon entropy for a discrete distribution and explain intuitively why the uniform distribution maximises it."
+  - "Derive the cross-entropy loss for classification from first principles using the maximum likelihood framework."
+  - "Distinguish KL divergence from cross-entropy and state when each one is the right quantity to minimise."
+pitfalls:
+  - "Thinking cross-entropy loss and entropy are the same thing. Cross-entropy H(p, q) = −Σ p log q involves two distributions; entropy H(p) = −Σ p log p is one."
+  - "Using log₂ in some formulas and log (natural) in others in the same calculation. Shannon entropy in bits uses log₂; in nats uses log. The choice of base changes the numeric value but not the math."
+  - "Assuming KL divergence is symmetric. D_KL(p ∥ q) ≠ D_KL(q ∥ p) in general. KL is not a distance metric."
+  - "Minimising KL divergence when you should be minimising cross-entropy, and vice versa. Minimising cross-entropy H(p, q) over q is equivalent to minimising D_KL(p ∥ q) when p is fixed — but if p is also a model distribution, the objectives differ."
+  - "Interpreting high mutual information as causation. Mutual information measures statistical dependence — it doesn't tell you which variable causes which."
+importantQuestions:
+  - question: "What does Shannon entropy measure?"
+    shortAnswer: "The average amount of information (surprise) in a probability distribution. High entropy means outcomes are unpredictable; low entropy means the distribution is concentrated on a few outcomes."
+    detailed: |
+      Formally: H(X) = −Σᵢ p(xᵢ) log₂ p(xᵢ), measured in bits if base-2 logarithm is used. Entropy is maximised by the uniform distribution and minimised (to zero) by a deterministic distribution (one outcome with probability 1).
+
+      Intuition: if you already know what's going to happen (low entropy), you learn very little from the outcome. If outcomes are genuinely unpredictable (high entropy), each observation carries a lot of information. The entropy of a fair coin is 1 bit: observing the outcome tells you 1 bit of information. A biased coin (p=0.9 heads) has entropy ≈ 0.47 bits — you gain less information per flip because you already expect heads.
+    pitfalls:
+      - "Entropy is a property of a probability distribution, not of a specific outcome. 'The entropy of this image' means 'the entropy of the distribution over labels for this image'."
+  - question: "Why is −log₂ p a good measure of surprise for a single outcome?"
+    shortAnswer: "It has three desirable properties: it's large when p is small (rare events are more surprising), it's zero when p = 1 (certain events are not surprising), and surprises of independent events add (logs turn products into sums)."
+    detailed: |
+      These are essentially the axioms of a 'surprise measure' or information function:
+      1. I(p) ≥ 0 for all p ∈ [0,1].
+      2. I(1) = 0: certainty contains no information.
+      3. I(p₁ · p₂) = I(p₁) + I(p₂) for independent events: observing two independent events tells you the sum of their individual information.
+
+      The only function satisfying all three is I(p) = −log p (up to a constant, which is the choice of base). This is why the units are 'bits' with base 2 or 'nats' with base e. A fair coin flip: I(0.5) = −log₂(0.5) = 1 bit. A 1-in-1024 event: I(1/1024) = log₂(1024) = 10 bits.
+    pitfalls:
+      - "When p ≈ 0, −log p → ∞. This is why the cross-entropy loss blows up when the model assigns near-zero probability to the correct class."
+  - question: "What is cross-entropy and why is it used as the classification loss?"
+    shortAnswer: "H(p, q) = −Σ p(x) log q(x). For classification, p is the true label distribution (a one-hot vector) and q is the model's predicted probabilities. Minimising cross-entropy is equivalent to maximising the log-likelihood of the labels under the model — which is exactly what maximum likelihood estimation does."
+    detailed: |
+      For a single example with true class k (so p is one-hot at class k), cross-entropy simplifies to −log q(k) — the negative log of the probability the model assigns to the correct class. The loss is zero only if q(k) = 1 (perfect confidence in the right answer); it approaches infinity as q(k) → 0.
+
+      The connection to maximum likelihood: suppose data points are independent and each label yᵢ is drawn from a categorical distribution with parameters θ (the model). The likelihood of the dataset is L(θ) = Πᵢ q(yᵢ | xᵢ; θ). The negative log-likelihood is NLL = −Σᵢ log q(yᵢ | xᵢ; θ) = Σᵢ H(pᵢ, qᵢ). Minimising cross-entropy loss IS minimising the negative log-likelihood IS maximising the likelihood. The cross-entropy loss is not an arbitrary choice — it's the principled statistical estimation objective for categorical distributions.
+    pitfalls:
+      - "MSE (mean squared error) is a valid classification loss but it corresponds to a Gaussian output model, not a categorical one. Cross-entropy is the principled loss for probabilities."
+  - question: "What is KL divergence and when does it appear in ML?"
+    shortAnswer: "D_KL(p ∥ q) = Σ p(x) log (p(x)/q(x)) = H(p, q) − H(p). It measures how much more information you need if you encode using q when the true distribution is p. It appears in variational autoencoders, KL-regularised RL, and information-bottleneck frameworks."
+    detailed: |
+      KL divergence = cross-entropy − entropy: D_KL(p ∥ q) = H(p, q) − H(p). Since entropy H(p) is fixed (it doesn't depend on the model parameters q), minimising cross-entropy H(p, q) over q is exactly the same as minimising D_KL(p ∥ q).
+
+      KL divergence is always ≥ 0 (by Jensen's inequality applied to the convex function −log), and equals 0 if and only if p = q everywhere. It is not symmetric: D_KL(p ∥ q) ≠ D_KL(q ∥ p). This asymmetry matters: minimising D_KL(p ∥ q) (p is target, q is model) forces q to cover all modes of p; minimising D_KL(q ∥ p) (q is target, p is model) can cause q to concentrate on one mode of p (mode-seeking behaviour). VAE training minimises D_KL(q ∥ p) for the encoder, which is why VAEs sometimes miss modes.
+    pitfalls:
+      - "D_KL is not a metric. It's not symmetric and doesn't satisfy the triangle inequality. The Jensen–Shannon divergence (average of the two KLs) is symmetric and bounded — sometimes preferred for comparisons."
+  - question: "What is mutual information and how is it used in ML?"
+    shortAnswer: "I(X; Y) = H(X) − H(X | Y) — the reduction in uncertainty about X from knowing Y. In ML: mutual information between a feature and the label is a measure of how much the feature contributes to reducing uncertainty about the label."
+    detailed: |
+      Mutual information can be written several equivalent ways: I(X;Y) = H(X) − H(X|Y) = H(Y) − H(Y|X) = H(X) + H(Y) − H(X,Y) = D_KL(p(X,Y) ∥ p(X)p(Y)). The last form shows that I(X;Y) = 0 if and only if X and Y are independent (their joint distribution factors into the product of marginals).
+
+      In feature selection: mutual information between each feature and the label is non-parametric and captures arbitrary (not just linear) dependence. Unlike Pearson's r, it will detect Y = X² as a strong dependence. It's used in filter-based feature selection and in the 'information bottleneck' framework for representation learning.
+
+      Mutual information is symmetric: I(X;Y) = I(Y;X). It tells you how much X and Y share — but not which causes which.
+    pitfalls:
+      - "Estimating mutual information from finite samples is hard, especially in continuous or high-dimensional spaces. Estimators (MINE, kNN-based) add substantial variance."
+  - question: "What is the maximum entropy principle and why is it useful for priors?"
+    shortAnswer: "When you have partial information (e.g., constraints on the mean), choose the distribution that maximises entropy subject to those constraints. This is the least-biased prior — it makes no assumptions beyond what you know."
+    detailed: |
+      Examples:
+      - Know nothing except that the variable is bounded in [a, b]: maximum entropy distribution is Uniform(a, b).
+      - Know only the mean μ and variance σ² of a real-valued variable: maximum entropy distribution is Normal(μ, σ²). This is one principled justification for the normal distribution.
+      - Know only the mean λ of a non-negative variable: maximum entropy distribution is Exponential(1/λ).
+
+      Maximum entropy priors are principled non-informative priors in Bayesian inference. They encode exactly what you know and nothing more. The principle is also used in natural language modelling (early language models maximised entropy subject to n-gram constraints) and in machine learning theory.
+    pitfalls:
+      - "Maximum entropy does not mean ignorance. It means maximum entropy *given the constraints you've specified*. A uniform over the wrong support is not uninformative."
+  - question: "Why does the cross-entropy loss diverge when the model assigns near-zero probability to the correct class?"
+    shortAnswer: "−log(q(correct class)) → ∞ as q → 0. This is mathematically correct — assigning probability 0 to a possible event is infinitely wrong — but can cause numerical instability in practice."
+    detailed: |
+      If a model confidently predicts the wrong class (q(correct) = 0.001), the loss is −log(0.001) = log(1000) ≈ 6.9 nats (or ~9.97 bits in log₂). If it assigns probability 10⁻⁷, loss is log(10⁷) ≈ 16 nats. These large losses create large gradients that drive the model strongly toward correction — which is desirable.
+
+      Numerical instability: many frameworks compute softmax followed by cross-entropy. If softmax outputs 0.0 in floating point (which happens for very large logit differences), log(0) = −∞ causes NaN. The solution is 'log-softmax' followed by NLL loss — computing log(softmax(z)) = z − log(Σ exp(z)) in numerically stable form.
+
+      Label smoothing is another technique: instead of one-hot labels (p ∈ {0,1}), use (1−ε)·onehot + ε/K for small ε. This prevents the model from becoming overconfident and caps the maximum loss contribution.
+    pitfalls:
+      - "Never compute softmax and then apply log in two separate steps. Always use log-softmax (torch.nn.functional.log_softmax) or numerically stable implementations."
+  - question: "What is the difference between entropy in information theory and entropy in thermodynamics?"
+    shortAnswer: "They measure the same thing — the number of equivalent microstates, or the uncertainty in a system — and the formula is identical up to a constant. Boltzmann's entropy S = k_B ln(W) maps directly to Shannon's H = −Σ p log p. This is not a coincidence."
+    detailed: |
+      Shannon apparently derived his entropy formula independently and then asked von Neumann what to call it. Von Neumann said: call it entropy, because nobody knows what entropy really is, so in a debate you'll always have the advantage. Whether the story is true, the mathematical equivalence is real.
+
+      Boltzmann entropy: S = k_B ln(W) where W is the number of microstates. This is the maximum entropy distribution (assuming all microstates are equally likely, the equilibrium distribution is uniform, and the entropy is log W). Shannon entropy of a uniform distribution over W outcomes is log W — the same formula. The constant k_B is just a choice of units (physical units vs bits).
+
+      For ML engineers, the connection is most useful for understanding why maximum entropy corresponds to thermal equilibrium — the least biased state given the constraints. It also connects to the free energy principle in variational inference.
+    pitfalls:
+      - "Physical entropy is defined over continuous spaces and requires additional care (differential entropy). Shannon entropy over continuous distributions is H(X) = −∫ f(x) log f(x) dx, which can be negative — unlike discrete entropy."
+---
+
+<TldrCallout>
+  Information theory gives probability a ruler. *Surprise* is −log p: rare events are informative.
+  *Entropy* is the average surprise — it's highest when the distribution is uniform, zero when the
+  outcome is certain. *Cross-entropy* loss for classification falls directly out of maximum
+  likelihood: you're asking the model to assign high probability to the correct class. *KL
+  divergence* measures how wrong one distribution is as an approximation of another — and it equals
+  cross-entropy minus entropy.
+</TldrCallout>
+
+## Why you need this
+
+Before this lesson, "cross-entropy loss" is a formula you copy from documentation. After this lesson, it's the inevitable consequence of maximum likelihood estimation for categorical distributions. Two closely related concepts — KL divergence and mutual information — will appear repeatedly in your ML career, in VAEs, RLHF, information-bottleneck methods, and feature selection. The math is worth 20 minutes.
+
+## Information and surprise
+
+The fundamental question: how much does an event tell you?
+
+If you're told the sun rose this morning, you learn nothing — you already knew it would. If you're told a 10-year-old beat a chess grandmaster, you learn a great deal. Information is about _surprise_.
+
+<GlossaryTerm
+  term="Information content (self-information)"
+  definition="The information content of an event with probability p is I(p) = −log₂ p, measured in bits. It is high for rare events (small p) and zero for certain events (p = 1)."
+>
+  Self-information
+</GlossaryTerm>
+I(p) = −log₂ p has three properties that make it the right definition:
+
+1. **Monotone in surprise:** I(p) is larger for smaller p. A one-in-a-million event carries more information than a coin flip.
+2. **Zero for certainty:** I(1) = −log₂(1) = 0. A guaranteed event tells you nothing.
+3. **Additivity:** I(p₁ · p₂) = I(p₁) + I(p₂) for independent events. Observing two independent facts tells you the sum of their individual information.
+
+<WorkedExample title="Comparing information content">
+
+A fair die has 6 equally likely outcomes. Rolling a 4: I(1/6) = −log₂(1/6) = log₂(6) ≈ **2.58 bits**.
+
+A biased die that shows 6 with probability 0.9 and splits the rest among 1–5. Rolling a 6: I(0.9) = −log₂(0.9) ≈ **0.15 bits** — almost no surprise. Rolling a 1: I(0.02) = −log₂(0.02) ≈ **5.64 bits** — very surprising.
+
+A classifier that assigns 99% probability to the correct class on a test example: −log₂(0.99) ≈ **0.014 bits** of loss — almost zero. A classifier that assigns 0.1% probability to the correct class: −log₂(0.001) ≈ **9.97 bits** of loss — huge penalty. This is the cross-entropy loss in action.
+
+</WorkedExample>
+
+## Entropy: average surprise
+
+<GlossaryTerm
+  term="Shannon entropy"
+  definition="The expected information content of a distribution: H(X) = −Σᵢ p(xᵢ) log₂ p(xᵢ). Measured in bits. It is the average surprise, and the theoretical minimum number of bits needed to encode outcomes of the distribution losslessly."
+>
+  Shannon entropy
+</GlossaryTerm>
+is the expected value of self-information:
+
+H(X) = E[−log₂ p(X)] = −Σᵢ p(xᵢ) log₂ p(xᵢ)
+
+Key facts:
+
+- **H ≥ 0** always (entropy is non-negative).
+- **H = 0** only for a deterministic distribution (one outcome has p = 1, all others p = 0).
+- **H is maximised by the uniform distribution**: if X has k equally likely outcomes, H = log₂ k.
+- **H = 1 bit** for a fair coin. **H = 0 bits** for a coin that always lands heads.
+
+<AnalogyCallout>
+  Entropy measures how unpredictable a source is — equivalently, how many yes/no questions you'd
+  need to ask on average to identify the outcome. A fair coin requires exactly 1 question (H = 1
+  bit). A fair die requires about 2.58 questions on average (H = log₂ 6 ≈ 2.58 bits). A biased die
+  weighted heavily toward one face requires fewer questions — the high-probability face is almost
+  always the answer. The fewer questions you need, the lower the entropy.
+</AnalogyCallout>
+
+## Explore entropy interactively
+
+<EntropyCalculator />
+
+Things to notice:
+
+- Start **uniform** (A=B=C=D equal). Entropy = 2.0 bits — maximum for 4 outcomes.
+- Click **Peaked** (A gets almost all probability). Entropy ≈ 0 — near certain, near zero surprise.
+- Try **Skewed** (A most likely, then B, C, D). Entropy is intermediate — some predictability, some uncertainty.
+- The numbers under each bar show −log₂(p): the surprise of that specific outcome. Rare outcomes (small bars) have large numbers — they're more informative when they occur.
+
+The connection to compression: entropy is also the theoretical lower bound on the average number of bits you need to encode outcomes losslessly (Shannon's source coding theorem). A perfectly efficient code for a distribution with H = 1.7 bits uses 1.7 bits per symbol on average — no more is needed, and no less is possible.
+
+## Cross-entropy: the classification loss explained
+
+<GlossaryTerm
+  term="Cross-entropy"
+  definition="H(p, q) = −Σ p(x) log q(x). When p is the true label distribution and q is the model's predicted distribution, cross-entropy measures how well the model's predictions match the truth. Minimising cross-entropy is equivalent to maximum likelihood estimation."
+>
+  Cross-entropy
+</GlossaryTerm>
+involves two distributions: p (the truth) and q (the model). For classification with a one-hot true
+label at class k:
+
+H(p, q) = −Σᵢ p(xᵢ) log q(xᵢ) = −log q(k)
+
+This is exactly the loss for one training example: the negative log-probability the model assigns to the correct class.
+
+<WorkedExample title="Where does cross-entropy loss come from?">
+
+You have a 3-class problem. The true label is class 2. The model outputs probabilities [0.1, 0.7, 0.2].
+
+The true distribution p is one-hot: [0, 1, 0].
+
+Cross-entropy: H(p, q) = −(0 · log 0.1 + 1 · log 0.7 + 0 · log 0.2) = −log 0.7 ≈ **0.357 nats** (or **0.515 bits**).
+
+Now if the model were more confident on the correct class — say [0.05, 0.90, 0.05]:
+
+H(p, q) = −log 0.90 ≈ **0.105 nats**. The loss is lower — the model is being rewarded for confidence in the right answer.
+
+If the model is wrong: [0.7, 0.1, 0.2] → H = −log 0.1 ≈ **2.30 nats**. A large loss drives a large gradient toward correcting the mistake.
+
+This is maximum likelihood in disguise: we want to maximise the probability the model assigns to the correct label. Maximising Σ log q(yᵢ) is the same as minimising Σ −log q(yᵢ) = the cross-entropy loss.
+
+</WorkedExample>
+
+## KL divergence: measuring the gap between distributions
+
+<GlossaryTerm
+  term="KL divergence (Kullback-Leibler divergence)"
+  definition="D_KL(p ∥ q) = Σ p(x) log(p(x)/q(x)) = H(p, q) − H(p). It measures how many extra bits are needed to encode p using code designed for q. It is always ≥ 0, and equals 0 only when p = q. It is not symmetric."
+>
+  KL divergence
+</GlossaryTerm>
+D_KL(p ∥ q) = H(p, q) − H(p).
+
+Since H(p) doesn't depend on the model's parameters, **minimising cross-entropy H(p, q) over q is the same as minimising D_KL(p ∥ q)**. They are equivalent objectives when p is fixed.
+
+Key properties:
+
+- D_KL(p ∥ q) ≥ 0 always (Gibbs' inequality).
+- D_KL(p ∥ q) = 0 if and only if p = q everywhere.
+- **Not symmetric:** D_KL(p ∥ q) ≠ D_KL(q ∥ p) in general.
+
+The asymmetry matters for how the model behaves. Minimising D_KL(p ∥ q) forces q to cover every mode of p (mode-covering), because assigning zero probability to a region where p > 0 gives infinite divergence. Minimising D_KL(q ∥ p) allows q to ignore modes of p (mode-seeking). Variational autoencoders use D_KL(q ∥ p) for the encoder term, which is why they sometimes miss modes of complex distributions.
+
+## Mutual information
+
+<GlossaryTerm
+  term="Mutual information"
+  definition="I(X; Y) = H(X) − H(X | Y) = H(X) + H(Y) − H(X, Y). The reduction in uncertainty about X from observing Y. Zero if and only if X and Y are independent. Symmetric: I(X;Y) = I(Y;X)."
+>
+  Mutual information
+</GlossaryTerm>
+I(X; Y) = H(X) − H(X | Y) measures how much knowing Y reduces uncertainty about X (and vice versa,
+since it's symmetric).
+
+Applications in ML:
+
+- **Feature selection:** I(feature; label) ranks features by how much they reduce label uncertainty. Unlike Pearson's r, it captures non-linear dependence.
+- **Representation learning:** the information-bottleneck method trains encoders to maximise I(representation; label) while minimising I(representation; input) — capturing only task-relevant information.
+- **Mutual information in generative models:** disentangled VAEs maximise I(latent; data) to ensure the latent code is informative.
+
+<InlineQuiz
+  question="A model outputs probabilities [0.6, 0.3, 0.1] for classes A, B, C. The true label is B. What is the cross-entropy loss (in nats, using natural log)?"
+  options={[
+    { text: "−log(0.6) ≈ 0.51" },
+    { text: "−log(0.3) ≈ 1.20", correct: true },
+    { text: "−(0.6 log 0.6 + 0.3 log 0.3 + 0.1 log 0.1) ≈ 0.90" },
+    { text: "log(0.6 + 0.3 + 0.1) = 0" },
+  ]}
+  explanation="Cross-entropy with a one-hot true distribution at class B simplifies to −log q(B) = −log(0.3) ≈ 1.20 nats. The third option is entropy H(q), not cross-entropy — it would be the loss if the model were predicting *its own distribution*, which isn't what we want. We want the loss for the true label B, which is entirely determined by the model's probability for B."
+/>
+
+<InlineQuiz
+  question="Which of the following correctly states why D_KL(p ∥ q) = 0 implies p = q?"
+  options={[
+    { text: "Because log(p/q) = 0 whenever p = q, and D_KL is a sum of non-negative terms." },
+    {
+      text: "Because D_KL(p ∥ q) = H(p, q) − H(p), and H(p, q) = H(p) only when q = p.",
+      correct: true,
+    },
+    { text: "Because KL divergence is a metric and equals zero at the same distribution." },
+    { text: "Because log(p/q) is always negative, so the sum is zero only when no terms exist." },
+  ]}
+  explanation="D_KL(p ∥ q) = H(p, q) − H(p). Cross-entropy H(p, q) ≥ H(p) by the data processing inequality (encoding p using q always requires at least as many bits as encoding with the optimal code for p). Equality holds when q = p — using the optimal code. Equivalently, each term p(x) log(p(x)/q(x)) ≥ 0 by the inequality log(x) ≤ x − 1, with equality iff p(x) = q(x). The sum can only be zero if every term is zero. Note: KL is NOT a metric — it's not symmetric."
+/>

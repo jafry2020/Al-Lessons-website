@@ -1,0 +1,249 @@
+---
+title: "Distributions in the wild"
+description: "The handful of probability distributions that show up in almost every ML model, loss function, and noise assumption — and how to tell them apart."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: math-stats
+moduleLabel: "Module 1 · Math & Stats Deeper"
+lesson: distributions
+lessonCode: "A1.1"
+estMinutes: 20
+prereqs:
+  - "A0.4 Probability for machine learning"
+objectives:
+  - "Name the four distributions that appear most often in ML and state one context where each is the right model."
+  - "Distinguish discrete (PMF) from continuous (PDF) distributions and explain why the difference matters for loss functions."
+  - "State the Central Limit Theorem in plain language and identify why it makes the normal distribution ubiquitous."
+pitfalls:
+  - "Reaching for the normal distribution by default. Many real-world quantities — incomes, website traffic, word frequencies — are heavy-tailed and normal assumptions will mislead you."
+  - "Confusing the PDF value with a probability. For continuous distributions, P(X = x) = 0 for any specific x; the PDF is a density, not a probability."
+  - "Treating variance and standard deviation as interchangeable. They are both measures of spread, but variance is in squared units — always check units before comparing."
+  - "Forgetting the exponential distribution is memoryless. 'The server has been idle for 10 minutes — a request must be coming soon' is wrong if inter-arrival times are exponential."
+  - "Applying the CLT with tiny samples. The convergence to normal requires large n; for n < 30, skewed underlying distributions can make the sample mean far from normal."
+importantQuestions:
+  - question: "What is the difference between a PMF and a PDF?"
+    shortAnswer: "A PMF (probability mass function) gives the probability of each specific outcome for a discrete variable. A PDF (probability density function) gives a density for a continuous variable — you must integrate over an interval to get a probability."
+    detailed: |
+      For a discrete variable like the number of heads in 10 coin flips, P(X = 3) = 0.117 is a genuine probability. For a continuous variable like a person's height, P(height = 1.75 m) is exactly zero — there are infinitely many possible real values. What the PDF gives you is a density: P(1.74 ≤ height ≤ 1.76) = ∫_{1.74}^{1.76} f(x) dx.
+
+      This matters for loss functions. Cross-entropy loss for classification uses PMF values (the model outputs a probability for each class). Gaussian negative log-likelihood for regression uses the PDF: −log f(y | μ, σ²) = ½ log(2πσ²) + (y − μ)²/(2σ²). The two loss functions look different partly because one is a probability and the other is a density.
+    pitfalls:
+      - "PDF values can exceed 1.0 — they are not probabilities. A N(0, 0.1) PDF peaks near 4.0 at the mean."
+      - "When comparing likelihoods from a PDF, the absolute value is meaningless; only ratios matter."
+  - question: "Why does the Central Limit Theorem make the normal distribution so pervasive?"
+    shortAnswer: "The CLT says that the average of many independent random variables converges to a normal distribution, regardless of the underlying distribution. Many real quantities are sums or averages of many small effects, so they end up approximately normal."
+    detailed: |
+      Formally: if X₁, X₂, … are i.i.d. with mean μ and variance σ², then (X̄ₙ − μ) / (σ/√n) → N(0,1) in distribution as n → ∞. This applies whatever the shape of the original Xᵢ — exponential, uniform, binomial, anything with finite variance.
+
+      A human's height is influenced by hundreds of genetic and environmental factors. If each contributes a small additive effect, their sum is approximately normal. The error in a measurement device is the sum of many tiny independent fluctuations — approximately normal. The noise in a linear regression residual is often justified by the CLT: many small unmodeled effects average out to roughly normal noise.
+
+      The CLT also underlies confidence intervals and hypothesis tests. The sample mean has an approximately normal sampling distribution for large n, which is what makes the z-test and t-test valid.
+    pitfalls:
+      - "The CLT applies to sums and averages, not to arbitrary transformations. A product of many random variables follows a log-normal distribution, not a normal one."
+      - "Heavy-tailed distributions (those without finite variance, like the Cauchy) don't satisfy the CLT."
+  - question: "What is the exponential distribution and when should you use it?"
+    shortAnswer: "The exponential distribution models the time between events in a Poisson process — that is, events that occur continuously and independently at a constant average rate. It's the right model for inter-arrival times, component lifetimes, and call-center wait times."
+    detailed: |
+      The key property is memorylessness: P(X > s + t | X > s) = P(X > t). If a request arrives on average every 2 seconds (λ = 0.5 per second), and you've been waiting 10 seconds, the probability of waiting another 5 seconds is the same as if you'd just started. The past tells you nothing about the future. This makes it the only continuous memoryless distribution.
+
+      In ML, exponential tails appear in user engagement (time on site), network packet inter-arrivals, and word co-occurrence intervals in text. The parameter λ is both the rate (events per unit time) and the reciprocal of the mean (mean = 1/λ). A common confusion: λ is the rate, not the mean.
+    pitfalls:
+      - "Exponential is memoryless; Weibull is not. For component lifetimes where wear accumulates, Weibull is more appropriate."
+      - "Poisson counts the number of events in an interval; exponential models the gap between them. They are two sides of the same model."
+  - question: "What makes a distribution 'heavy-tailed' and why does it matter?"
+    shortAnswer: "A heavy-tailed distribution assigns substantially more probability to extreme values than the normal. Wealth, city sizes, and earthquake magnitudes follow power laws — a single outlier can dominate the total. Normal-assumption models wildly underestimate the frequency and magnitude of extremes."
+    detailed: |
+      The normal distribution's tails decay as exp(−x²), which is extremely fast. A Pareto (power law) distribution decays as x^(−α), which is orders of magnitude slower for large x. In a heavy-tailed income distribution, Bill Gates's net worth is not just many standard deviations from the mean — it would require thousands of standard deviations under a normal model, which would assign it a probability so small it's effectively impossible.
+
+      In practice: if you fit a Gaussian to a heavy-tailed quantity, your variance estimate is dominated by extreme values and your risk estimates are too small. Financial models that assumed Gaussian returns in 2008 were one reason 'once in a century' events happened multiple times per decade.
+
+      For ML: gradient norms can be heavy-tailed (hence gradient clipping). Token frequencies in text follow a Zipf distribution (a power law). If you're computing statistics on user behavior or web data, always plot the distribution before assuming normality.
+    pitfalls:
+      - "Variance may not even exist for power-law distributions with α ≤ 2. Moments don't always converge."
+      - "Log-transforming heavy-tailed data often makes it approximately normal — a common practical fix."
+  - question: "What is the relationship between the binomial and the normal distribution?"
+    shortAnswer: "As n increases, the Binomial(n, p) distribution approaches N(np, np(1-p)) by the CLT. For large n, you can substitute normal calculations for binomial ones — which is often much faster."
+    detailed: |
+      The binomial counts successes in n independent Bernoulli trials. Its mean is np and its variance is np(1-p). Each trial is a Bernoulli random variable; the sum of many independent, identically distributed random variables converges to normal by the CLT. A rule of thumb: the normal approximation is reasonable when np ≥ 5 and n(1-p) ≥ 5.
+
+      This matters for classification: in logistic regression and neural network classifiers, the output is a Bernoulli probability; the accuracy over a test set is binomial, and we use normal approximations for confidence intervals on accuracy. It also explains why the loss surface for classification softens from discrete counting to continuous probability.
+    pitfalls:
+      - "The normal approximation breaks down when p is very small or very large (near 0 or 1). Use exact binomial or the Poisson approximation instead."
+  - question: "When is the Poisson distribution the right model?"
+    shortAnswer: "When you're counting rare, independent events in a fixed interval of time or space: server requests per second, typos per page, radioactive decays per minute. Its key property is that mean equals variance."
+    detailed: |
+      Poisson(λ) models count data where λ is the average count per interval. The fact that mean = variance is a diagnostic: if you observe count data and the sample variance is much larger than the sample mean, the data is 'overdispersed' — a negative binomial or zero-inflated model may be better.
+
+      In NLP, word frequency in a document is sometimes modeled as Poisson (though in practice words cluster, creating overdispersion). In systems engineering, the number of cache misses per second is often well-modeled by Poisson. In epidemiology, new disease cases per day, assuming independence, follow a Poisson process.
+    pitfalls:
+      - "Poisson assumes independence. If events cluster (one event makes another more likely), Poisson underfits."
+  - question: "How do you choose which distribution to use for your model's noise or prior?"
+    shortAnswer: "Match the support and shape of your quantity to a distribution family. Bounded on [0,1]? Beta. Non-negative? Exponential or log-normal. Counts? Poisson or negative binomial. Symmetric continuous with finite variance? Normal is often a reasonable default."
+    detailed: |
+      A principled approach: first, what values can the quantity take? Negative values possible? Real line: normal, Laplace, Student-t. Non-negative: exponential, gamma, log-normal. Bounded [0,1]: beta, uniform. Integer counts: Poisson, binomial, negative binomial.
+
+      Second, what shape does the distribution have? Heavy-tailed (robust to outliers)? Laplace or Student-t. Light-tailed? Normal. Skewed right? Log-normal or gamma. Multimodal? Mixture of Gaussians.
+
+      Third, is there theoretical justification? Inter-arrival times from a Poisson process → exponential. Sums of many independent effects → normal (CLT). Multiplicative shocks → log-normal. The best models use the distribution that has a causal story, not just a fitting story.
+    pitfalls:
+      - "Fitting data to a distribution and then using that distribution as a model treats in-sample patterns as ground truth. Always validate the distributional assumption on held-out data or with domain knowledge."
+  - question: "What is the CDF and when is it more useful than the PDF or PMF?"
+    shortAnswer: "The cumulative distribution function F(x) = P(X ≤ x). It's more useful when you care about thresholds and percentiles: 'What fraction of users spend less than $10?' or 'What's the 95th-percentile latency?'"
+    detailed: |
+      The CDF is a non-decreasing function from 0 to 1. Its derivative (for continuous distributions) is the PDF. For practical questions involving 'at most x', 'between a and b', or percentiles, the CDF is more directly useful than the PDF.
+
+      In ML: the CDF of the standard normal (often called Φ) appears in probit regression, in computing p-values, and in the cumulative Gaussian noise model for binary decisions. The empirical CDF (eCDF) is a non-parametric way to describe data without assuming a distribution family — it's a staircase function that steps up by 1/n at each observation. The Kolmogorov–Smirnov test uses the max gap between two eCDFs to test if they come from the same distribution.
+    pitfalls:
+      - "For continuous distributions, P(X = x) = 0, so F(x) = F(x−) — there are no jumps. For discrete distributions, F has jumps at every mass point."
+---
+
+<TldrCallout>
+  Every ML model rests on distributional assumptions, whether explicit or hidden. The *normal*
+  distribution is the workhorse (thank the Central Limit Theorem), but *uniform*, *exponential*,
+  *binomial*, and *Poisson* each have a natural home. Knowing which distribution fits your quantity
+  — and when to distrust the normal — is one of the sharpest tools in an ML engineer's kit.
+</TldrCallout>
+
+## Why distributions matter to ML engineers
+
+When you write down a loss function, you're implicitly assuming a probability distribution. Mean squared error assumes Gaussian noise. Cross-entropy assumes a categorical or Bernoulli distribution. If the data don't fit the assumed distribution, the loss function is pulling the model in the wrong direction.
+
+When you pick a prior for Bayesian inference, you're choosing a distribution. When you interpret a model's confidence score, you're reading a probability. When you sample from a generative model, you're sampling from a distribution. Distributions are everywhere in ML — knowing their shapes, parameters, and quirks is practical, not abstract.
+
+## Discrete vs. continuous: PMF vs. PDF
+
+<GlossaryTerm
+  term="Probability Mass Function (PMF)"
+  definition="A function that gives the probability of each discrete outcome. P(X = k) is a genuine probability — it must be non-negative and sum to 1 over all possible values of k."
+>
+  Discrete variables
+</GlossaryTerm>
+take specific countable values: the number of errors in a log file, the number of heads in 10 flips,
+the label assigned to an image. The probability of each specific value is a genuine, positive
+number, and all these probabilities sum to 1. That function is the **PMF**.
+
+<GlossaryTerm
+  term="Probability Density Function (PDF)"
+  definition="A function f(x) for a continuous variable where P(a ≤ X ≤ b) = ∫ₐᵇ f(x) dx. The PDF itself is not a probability — it's a density. It can exceed 1. Only integrals over intervals give probabilities."
+>
+  Continuous variables
+</GlossaryTerm>
+take any real value in some range: a person's height, the temperature at noon, the residual error
+from a regression. The probability of any _specific_ value is exactly zero — there are infinitely
+many possibilities. Instead, you ask about _intervals_: P(1.74 ≤ height ≤ 1.76). The function that,
+when integrated over any interval, gives that probability is the **PDF**.
+
+<AnalogyCallout>
+  Think of the PMF as a bar chart: each bar has a definite height = probability. The PDF is a
+  continuous curve: it has no probability at any single point, only under areas. Asking "what is the
+  probability that height is exactly 1.750000...0 m?" is like asking the area of a line — it's zero.
+  The question that makes sense is "what fraction of people are between 1.74 m and 1.76 m?"
+</AnalogyCallout>
+
+## The normal distribution: the one that's everywhere
+
+<GlossaryTerm
+  term="Normal distribution"
+  definition="The bell-curve distribution parameterized by mean μ and standard deviation σ. Its PDF is f(x) = (1/σ√2π) exp(−(x−μ)²/2σ²). About 68% of the distribution lies within 1σ of the mean, 95% within 2σ, 99.7% within 3σ."
+>
+  The normal (Gaussian) distribution
+</GlossaryTerm>
+is parameterized by a mean μ and standard deviation σ. It's symmetric around μ, bell-shaped, and
+decays rapidly in its tails. The famous **68–95–99.7 rule**: 68% of the distribution lies within
+±1σ, 95% within ±2σ, and 99.7% within ±3σ.
+
+Why does it appear so frequently? Because of the:
+
+<GlossaryTerm
+  term="Central Limit Theorem (CLT)"
+  definition="States that the sum (or average) of a large number of independent, identically distributed random variables with finite mean and variance converges to a normal distribution, regardless of the original distribution."
+>
+  Central Limit Theorem
+</GlossaryTerm>
+
+<WorkedExample title="Why measurement error is approximately normal">
+
+A digital scale measures weight. Each measurement has error from many independent sources: vibration of the table, air currents, slight flexing of the scale platform, thermal noise in the circuitry. Each source contributes a tiny, random, roughly symmetric perturbation.
+
+By the CLT, the _sum_ of many independent random perturbations — regardless of each perturbation's individual distribution — converges to a normal distribution. So the total error is approximately normal with mean 0 (if the scale is unbiased) and some variance σ² that grows with the number and magnitude of the individual perturbations.
+
+This is the theoretical justification for assuming Gaussian noise in linear regression: we're modelling the target as a true value plus the aggregated effect of many small, unmodelled influences. When that assumption is wrong — e.g., the error is skewed because of a capped measurement — residuals will be visibly non-normal.
+
+</WorkedExample>
+
+## Three more distributions you need
+
+**Uniform.** Every value in a range [a, b] is equally likely. PDF is a flat rectangle: f(x) = 1/(b−a). Mean = (a+b)/2, variance = (b−a)²/12. It appears as a non-informative prior ("I have no idea what value this takes"), in data augmentation (random crops in a uniform window), and as the null model for p-values under the null hypothesis.
+
+**Exponential.** Models the waiting time between events that occur at a constant average rate λ. PDF: f(x) = λ e^(−λx) for x ≥ 0. Mean = 1/λ, variance = 1/λ². The defining property: it is <GlossaryTerm term="Memoryless property" definition="A distribution is memoryless if P(X > s + t | X > s) = P(X > t). The exponential is the only continuous memoryless distribution. It means the past waiting time gives no information about the future waiting time.">memoryless</GlossaryTerm>. In ML: Poisson processes model web traffic, hardware failures, word occurrences; the exponential models the gaps between them.
+
+**Binomial.** Counts successes in n independent Bernoulli trials with probability p each. PMF: P(X = k) = C(n,k) pᵏ (1−p)^(n−k). Mean = np, variance = np(1−p). Appears whenever you're counting correct classifications, A/B test conversions, or any binary outcome repeated n times. As n grows large, the binomial approaches the normal (by the CLT).
+
+**Poisson.** Counts rare independent events in a fixed interval. PMF: P(X = k) = λᵏ e^(−λ) / k!. Mean = variance = λ. This equality (mean = variance) is a diagnostic: if your count data has much larger variance than mean, it's "overdispersed" and you may need a negative binomial model instead.
+
+## See the shapes
+
+<DistributionExplorer />
+
+Things to try:
+
+- On **Normal**: push σ from 0.2 to 3. The bell gets wider, the peak gets lower (the area under the curve must stay at 1). Move μ left and right — the shape shifts without changing.
+- On **Exponential**: raise λ from 0.5 to 3. The distribution gets more concentrated near zero (mean = 1/λ shrinks). Lower λ spreads it out.
+- On **Binomial**: set n=5, p=0.5. Notice the symmetric bell shape. Now set p=0.1 — it becomes very right-skewed. Increase n to 30 and the shape starts to look normal even with p=0.1.
+
+## Heavy tails: when normal badly fails
+
+<GlossaryTerm
+  term="Heavy-tailed distribution"
+  definition="A distribution where extreme values are far more likely than under the normal. Formally, the tail decays slower than exponentially — often as a power law x^(−α). Examples: Pareto (wealth), Zipf (word frequencies), log-normal (stock returns)."
+>
+  Heavy-tailed distributions
+</GlossaryTerm>
+assign meaningful probability to values far from the mean. The normal's tails decay as exp(−x²) —
+extremely fast. A power law decays as x^(−α), which is orders of magnitude slower for large x.
+
+This matters in practice: website traffic, income, city sizes, word frequencies, and file sizes all follow power laws. If you assume normal and compute the 99th percentile, you'll massively underestimate what the actual 99th percentile is.
+
+A quick diagnostic: if your data has a few values that are 10× larger than the typical value, and you can't explain them as outliers or errors, you probably have a heavy-tailed distribution. Log-transforming the data often reveals a more bell-shaped distribution (the log-normal).
+
+## Quick reference: when to use which
+
+| Quantity                                       | Distribution         | Why                                          |
+| ---------------------------------------------- | -------------------- | -------------------------------------------- |
+| Symmetric noise (measurement error, residuals) | Normal               | CLT; many small additive effects             |
+| Waiting time between events                    | Exponential          | Memoryless Poisson process                   |
+| Count of rare events in an interval            | Poisson              | Rare, independent, constant rate             |
+| Count of successes in n trials                 | Binomial             | n independent Bernoulli trials               |
+| Anything proportional (wealth, traffic)        | Log-normal or Pareto | Multiplicative shocks or power law           |
+| Complete ignorance over a range                | Uniform              | Maximum-entropy prior with bounded support   |
+| Probabilities and fractions                    | Beta                 | Conjugate prior for Bernoulli; bounded [0,1] |
+
+<InlineQuiz
+  question="A new server is started. The time until the first request arrives follows an Exponential(λ=2) distribution (2 requests per minute on average). The server has been running for 5 minutes with no requests. What is the probability of waiting at least 1 more minute?"
+  options={[
+    { text: "Less than the probability of waiting 1 minute from the start — the server is 'due'." },
+    {
+      text: "Exactly the same as the probability of waiting 1 minute from the start.",
+      correct: true,
+    },
+    {
+      text: "Greater than the probability of waiting 1 minute from the start — requests are more likely after a long wait.",
+    },
+    { text: "Cannot be determined without knowing the total elapsed time." },
+  ]}
+  explanation="The exponential distribution is memoryless: P(X > s + t | X > s) = P(X > t). The fact that 5 minutes have passed tells you nothing about the future. The probability of waiting at least 1 more minute is e^(−λ·1) = e^(−2) ≈ 0.135, identical to the probability of waiting at least 1 minute from a cold start."
+/>
+
+<InlineQuiz
+  question="A model outputs a confidence score of 0.92 for one class. You read the PDF of the underlying normal-ish distribution at that point and get 1.4. What does 1.4 mean?"
+  options={[
+    { text: "The probability of that exact score is 1.4 — which is impossible, so there's a bug." },
+    {
+      text: "The probability density at that point is 1.4; you need to integrate over an interval to get a probability.",
+      correct: true,
+    },
+    { text: "The score is 1.4 standard deviations above the mean." },
+    { text: "The cumulative probability up to 0.92 is 1.4." },
+  ]}
+  explanation="PDF values are densities, not probabilities. A PDF can exceed 1 — a N(0, 0.1) distribution has a peak near 4 at the mean. To get a probability, you integrate over an interval: P(a ≤ X ≤ b) = ∫ₐᵇ f(x) dx. The value 1.4 tells you the relative likelihood density at that point but not any absolute probability."
+/>

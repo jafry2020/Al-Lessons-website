@@ -1,0 +1,257 @@
+---
+title: "Correlation vs. causation"
+description: "Why ML models learn correlations and not causes, why that distinction matters for deployment, and how Simpson's paradox can reverse a trend completely depending on how you group data."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: math-stats
+moduleLabel: "Module 1 · Math & Stats Deeper"
+lesson: correlation-causation
+lessonCode: "A1.3"
+estMinutes: 20
+prereqs:
+  - "A1.1 Distributions in the wild"
+objectives:
+  - "Compute and interpret Pearson's r and name three situations where it gives a misleading picture."
+  - "Identify a confounding variable in a real scenario and explain how it produces spurious correlation."
+  - "Explain Simpson's paradox and describe at least one domain where it has caused real decision errors."
+pitfalls:
+  - "Selecting features based on their correlation with the label and then being surprised when the model fails on new data where the correlation doesn't hold."
+  - "Using correlation to infer causation from observational data — this requires strong additional assumptions (or a randomised experiment)."
+  - "Forgetting that Pearson's r only measures linear association. Two variables can have r = 0 and a strong non-linear relationship."
+  - "Aggregating data to remove noise without checking whether the aggregation reverses important trends (Simpson's paradox)."
+  - "Treating a correlation discovered in the training set as a reliable signal for deployment if the mechanism that created that correlation may not hold in the deployment distribution."
+importantQuestions:
+  - question: "What does Pearson's r measure, and what are its limits?"
+    shortAnswer: "Pearson's r measures the strength and direction of the linear relationship between two variables, ranging from −1 (perfect negative) to +1 (perfect positive). It misses non-linear relationships, is sensitive to outliers, and gives the same value whether or not the relationship is causal."
+    detailed: |
+      Formally: r = Cov(X, Y) / (σ_X σ_Y) = Σ[(xᵢ − x̄)(yᵢ − ȳ)] / √[Σ(xᵢ − x̄)² Σ(yᵢ − ȳ)²].
+
+      Limits:
+      1. Linear only. Variables X and Y can have r = 0 and still be perfectly related (e.g., Y = X² centred at zero — perfectly correlated but r ≈ 0).
+      2. Outlier sensitivity. One extreme point can dominate the numerator and pull r toward ±1 or 0. Always scatter-plot before trusting r.
+      3. Range restriction. If you only collect data from a subpopulation (e.g., users who reached checkout), the observed r in that subpopulation can differ wildly from the true r in the full population.
+      4. No causality. r captures association in the data, not the underlying mechanism. The same r is consistent with "X causes Y", "Y causes X", "a third variable causes both", or "coincidence".
+    pitfalls:
+      - "The famous 'Anscombe's quartet': four very different datasets that all have r = 0.816. Always plot."
+      - "Correlation near 0 does not mean independence — it means no linear dependence."
+  - question: "What is a confounder and how does it create spurious correlations?"
+    shortAnswer: "A confounder is a third variable that causally influences both the 'cause' and the 'effect' variables. It creates a statistical association between them even when there is no direct causal link."
+    detailed: |
+      Classic example: ice cream sales and drowning rates are positively correlated. The confounder is warm weather: hot days cause both more ice cream consumption and more swimming (hence more drowning). There is no causal link from ice cream to drowning. If you condition on temperature (compare ice cream sales and drowning rates within days of the same temperature), the correlation disappears.
+
+      In ML: a model trained on hospital data might learn that being prescribed a certain drug is correlated with poor outcomes. The confounder is disease severity: sicker patients are both more likely to get the drug and more likely to die. The drug may actually be helping — but the observational correlation says the opposite. A model trained on this data would be dangerously wrong.
+
+      Confounders are why observational data is treacherous. The only way to fully control for confounders is randomisation (randomly assign who gets the drug), which eliminates systematic relationships between confounders and treatment.
+    pitfalls:
+      - "You can control for observed confounders in regression or matching, but unobserved confounders remain a threat."
+  - question: "What is Simpson's paradox?"
+    shortAnswer: "A statistical phenomenon where a trend appears in each subgroup of data but disappears or reverses when the subgroups are combined. Caused by a confounding variable (group size or composition) that is correlated with both the grouping variable and the outcome."
+    detailed: |
+      The canonical example: a university appeared to admit men at a higher rate than women (overall). But examining each department individually, women were admitted at a higher or equal rate. The resolution: women applied in greater numbers to the most competitive departments (art, humanities), pulling down their overall acceptance rate. Men applied more to engineering, which had high acceptance rates, inflating their overall rate. The 'confounder' was department selectivity, which correlated with both applicant gender and acceptance rate.
+
+      In medicine: a drug that looks better overall can look worse in every subgroup if the subgroup composition differs between treatment groups (as in the widget). In business: a metric improving for every customer segment can decline in aggregate if the fast-growing segment has lower average values.
+
+      The lesson: always ask whether the result you're reporting is robust to stratification. If the pattern reverses when you break down by a sensible subgroup, the aggregate result may be misleading.
+    pitfalls:
+      - "The 'correct' level of analysis — subgroup or aggregate — depends on the causal question. If you want to decide which treatment to give an individual patient, the subgroup rates are what matter."
+  - question: "What is the only rigorous way to establish causation?"
+    shortAnswer: "A randomised controlled trial (RCT): randomly assign units to treatment or control. Randomisation breaks all confounding — it makes treatment assignment independent of every confounding variable, observed or not."
+    detailed: |
+      In an RCT, you flip a coin to decide who gets the treatment. That coin flip is uncorrelated with age, health, income, or any other variable — so the two groups are comparable on all dimensions. Any difference in outcomes must be due to the treatment.
+
+      When an RCT is impossible (unethical, impractical, or too slow), researchers use quasi-experimental methods that approximate randomisation:
+      - Instrumental variables: exploit a variable that affects treatment assignment but has no direct effect on the outcome.
+      - Difference-in-differences: compare the change in an outcome over time between treated and untreated groups.
+      - Regression discontinuity: exploit sharp cutoffs (e.g., policies that apply above a score threshold).
+
+      In ML, randomised experiments are more tractable than in medicine: you can run online A/B tests that randomly assign users to model versions. These are genuine RCTs. Anything else — retrospective comparison of model outputs on the same set, comparing cohorts of users who happen to use different features — is observational and subject to confounding.
+    pitfalls:
+      - "RCTs eliminate confounding but not all threats to validity. External validity (will it generalise?) and attrition (who drops out?) are still concerns."
+  - question: "Why do ML models learn correlations and not causes?"
+    shortAnswer: "Supervised learning optimises a prediction objective: minimise the gap between predicted and actual labels. That objective rewards any stable statistical association — causal or not. The model has no mechanism to distinguish signal from confound."
+    detailed: |
+      Suppose you train a chest X-ray classifier. The model learns that images labelled 'pneumonia' often have a certain texture. But that texture might be a hospital scanner artifact: Hospital A has older scanners, and its patients also happen to have worse baseline health. The model learns 'hospital-A-scanner-texture → likely pneumonia'. In deployment at Hospital B, with different equipment, the correlation is gone — and the model fails silently.
+
+      This pattern — 'spurious correlations that work in training distribution but not deployment' — is called distribution shift. It's one of the most common and dangerous failure modes in production ML. Models trained on scraped internet data learn all manner of correlations that hold in the training set (e.g., 'cow images often have grass backgrounds') but fail when the context changes ('cow in a studio').
+
+      Causal ML is a research area that tries to learn representations that are invariant across environments — essentially, learning the causal mechanism rather than the spurious correlates. This is an active and hard research problem.
+    pitfalls:
+      - "The model doesn't 'know' it's using spurious features. It can't report 'I'm relying on the scanner texture.' Model interpretation tools (SHAP, integrated gradients) can sometimes reveal this."
+  - question: "Can two variables be uncorrelated but still dependent?"
+    shortAnswer: "Yes. Pearson's r measures only linear dependence. If the relationship between X and Y is non-linear (e.g., Y = X² with X centred at 0), Pearson's r can be zero while the variables are completely determined by each other."
+    detailed: |
+      Example: Let X ~ Uniform(-1, 1). Let Y = X². Then Cov(X, Y) = E[X · X²] - E[X]E[X²] = E[X³] - 0 · E[X²] = 0 (because E[X³] = 0 by symmetry of the uniform). So r = 0. But Y is a deterministic function of X — knowing X tells you Y exactly. They are maximally dependent and minimally correlated (as measured by Pearson's r).
+
+      Mutual information (covered in A1.4) does capture non-linear dependence. For ML feature selection: a feature with r = 0 to the label might still be informative. Always check non-linear associations (scatter plot, mutual information) before discarding features based on correlation alone.
+    pitfalls:
+      - "Spearman's rank correlation captures monotone (but not arbitrary) non-linear relationships. It's a useful complement to Pearson's r."
+  - question: "How does correlation-based feature selection go wrong in practice?"
+    shortAnswer: "You select features that correlate with the label in training data. In deployment, those correlations may not hold — because the mechanism that created the correlation in training (a confounder or distributional quirk) is absent in the new context."
+    detailed: |
+      A healthcare company trains a readmission-risk model. One of the highest-correlating features with 30-day readmission in training data is 'had a follow-up appointment scheduled at discharge'. They include this as a feature. At deployment, the model learns to predict lower risk for patients with scheduled follow-ups. But the feature also has a causal arrow going the other way: well-organised patients who are recovering well are more likely to schedule follow-ups. The correlation reflects health status, not the causal effect of the appointment.
+
+      If a new policy increases follow-up scheduling for all patients (the correlation between scheduling and health status weakens), the model's predictions for those patients become worse. The feature looked like strong signal; it was confounded signal.
+    pitfalls:
+      - "Features derived from the outcome (leakage), features that correlate with the label only because of a shared confounder, and features that work in training distribution but not deployment — all require the same caution: understand the mechanism, not just the correlation."
+---
+
+<TldrCallout>
+  Correlation quantifies how two variables move together — it says nothing about why. ML models
+  learn correlations from training data, which makes them vulnerable whenever the mechanism behind a
+  correlation doesn't hold in deployment. Confounders create correlations where there is no causal
+  link, and Simpson's paradox shows that aggregate correlations can reverse at the group level. The
+  only way to establish causation is randomisation.
+</TldrCallout>
+
+## The core distinction
+
+If you do nothing else with this lesson, remember this:
+
+**Correlation** is a description of the training data. **Causation** is a claim about what would happen if you intervened. Your model learns correlations. Deploying a model is an intervention. The gap between those two is where most ML failures live.
+
+## Measuring correlation: Pearson's r
+
+<GlossaryTerm
+  term="Pearson correlation coefficient (r)"
+  definition="A measure of linear association between two variables. r = Cov(X,Y) / (σ_X σ_Y). Ranges from −1 (perfect negative linear relationship) to +1 (perfect positive). Zero means no linear association."
+>
+  Pearson's r
+</GlossaryTerm>
+is the standard measure of linear association. It ranges from −1 to +1:
+
+- r = +1: perfect positive linear relationship — knowing X tells you Y exactly, and they move together.
+- r = 0: no linear association — knowledge of X provides no linear information about Y.
+- r = −1: perfect negative linear relationship — as X increases, Y decreases perfectly.
+
+**Interpreting magnitudes:** |r| < 0.2 is weak; 0.2–0.5 is moderate; > 0.5 is strong. But these are only rough guides — always look at the scatter plot.
+
+<WorkedExample title="Computing r for a small dataset">
+
+Suppose you observe five (hours_of_training, validation_accuracy) pairs:
+
+| Hours | Accuracy |
+| ----- | -------- |
+| 1     | 0.72     |
+| 2     | 0.78     |
+| 3     | 0.83     |
+| 4     | 0.88     |
+| 5     | 0.92     |
+
+Mean hours = 3, mean accuracy = 0.826.
+
+Numerator: Σ(xᵢ − 3)(yᵢ − 0.826) = (−2)(−0.106) + (−1)(−0.046) + (0)(0.004) + (1)(0.054) + (2)(0.094)
+= 0.212 + 0.046 + 0 + 0.054 + 0.188 = 0.500.
+
+Denominator: √[Σ(xᵢ − 3)²] × √[Σ(yᵢ − 0.826)²] = √10 × √(0.019) = 3.162 × 0.138 = 0.436.
+
+r = 0.500 / 0.436 = **0.997**.
+
+A near-perfect positive linear relationship — more training hours, reliably higher accuracy. But note: this is a tiny dataset from one experiment. Correlation in 5 points is very unreliable.
+
+</WorkedExample>
+
+## Limits of correlation
+
+Before using Pearson's r to make decisions, check for these failure modes:
+
+**Non-linearity.** Pearson's r is zero for Y = X² (centred). A scatter plot revealing a U-shape, exponential growth, or any non-monotone pattern signals that r is giving you an incomplete picture.
+
+**Outliers.** One extreme data point can dominate the covariance and swing r dramatically. Compute r with and without obvious outliers; if the conclusion changes, investigate before trusting the original value.
+
+**Range restriction.** If your data only covers part of the full range of X (say, you only have data from high-performers), the correlation within that restricted range may be near zero even if the true correlation in the full population is strong.
+
+**Correlation ≠ linearity ≠ all dependence.** Spearman's rank correlation captures monotone but non-linear relationships. Mutual information captures arbitrary dependence. Always check at least one of these alongside Pearson's r.
+
+## Spurious correlations: the confounder problem
+
+<GlossaryTerm
+  term="Spurious correlation"
+  definition="A correlation between two variables that has no direct causal link — it exists because both variables are caused by a third variable (the confounder), or by coincidence in a finite sample."
+>
+  Spurious correlations
+</GlossaryTerm>
+are real statistical associations with no real causal story. The canonical example: in many US
+states, ice cream sales and drowning rates are positively correlated. This is not evidence that ice
+cream causes drowning.
+
+The explanation is a <GlossaryTerm term="Confounder" definition="A variable that causally influences both the 'exposure' (predictor) and the 'outcome', creating an apparent association between them even when there is no direct causal link. Confounders are the primary reason observational data misleads.">confounder</GlossaryTerm>: warm weather. Hot summer days cause both more ice cream consumption and more swimming (hence more drowning risk). Warm weather → ice cream sales. Warm weather → drowning. Remove the effect of temperature — compare ice cream sales and drowning rates only among days of similar temperature — and the correlation disappears.
+
+<AnalogyCallout>
+  A confounder is like a puppet master pulling two strings at once. You see the two puppets (ice
+  cream and drowning) moving together and conclude they're connected. But the connection is through
+  the master's hands (warm weather), not between the puppets themselves. Pull one puppet and the
+  other stays put — no causal link.
+</AnalogyCallout>
+
+## Simpson's paradox: when groups reverse the story
+
+<GlossaryTerm
+  term="Simpson's paradox"
+  definition="A statistical phenomenon where a trend appears in each subgroup of data but disappears or reverses when the subgroups are combined. The driver is usually a confounder that is unevenly distributed across groups."
+>
+  Simpson's paradox
+</GlossaryTerm>
+is one of the most counterintuitive results in statistics. A treatment can look worse than the
+control in every subgroup analysis — and still look better in the aggregate. Or the reverse.
+
+The interactive below demonstrates this with two medical treatments. Drag the slider and watch the **Overall** column flip even as each subgroup column stays stable.
+
+<SimpsonsParadox />
+
+What to notice:
+
+- Treatment A has a higher success rate than B in **both** mild cases (80% vs 70%) and severe cases (50% vs 40%). A is clearly superior at the individual level.
+- But when Treatment B is given mostly to mild cases (easy patients), its overall average looks high — because mild cases succeed more often regardless of treatment.
+- Slide B's mild fraction past 53%: B's overall rate exceeds A's. If you didn't know the group breakdown, you'd ship B.
+
+Real-world examples of Simpson's paradox:
+
+- **UC Berkeley admissions (1973):** Overall, men were admitted at higher rates. But every department individually admitted women at equal or higher rates. The paradox: women applied more to competitive departments (the confounder was selectivity).
+- **COVID-19 case fatality rates:** Some countries showed lower vaccine efficacy in aggregate than in every age group because vaccinated populations skewed older (more severe cases).
+- **Kidney stone treatment:** Treatment B looked better overall, but A was better for both small and large stones. The paradox arose because B was used more often for small stones (which are easier to treat).
+
+**The practical rule:** always stratify your analysis by relevant subgroups before drawing aggregate conclusions. If the aggregate reverses in subgroups, the subgroup analysis is usually more informative for individual-level decisions.
+
+## Why ML models learn correlations, not causes
+
+Supervised learning finds patterns that minimise a loss function on training data. It will happily use any stable association — causal or not. This creates several failure modes:
+
+1. **Distribution shift.** A feature correlates with the label in training but not in deployment because the underlying confounder's relationship changes. Example: "premium plan users" have high retention in training data (confounder: high-value users self-select premium), but a policy that auto-upgrades all users breaks the correlation.
+
+2. **Shortcut learning.** Models find the easiest path to low training loss. In image classifiers, "cow" often co-occurs with "grass background". The model may learn the grass feature rather than the cow anatomy. In a studio, it fails.
+
+3. **Selection bias.** Data collected from a biased process (self-reported surveys, hospital records, internet scraping) will have correlations that don't generalise to the target population.
+
+The only robust defense is understanding the data-generating process and building models that rely on features with known causal relationships to the target — not just whatever achieves the highest validation AUC.
+
+<InlineQuiz
+  question="A model predicts job performance using features that include 'distance from office'. The correlation between distance and performance in training data is −0.35. The team includes this feature. Which concern is most warranted?"
+  options={[
+    { text: "The correlation is weak and should be excluded on that basis alone." },
+    {
+      text: "Distance may be a proxy for confounders (income, commute time) that affect performance; it may not hold in a remote-work context.",
+      correct: true,
+    },
+    {
+      text: "Pearson's r only measures non-linear relationships, so this estimate is likely wrong.",
+    },
+    { text: "A correlation of −0.35 means distance causes lower performance." },
+  ]}
+  explanation="Distance is almost certainly a proxy — it correlates with commute burden, cost of living, and potentially neighbourhood demographics. If the company moves to remote work, or if the deployment context is different from training (different city), the correlation may vanish or reverse. Using it as a feature bakes a potentially discriminatory and fragile signal into the model. The real issue is not the size of r but what mechanism created it and whether that mechanism persists in deployment."
+/>
+
+<InlineQuiz
+  question="A study finds that students who take private tutoring lessons score lower on standardised tests than students who don't. The study used observational data. What is the most likely explanation?"
+  options={[
+    { text: "Tutoring actually reduces test performance through some mechanism." },
+    {
+      text: "Students who pursue tutoring are already lower-performing; the confounder is prior academic struggle.",
+      correct: true,
+    },
+    {
+      text: "Tutoring is correlated with higher household income, which causes lower performance.",
+    },
+    { text: "The test scores are not measuring the right skills." },
+  ]}
+  explanation="This is a classic confounder: students who seek tutoring are typically those who are already struggling. The confounder (prior academic difficulty) causes both 'seeking tutoring' and 'lower test scores'. The observational correlation says nothing about the causal effect of tutoring. An RCT that randomly assigned students to tutoring would likely show a positive effect. Observational data that doesn't control for prior performance will always look like this."
+/>

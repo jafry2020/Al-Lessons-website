@@ -1,0 +1,292 @@
+---
+title: "Matrix calculus, just enough"
+description: "How to differentiate scalar functions of vectors and matrices — the machinery behind backpropagation for linear layers, softmax, and any loss function that involves matrix operations."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: math-stats
+moduleLabel: "Module 1 · Math & Stats Deeper"
+lesson: matrix-calculus
+lessonCode: "A1.5"
+estMinutes: 22
+prereqs:
+  - "A0.5 Linear algebra for machine learning"
+  - "A0.6 Calculus and gradients"
+objectives:
+  - "Compute the gradient of a scalar function with respect to a vector by applying the scalar chain rule element-wise."
+  - "Identify the shape of the Jacobian for a vector-to-vector function and state when it simplifies to a diagonal matrix."
+  - "Derive the gradient of MSE loss with respect to the weights of a linear layer, and verify the shape matches the weight matrix."
+pitfalls:
+  - "Confusing numerator-layout and denominator-layout conventions. Different textbooks, libraries, and papers use different conventions. Always check which convention a formula uses before applying it."
+  - "Forgetting that the gradient of a scalar w.r.t. a vector has the same shape as the vector. If w ∈ ℝⁿ, then ∂L/∂w ∈ ℝⁿ — not a matrix."
+  - "Trying to compute Jacobians for high-dimensional inputs explicitly. In deep learning, Jacobians are almost never materialised — they're only ever applied to vectors (Jacobian-vector products, JVPs) via automatic differentiation."
+  - "Assuming ∂(Ax)/∂x = A. The correct result is ∂(Ax)/∂x = Aᵀ under numerator layout (gradient rows match output). Check the layout convention before applying this."
+  - "Conflating the gradient with the Hessian. The gradient is first-order (same shape as the parameter); the Hessian is second-order (matrix for a scalar loss)."
+importantQuestions:
+  - question: "What is the gradient of a scalar function with respect to a vector?"
+    shortAnswer: "∇_x f(x) is a vector of the same shape as x, where entry i is ∂f/∂xᵢ. It points in the direction of steepest increase of f."
+    detailed: |
+      If f: ℝⁿ → ℝ and x ∈ ℝⁿ, the gradient ∇_x f = [∂f/∂x₁, ..., ∂f/∂xₙ]ᵀ. Each component is computed by treating all other variables as constants — it's just the usual partial derivative applied to each entry.
+
+      Shape rule: the gradient of a scalar output with respect to an n-dimensional input is an n-vector. The gradient of a scalar output with respect to an m×n matrix W is an m×n matrix — same shape as W. This shape rule makes it possible to implement parameter updates: you subtract (learning rate × gradient) from the parameter, element-wise.
+
+      In training: after backpropagation, ∂L/∂W is an m×n matrix of the same shape as W. The update is W ← W − lr · (∂L/∂W). The shapes must match.
+    pitfalls:
+      - "The gradient points in the direction of steepest increase. Gradient descent subtracts it (negative direction) to decrease the loss."
+  - question: "What are the two layout conventions in matrix calculus and why do they cause confusion?"
+    shortAnswer: "Numerator layout: the result shape matches the numerator's shape. Denominator layout: the result shape matches the denominator's transposed shape. Neither is universally standard; different books, frameworks, and papers use different choices."
+    detailed: |
+      For a scalar f and vector x ∈ ℝⁿ, both conventions give a n-vector of partial derivatives — just in different orientations (row vs column). The confusion explodes for vector functions: if y ∈ ℝᵐ and x ∈ ℝⁿ, the Jacobian J = ∂y/∂x is m×n under numerator layout (rows = outputs) and n×m under denominator layout (rows = inputs).
+
+      NumPy, PyTorch, and most ML frameworks use column vectors and something close to numerator layout. Many calculus textbooks use denominator layout. The matrix cookbook (a commonly referenced reference) is explicit about its choice. Always check which convention a formula uses — applying the wrong one gives you the transpose, which will silently produce wrong gradients.
+
+      The safest practice: verify your gradients by comparing them to numerical finite differences on small examples before trusting them.
+    pitfalls:
+      - "Neural network frameworks handle this internally (via autograd). You encounter the convention explicitly only when deriving gradients by hand."
+  - question: "What is the Jacobian and when does it reduce to something simpler?"
+    shortAnswer: "The Jacobian J of a function f: ℝⁿ → ℝᵐ is an m×n matrix where Jᵢⱼ = ∂fᵢ/∂xⱼ. It reduces to a diagonal matrix when f acts element-wise (e.g., ReLU, sigmoid): Jᵢⱼ = 0 for i ≠ j."
+    detailed: |
+      For element-wise functions (also called pointwise nonlinearities), fᵢ depends only on xᵢ — so ∂fᵢ/∂xⱼ = 0 for i ≠ j. The Jacobian is diagonal with entries diag(f'(x₁), f'(x₂), ..., f'(xₙ)). This is why applying ReLU's gradient is just elementwise multiplication by the indicator function (1 if x > 0, else 0).
+
+      For softmax (a coupling function where every output depends on every input), the Jacobian is fully dense. But in practice, the Jacobian-times-upstream-gradient computation (Jacobian-vector product) is what backprop actually computes — and for softmax, this simplifies to a closed form without materialising the full Jacobian matrix.
+    pitfalls:
+      - "Never materialise a full n×n Jacobian for large n in code. For n = 10^6, that's a 10^12 matrix. Always use JVPs."
+  - question: "What is the gradient of MSE loss with respect to the weight vector in linear regression?"
+    shortAnswer: "For L = (1/n)‖Xw − y‖², the gradient is ∂L/∂w = (2/n)Xᵀ(Xw − y). The gradient is an n-vector (same shape as w), pointing in the direction that increases L."
+    detailed: |
+      Let X ∈ ℝᵐˣⁿ (m examples, n features), w ∈ ℝⁿ, y ∈ ℝᵐ. Define residuals r = Xw − y ∈ ℝᵐ.
+
+      L = (1/m) rᵀr = (1/m) Σᵢ rᵢ².
+
+      ∂L/∂w = (2/m) ∂r/∂w · r (chain rule).
+
+      ∂rᵢ/∂wⱼ = ∂(Σₖ Xᵢₖwₖ − yᵢ)/∂wⱼ = Xᵢⱼ.
+
+      So the Jacobian ∂r/∂w (shape: m × n) has entries Xᵢⱼ — it's just X. By the chain rule:
+
+      ∂L/∂w = (2/m) Xᵀ r = (2/m) Xᵀ(Xw − y).
+
+      Shape: (n×m)(m) = n ✓ — same shape as w.
+    pitfalls:
+      - "The factor 2 is often dropped or replaced by 1/2 added to the loss definition. The gradient shape (same as w) is what matters for implementation."
+  - question: "How does the chain rule work for vector functions?"
+    shortAnswer: "If z = g(f(x)), then ∂z/∂x = (∂z/∂f) · (∂f/∂x). For vectors, this is Jacobian multiplication: J_total = J_outer · J_inner. Each Jacobian's shape must be compatible for matrix multiplication."
+    detailed: |
+      Concretely: x ∈ ℝⁿ, f: ℝⁿ → ℝᵐ, g: ℝᵐ → ℝᵏ, z ∈ ℝᵏ.
+
+      J_{f} = ∂f/∂x ∈ ℝᵐˣⁿ, J_{g} = ∂g/∂f ∈ ℝᵏˣᵐ.
+
+      Chain rule: J_{total} = J_{g} · J_{f} ∈ ℝᵏˣⁿ.
+
+      For the scalar case (k=1): ∂z/∂x = (∂z/∂f)ᵀ · J_{f} — a vector of shape n.
+
+      In backpropagation, you never compute full Jacobians. Instead, starting from a scalar loss L, you have a "upstream gradient" vector u = ∂L/∂f ∈ ℝᵐ. The "backward pass" computes J_{f}ᵀ · u ∈ ℝⁿ — this is the vector-Jacobian product (VJP), and it's exactly what autograd engines compute efficiently without materialising J_f.
+    pitfalls:
+      - "The order matters: J_outer on the left, J_inner on the right. Getting this wrong transposes the result."
+  - question: "What is the gradient of the loss with respect to the weight matrix in a linear layer?"
+    shortAnswer: "For a linear layer z = Wx (with loss L), ∂L/∂W = (∂L/∂z) · xᵀ — the outer product of the upstream gradient and the input. Shape: same as W."
+    detailed: |
+      Let W ∈ ℝᵐˣⁿ, x ∈ ℝⁿ, z = Wx ∈ ℝᵐ. Let δ = ∂L/∂z ∈ ℝᵐ (upstream gradient from the layer above).
+
+      For element (i,j) of ∂L/∂W:
+
+      ∂L/∂Wᵢⱼ = Σₖ (∂L/∂zₖ)(∂zₖ/∂Wᵢⱼ) = δᵢ · xⱼ.
+
+      In matrix form: ∂L/∂W = δ · xᵀ ∈ ℝᵐˣⁿ. Same shape as W ✓.
+
+      The gradient of the loss with respect to the input: ∂L/∂x = Wᵀ · δ ∈ ℝⁿ. This is the "backward pass" through the layer — it sends the gradient back to the previous layer.
+
+      These two formulas — ∂L/∂W = δxᵀ and ∂L/∂x = Wᵀδ — are the entire backpropagation algorithm for a linear layer. Everything else in a neural network is composed from this pattern.
+    pitfalls:
+      - "∂L/∂W = δxᵀ is an outer product (rank-1 matrix). For a batch of B examples, the gradient is the average: (1/B) Σᵢ δᵢ xᵢᵀ."
+  - question: "What is the Hessian and when does it matter for optimisation?"
+    shortAnswer: "The Hessian H = ∂²L/∂w² is the matrix of second-order partial derivatives. It encodes the curvature of the loss surface. It matters for second-order optimisers (like L-BFGS) and for understanding how learning rate and loss landscape interact."
+    detailed: |
+      For L: ℝⁿ → ℝ, the Hessian H ∈ ℝⁿˣⁿ has (i,j) entry ∂²L/∂wᵢ∂wⱼ. If H is positive definite at a critical point, it's a local minimum; negative definite → local maximum; indefinite → saddle point.
+
+      Second-order optimisers like Newton's method update w ← w − H⁻¹ ∇L, which accounts for curvature and can converge much faster than gradient descent in poorly conditioned landscapes. But explicitly computing and inverting H is O(n³) — catastrophic for millions of parameters. L-BFGS approximates H⁻¹ using gradient differences over recent steps.
+
+      In deep learning, the Hessian is almost never computed explicitly. But understanding it clarifies why wide flat minima are associated with good generalisation (the loss is insensitive to perturbations) and why sharp minima generalise poorly. It also clarifies why certain learning rates cause divergence: if the largest eigenvalue of H (the sharpest curvature) exceeds 2/lr, gradient descent is unstable.
+    pitfalls:
+      - "The Hessian of a neural network is typically indefinite (many saddle points), not negative or positive definite. Deep learning loss surfaces are not convex."
+  - question: "How does automatic differentiation relate to matrix calculus?"
+    shortAnswer: "Autograd implements the chain rule for arbitrary computation graphs, computing vector-Jacobian products (reverse mode) or Jacobian-vector products (forward mode) without ever materialising the full Jacobian."
+    detailed: |
+      Reverse-mode autodiff (backpropagation) starts from a scalar loss and propagates gradients backward. At each operation, it applies the VJP: given the upstream gradient u = ∂L/∂output, it computes ∂L/∂input = J_operation^T · u. The Jacobian J_operation is never formed explicitly; the VJP is computed analytically for each primitive operation (add, matmul, relu, softmax, etc.).
+
+      Forward-mode autodiff propagates a 'tangent vector' forward. For computing ∂output/∂input in the direction of a specific input perturbation, it's more efficient than reverse mode for functions with few inputs and many outputs. Reverse mode is efficient when there are many inputs (parameters) and few outputs (one scalar loss) — exactly the neural network case.
+
+      PyTorch's autograd, JAX's grad, and TensorFlow's GradientTape all implement reverse-mode autodiff. When you call loss.backward(), you're executing the VJP chain for every operation in the forward computation graph. The matrix calculus formulas in this lesson are what's being computed — autograd just does it automatically and correctly.
+    pitfalls:
+      - "Autograd tracks operations on tensors. Operations on plain Python numbers or NumPy arrays are invisible to autograd — they break the computation graph."
+---
+
+<TldrCallout>
+  Matrix calculus extends scalar calculus to vector and matrix inputs and outputs. The key objects
+  are the *gradient* (scalar → same-shape-as-parameter), the *Jacobian* (vector → matrix of partial
+  derivatives), and the *chain rule for vectors* (Jacobian multiplication). These are the formulas
+  backpropagation is computing — autograd does it automatically, but understanding the math lets you
+  debug shapes, initialise correctly, and read derivations in papers.
+</TldrCallout>
+
+## Why this matters
+
+When you read a paper that derives "∂L/∂W = δxᵀ", you're reading matrix calculus. When a gradient check fails at a custom layer, the bug is almost always a shape error that becomes obvious once you draw the Jacobian. When you're choosing an optimiser or learning rate, the reasoning involves second-order curvature (the Hessian) even if you never compute it. This lesson builds the vocabulary.
+
+## Scalar function of a vector: the gradient
+
+The simplest case: a function that takes a vector and returns a number — like a loss function.
+
+<GlossaryTerm
+  term="Gradient (of a scalar w.r.t. a vector)"
+  definition="For f: ℝⁿ → ℝ, the gradient ∇_x f is a vector in ℝⁿ where entry i is the partial derivative ∂f/∂xᵢ. It points in the direction of steepest ascent of f. Same shape as x."
+>
+  The gradient
+</GlossaryTerm>
+∇_x f(x) = [∂f/∂x₁, ∂f/∂x₂, ..., ∂f/∂xₙ]ᵀ.
+
+**Shape rule:** the gradient of a scalar with respect to an n-vector is an n-vector. The gradient of a scalar with respect to an m×n matrix is an m×n matrix. The result always has the same shape as the parameter.
+
+<WorkedExample title="Gradient of the squared norm">
+
+Let f(x) = ‖x‖² = x₁² + x₂² + ... + xₙ².
+
+∂f/∂xᵢ = 2xᵢ for each i.
+
+Therefore ∇_x ‖x‖² = 2x.
+
+Check: the gradient of a scalar function of an n-vector is an n-vector ✓. The shape is correct.
+
+This result appears in L2 regularisation: the regularisation term is λ‖w‖², and its gradient with respect to w is 2λw. That's why L2 regularisation corresponds to weight decay.
+
+</WorkedExample>
+
+## Layout conventions: the confusion up front
+
+Matrix calculus has two conventions:
+
+- **Numerator layout (Jacobian layout):** the result has the same shape as the numerator (output). For ∂y/∂x with y ∈ ℝᵐ and x ∈ ℝⁿ, the Jacobian is m×n.
+- **Denominator layout:** the result has the transposed shape of the denominator (input). Same example: n×m.
+
+For gradients of a scalar (m=1), both agree on an n-vector (one convention writes it as a row, the other as a column — the entries are the same). The confusion is real for vector functions.
+
+**Practical rule:** use numerator layout. PyTorch and most ML frameworks are consistent with it. When reading a formula from a book, check which convention it uses before applying the result.
+
+## The Jacobian: vector functions of vectors
+
+<GlossaryTerm
+  term="Jacobian matrix"
+  definition="For f: ℝⁿ → ℝᵐ, the Jacobian J ∈ ℝᵐˣⁿ (under numerator layout) has entry Jᵢⱼ = ∂fᵢ/∂xⱼ. It generalises the gradient to vector-valued functions. The gradient is a special case where m=1."
+>
+  The Jacobian
+</GlossaryTerm>
+captures all partial derivatives of all outputs with respect to all inputs:
+
+```
+J = [[∂f₁/∂x₁  ∂f₁/∂x₂  ...  ∂f₁/∂xₙ],
+     [∂f₂/∂x₁  ∂f₂/∂x₂  ...  ∂f₂/∂xₙ],
+     [   ...                          ],
+     [∂fₘ/∂x₁  ∂fₘ/∂x₂  ...  ∂fₘ/∂xₙ]]
+```
+
+Row i corresponds to output fᵢ; column j corresponds to input xⱼ.
+
+**When does it simplify?** For element-wise functions (ReLU, sigmoid, tanh applied component-wise), fᵢ depends only on xᵢ. The Jacobian is diagonal: J = diag(f'(x₁), ..., f'(xₙ)). Computing the product Jᵀu for any vector u is just element-wise multiplication — O(n) instead of O(n²).
+
+<WorkedExample title="Jacobian of a linear map">
+
+Let f(x) = Ax where A ∈ ℝᵐˣⁿ.
+
+Then fᵢ = Σⱼ Aᵢⱼ xⱼ, so ∂fᵢ/∂xⱼ = Aᵢⱼ.
+
+The Jacobian of f with respect to x is A itself. In matrix calculus: ∂(Ax)/∂x = A ∈ ℝᵐˣⁿ.
+
+The VJP (for upstream gradient u ∈ ℝᵐ): Jᵀu = Aᵀu ∈ ℝⁿ.
+
+This is the backward pass through a linear layer: the gradient flowing back to x is Aᵀ times the gradient flowing forward from z.
+
+</WorkedExample>
+
+## Chain rule for vectors
+
+<AnalogyCallout>
+  The scalar chain rule says: if z = g(f(x)), then dz/dx = (dg/df) · (df/dx). For vectors, the same
+  rule applies but the "multiplication" is matrix multiplication: J_total = J_outer · J_inner. Every
+  backward pass in a neural network is just this chain of matrix multiplications, applied from the
+  output layer back to the input.
+</AnalogyCallout>
+
+For a composition z = g(f(x)) with x ∈ ℝⁿ, f: ℝⁿ → ℝᵐ, g: ℝᵐ → ℝᵏ:
+
+J*{z→x} = J*{g→f} · J\_{f→x} ∈ ℝᵏˣⁿ
+
+For backpropagation (k=1, scalar loss L):
+
+∂L/∂x = (∂L/∂f) · J*{f→x} = uᵀ · J*{f→x}
+
+In practice: given u = ∂L/∂f (upstream gradient), compute uᵀJ without forming J — this is the VJP.
+
+<WorkedExample title="Backprop through a linear layer with activation">
+
+Consider a two-step computation: z = Wx (linear), a = σ(z) (ReLU activation), loss L(a).
+
+**Forward:** x ∈ ℝⁿ → z = Wx ∈ ℝᵐ → a = relu(z) ∈ ℝᵐ → L(a) ∈ ℝ.
+
+**Backward:**
+
+Step 1. δ_a = ∂L/∂a ∈ ℝᵐ (upstream gradient, computed from the next layer).
+
+Step 2. Gradient through ReLU (diagonal Jacobian): δ_z = δ_a ⊙ 1[z > 0] ∈ ℝᵐ.
+Here ⊙ is element-wise multiplication; 1[z > 0] is 1 where z was positive, 0 elsewhere.
+
+Step 3. Gradient through linear layer:
+
+- ∂L/∂W = δ_z · xᵀ ∈ ℝᵐˣⁿ (same shape as W ✓)
+- ∂L/∂x = Wᵀ · δ_z ∈ ℝⁿ (passed to the layer before ✓)
+
+These three steps — upstream gradient × Jacobian of activation × Jacobian of linear map — are what PyTorch computes when you call loss.backward().
+
+</WorkedExample>
+
+## Common patterns cheat sheet
+
+| Operation      | Forward       | Gradient/backward         |
+| -------------- | ------------- | ------------------------- |
+| Squared norm   | f = ‖x‖²      | ∂f/∂x = 2x                |
+| Linear map     | z = Wx        | ∂L/∂W = δ xᵀ, ∂L/∂x = Wᵀδ |
+| Element-wise σ | a = σ(z)      | ∂L/∂z = δ ⊙ σ'(z)         |
+| Dot product    | f = aᵀb       | ∂f/∂a = b, ∂f/∂b = a      |
+| Quadratic      | f = xᵀAx      | ∂f/∂x = (A + Aᵀ)x         |
+| Log-sum-exp    | f = log Σ eˣⁱ | ∂f/∂xᵢ = softmax(x)ᵢ      |
+
+## Seeing gradient descent in action
+
+The widget below shows gradient descent navigating a 2D loss surface — the visual realisation of ∇L pointing uphill and the optimiser stepping downhill.
+
+<GradientDescentHero />
+
+Notice: the direction the path descends is the negative gradient. In flat regions (saddle points, plateaus), the gradient magnitude is small and progress stalls. In steep regions, the gradient magnitude is large and the step is more aggressive.
+
+<InlineQuiz
+  question="You have a linear layer z = Wx, where W ∈ ℝ^(5×4) and x ∈ ℝ⁴. After the forward pass, you receive an upstream gradient δ = ∂L/∂z ∈ ℝ⁵. What is the shape of ∂L/∂W?"
+  options={[
+    { text: "ℝ⁴ˣ⁵ — the transpose of W's shape." },
+    { text: "ℝ⁵ˣ⁴ — same shape as W.", correct: true },
+    { text: "ℝ⁵ — a vector matching δ's shape." },
+    { text: "ℝ⁴ — a vector matching x's shape." },
+  ]}
+  explanation="The gradient of a scalar loss with respect to a parameter always has the same shape as the parameter. W ∈ ℝ⁵ˣ⁴, so ∂L/∂W ∈ ℝ⁵ˣ⁴. Concretely: ∂L/∂W = δ · xᵀ where δ ∈ ℝ⁵ and xᵀ ∈ ℝ¹ˣ⁴ — the outer product gives a 5×4 matrix. This matches W's shape ✓."
+/>
+
+<FillInBlankCode
+  prompt="Complete the manual backward pass for a linear layer. Given upstream gradient delta (shape m), input x (shape n), and weight matrix W (shape m×n), compute the gradient of the loss w.r.t. W."
+  before={
+    "import numpy as np\n\n# Forward pass\n# z = W @ x   (shape: m)\n# Loss L is computed from z; delta = dL/dz is given\n\ndef linear_backward(delta, x, W):\n    dL_dx = W.T @ delta  # gradient w.r.t. input\n"
+  }
+  after={"    return dL_dW, dL_dx"}
+  expected={["dL_dW = np.outer(delta, x)", "dL_dW = delta[:, None] @ x[None, :]"]}
+  hints={[
+    "The gradient w.r.t. W is the outer product of the upstream gradient and the input.",
+    "For entry (i,j): ∂L/∂Wᵢⱼ = δᵢ · xⱼ. In matrix form, this is δ · xᵀ = outer(delta, x).",
+  ]}
+  solution={"dL_dW = np.outer(delta, x)"}
+/>

@@ -10,6 +10,10 @@ import { GradientDescentHero } from "../viz/GradientDescentHero";
 import { PolynomialFit } from "../viz/PolynomialFit";
 import { ThresholdSlider } from "../viz/ThresholdSlider";
 import { BayesCalculator } from "../viz/BayesCalculator";
+import { DistributionExplorer } from "../viz/DistributionExplorer";
+import { PValueSimulator } from "../viz/PValueSimulator";
+import { SimpsonsParadox } from "../viz/SimpsonsParadox";
+import { EntropyCalculator } from "../viz/EntropyCalculator";
 
 /**
  * Components available inside any .mdx lesson file.
@@ -34,6 +38,10 @@ export const mdxComponents: MDXComponents = {
   PolynomialFit,
   ThresholdSlider,
   BayesCalculator,
+  DistributionExplorer,
+  PValueSimulator,
+  SimpsonsParadox,
+  EntropyCalculator,
 
   // Markdown overrides: align native MD output with the design system.
   h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,

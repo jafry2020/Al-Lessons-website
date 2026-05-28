@@ -1,0 +1,328 @@
+---
+title: "Hypothesis testing for engineers"
+description: "What a p-value actually means, how to avoid being fooled by it, and how to apply statistical tests to the real problem you face: deciding whether a new model is actually better."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: math-stats
+moduleLabel: "Module 1 · Math & Stats Deeper"
+lesson: hypothesis-testing
+lessonCode: "A1.2"
+estMinutes: 22
+prereqs:
+  - "A1.1 Distributions in the wild"
+objectives:
+  - "State precisely what a p-value is — and name two things it is commonly but incorrectly interpreted as."
+  - "Distinguish Type I from Type II error and explain the role of statistical power in controlling both."
+  - "Design a valid A/B test for comparing two model versions, including how to set sample size before running the test."
+pitfalls:
+  - "Interpreting p < 0.05 as 'there is a 95% chance the null is false.' It means nothing of the sort."
+  - "Running the test repeatedly and stopping when p < 0.05 is first reached (p-hacking / optional stopping). This inflates the false positive rate dramatically."
+  - "Equating statistical significance with practical significance. A model 0.1% more accurate on a huge test set will be 'significantly better' — but not necessarily worth shipping."
+  - "Ignoring power when designing tests. An underpowered test that fails to detect a real improvement is wasted effort and may lead you to incorrectly dismiss a good model."
+  - "Comparing many model variants against one baseline without correcting for multiple comparisons (Bonferroni or Benjamini–Hochberg). Every comparison has a 5% false-positive chance; ten comparisons give you a ~40% chance of at least one false positive."
+importantQuestions:
+  - question: "What is a p-value — precisely?"
+    shortAnswer: "The probability of observing a test statistic as extreme as the one observed (or more extreme), assuming the null hypothesis is true. It is NOT the probability that the null hypothesis is true."
+    detailed: |
+      This is the single most misunderstood concept in statistics. The p-value is computed under the assumption that H₀ is true. It tells you how surprised you should be at the data *if the null were true*. A small p-value means the data is unlikely under the null — which is evidence against the null, but not proof.
+
+      What a p-value is NOT:
+      - Not P(null is true | data). That's the posterior probability and requires Bayes' theorem with a prior.
+      - Not the probability of a false positive on this specific test. That depends on the prior probability that H₀ is actually true.
+      - Not a measure of effect size. A tiny, irrelevant effect can yield p = 0.0001 with enough data.
+
+      The correct verbal translation: "If the null hypothesis were true and we ran this experiment many times, we'd see a result at least this extreme in p-fraction of experiments." That's it. Nothing more.
+    pitfalls:
+      - "The common paraphrase 'there's a 5% chance this result is due to chance' is wrong. Probability is a statement about repeated experiments under the null, not about this specific result."
+      - "A p-value of 0.051 vs 0.049 is not meaningfully different — but the binary threshold makes it look like a cliff."
+  - question: "What is the difference between a Type I error and a Type II error?"
+    shortAnswer: "Type I (false positive): you reject the null when it is actually true. Type II (false negative): you fail to reject the null when it is actually false. α controls Type I rate; statistical power (1 − β) is the probability of avoiding Type II."
+    detailed: |
+      The 2×2 table: the null is either true or false; you either reject it or don't.
+
+      - True null, don't reject → correct (true negative).
+      - True null, reject → Type I error (false positive). Rate = α (the significance level you set).
+      - False null, don't reject → Type II error (false negative). Rate = β.
+      - False null, reject → correct (true positive). Power = 1 − β.
+
+      α and β are inversely related given a fixed sample size: tighten α (say from 0.05 to 0.01) and you reduce false positives, but you also make it harder to detect real effects (β increases, power decreases). To reduce both simultaneously, you need more data.
+
+      In ML model evaluation: a Type I error means shipping a model that's actually no better (or worse). A Type II error means discarding a model that would have improved production. The costs are usually asymmetric — Type I errors often cause business harm, but Type II errors kill improvement velocity.
+    pitfalls:
+      - "Don't memorize Type I = false positive by a mnemonic alone. Understand that it's the probability of rejecting a true null — because that's what α literally controls."
+  - question: "What is statistical power and why does it depend on sample size?"
+    shortAnswer: "Power is the probability of correctly detecting a real effect. It increases with sample size (more data → smaller standard error → easier to detect a given effect size), larger true effect size, and higher α."
+    detailed: |
+      A test has high power if, when there is a real difference of size δ, it correctly rejects the null with high probability. Power = 1 − P(Type II error) = 1 − β.
+
+      The formula for a two-sample z-test: power depends on (δ / SE)², where SE is the standard error of the difference. SE ∝ 1/√n, so doubling n reduces SE by √2, which roughly quadruples the non-centrality parameter (and dramatically increases power).
+
+      The practical implication: always compute the required sample size *before* running an A/B test. Specify: (1) the minimum effect size you care about (e.g., 2% improvement in accuracy), (2) the desired power (typically 80%), and (3) α. Then calculate n. Running the test with too few samples means you'll likely miss real improvements — and you'll have wasted the experiment.
+    pitfalls:
+      - "Post-hoc power calculations — computing power after a negative result — are controversial and often misleading. Specify power a priori."
+  - question: "What is p-hacking and why does the widget demonstrate it?"
+    shortAnswer: "P-hacking is any practice that cherry-picks when, how, or which results to report until p < 0.05 is achieved. The widget shows that even with no real effect, about 5% of tests appear significant by chance — so running many tests or stopping when 'significant' inflates the false-positive rate."
+    detailed: |
+      The p-value is uniform on [0,1] under the null. That means 5% of tests will show p < 0.05 even when the null is perfectly true. If you run 20 comparisons and report only the one that's 'significant', you're almost guaranteed a false positive. If you peek at data after every 10 samples and stop when p < 0.05 first appears, you're doing optional stopping — a well-documented p-hacking technique that inflates your real false-positive rate from 5% to 30% or higher.
+
+      The replication crisis in psychology (and elsewhere) is partly explained by this: researchers tried many analyses, reported the significant one, and the finding failed to replicate because it was noise. A related version happens in ML when teams try 20 hyperparameter configurations, pick the best one, and declare it "significantly better" without accounting for the multiple comparisons.
+    pitfalls:
+      - "Exploratory vs confirmatory analysis: it's fine to try many things in exploration, as long as you then validate the winner in a fresh, pre-specified confirmatory test."
+  - question: "How should you properly A/B test two model versions?"
+    shortAnswer: "Pre-specify the null and alternative hypotheses, the minimum effect size you care about, α and power. Collect exactly the pre-specified sample size. Run the test once. Report the result regardless of outcome."
+    detailed: |
+      Step-by-step:
+      1. Decide the metric (accuracy, F1, AUC, revenue per user — one primary metric only).
+      2. Specify H₀ (no difference) and H₁ (Model B is better by at least δ%).
+      3. Choose α (typically 0.05) and desired power (typically 0.80).
+      4. Compute the required sample size using a power calculator.
+      5. Collect exactly that many fresh samples (not the training or validation set). Split them randomly between models.
+      6. Run the statistical test once.
+      7. Report the p-value, confidence interval on the difference, and effect size — not just "significant" or not.
+
+      In practice, if you're evaluating on a fixed test set (not an online A/B test), use a paired test (McNemar's test for classification, paired t-test for regression metrics) — it's more powerful because it accounts for per-example correlation.
+    pitfalls:
+      - "Never use your training or validation set for hypothesis testing. The model was optimised on those sets, so any test there is not independent."
+  - question: "What is the multiple comparisons problem and how do you correct for it?"
+    shortAnswer: "Every comparison you make has a 5% false-positive chance at α=0.05. Running k comparisons gives you roughly 1 − (0.95)^k chance of at least one false positive. The Bonferroni correction divides α by k; the Benjamini–Hochberg procedure controls the false discovery rate."
+    detailed: |
+      If you compare 10 models against a baseline at α = 0.05, even if all 10 models are identical to the baseline, the probability of seeing at least one 'significant' result is 1 − (0.95)^10 ≈ 40%. This is the family-wise error rate inflating.
+
+      Bonferroni correction: use α/k per comparison. For k=10, α becomes 0.005. Conservative (it reduces power), but controls the family-wise error rate.
+
+      Benjamini–Hochberg (BH) procedure: sort p-values. Reject the null for p_i ≤ (i/k) * FDR_rate. Controls the false discovery rate (FDR), which is the expected proportion of rejected nulls that are false. Less conservative than Bonferroni; preferred when the number of tests is large.
+
+      In ML hyperparameter search: if you test 50 configurations and pick the best, you need to either apply a correction or validate the winner on a fresh holdout set.
+    pitfalls:
+      - "Bonferroni assumes tests are independent. When tests are correlated (which they usually are in hyperparameter search), Bonferroni is overly conservative."
+  - question: "What is the difference between statistical significance and practical significance?"
+    shortAnswer: "Statistical significance means the effect is unlikely to be zero. Practical significance means the effect is large enough to matter. With enough data, a 0.01% improvement will be statistically significant but not worth acting on."
+    detailed: |
+      A model trained on 10 million examples evaluated on 1 million test examples can detect accuracy differences of 0.01 percentage points with high power. If Model B has accuracy 90.01% vs Model A's 90.00%, the test will declare significance — but nobody cares about 0.01%.
+
+      Always report the effect size alongside the p-value: "Model B is 0.01 percentage points more accurate (95% CI: [0.002, 0.018] pp, p = 0.004)." The CI tells you the plausible range of the true difference; that range may be entirely within 'we don't care' territory.
+
+      A useful frame: before running the test, decide the minimum practically-significant effect (the minimum detectable effect, or MDE). If the CI is entirely below the MDE, the result is 'significant but not meaningful'.
+    pitfalls:
+      - "Null results are not failures. 'We found no significant difference at α=0.05 with n=1000 and 80% power to detect a 2% improvement' is valuable evidence that the new model isn't meaningfully better."
+  - question: "When is a t-test better than a z-test?"
+    shortAnswer: "When the population standard deviation is unknown (which is almost always). The t-test uses the sample standard deviation and accounts for the extra uncertainty by using a heavier-tailed t-distribution. For large samples (n > ~100), the difference is negligible."
+    detailed: |
+      The z-test assumes you know σ exactly. In reality you estimate it from the data, which introduces uncertainty. The t-distribution accounts for this by having heavier tails than the normal — so you need a larger test statistic to achieve the same significance level. With n=10, the 95th percentile of t₉ is 1.83, compared to 1.65 for normal; with n=100, the difference is tiny.
+
+      In practice: for comparing means of continuous quantities, use a t-test. For comparing proportions (accuracy, click-through rate), use a z-test for proportions or the exact binomial test for small samples. For paired comparisons (same examples evaluated by two models), use a paired t-test or McNemar's test.
+    pitfalls:
+      - "The t-test assumes the underlying distribution is approximately normal (or n is large enough for the CLT to kick in). For highly skewed data with small n, consider non-parametric tests (Wilcoxon signed-rank, Mann–Whitney U)."
+---
+
+<TldrCallout>
+  A p-value tells you how surprising your data would be *if the null hypothesis were true* — nothing
+  more. It is not the probability the null is true, and it is not a measure of importance. Run your
+  test once with a pre-specified sample size; stop early or fish for significance and the false
+  positive rate silently inflates. Statistical significance and practical significance are two
+  different questions.
+</TldrCallout>
+
+## The problem this lesson solves
+
+You train a new model. On your validation set, it scores 87.3% versus the baseline's 86.8%. Is that 0.5 point real, or sampling luck?
+
+The naive answer — "it's better, ship it" — is wrong. The validation set is a random sample. Even an identical model would score differently on a different random sample. You need a framework for deciding when the difference is real. That framework is hypothesis testing.
+
+## The formal setup
+
+<GlossaryTerm
+  term="Null hypothesis (H₀)"
+  definition="The hypothesis of no effect, no difference, or no change. It is the default assumption. We test whether the data gives enough evidence to reject it."
+>
+  The null hypothesis H₀
+</GlossaryTerm>
+is the boring claim: "there is no real difference." For model comparison: "Model B's accuracy is the
+same as Model A's." We assume this is true and ask: how likely is our observed data if it were?
+
+<GlossaryTerm
+  term="Alternative hypothesis (H₁)"
+  definition="The hypothesis we'd accept if the evidence against H₀ is strong enough. It states that a real effect exists — e.g., Model B is more accurate than Model A."
+>
+  The alternative hypothesis H₁
+</GlossaryTerm>
+is the interesting claim: "Model B is actually better." We want to gather evidence for it by
+rejecting H₀.
+
+<GlossaryTerm
+  term="Test statistic"
+  definition="A number computed from the data that summarizes the evidence against the null hypothesis. Larger values (in the relevant direction) mean more evidence against H₀. Common examples: z-score, t-statistic, chi-squared statistic."
+>
+  The test statistic
+</GlossaryTerm>
+summarizes the evidence. For a two-sample comparison of proportions: z = (p̂₁ − p̂₂) / SE, where SE is
+the standard error of the difference. Under the null (p₁ = p₂), this z-score follows approximately
+N(0,1).
+
+<GlossaryTerm
+  term="p-value"
+  definition="The probability of observing a test statistic as extreme or more extreme than the one actually observed, assuming the null hypothesis is true. Small p-values are evidence against H₀ — they mean the data would be unusual if H₀ were true."
+>
+  The p-value
+</GlossaryTerm>
+is the probability of getting a test statistic at least as extreme as the one you observed,
+*assuming H₀ is true*. It is not the probability that H₀ is true.
+
+## What a p-value actually is
+
+This is where most confusion lives. Let's be precise.
+
+**What a p-value IS:** P(data as extreme or more extreme | H₀ true). It is computed entirely under the assumption that the null is true.
+
+**What a p-value is NOT:**
+
+- It is not P(H₀ is true | data). That would require Bayes' theorem and a prior on how often H₀ is true.
+- It is not the probability that the result is a "false positive" on this specific experiment.
+- It is not a measure of effect size. A tiny, practically meaningless effect can have p = 0.00001 with enough data.
+
+<AnalogyCallout>
+  Imagine you suspect a coin is biased. Your null hypothesis is "the coin is fair." You flip it 20
+  times and get 15 heads. The p-value (for a two-tailed test) is P(getting ≥ 15 or ≤ 5 heads | fair
+  coin) ≈ 0.04. This is saying: if the coin were fair, you'd see a result this extreme only 4% of
+  the time. It is NOT saying "there's a 4% chance the coin is fair." The coin either is or isn't
+  fair — probability doesn't apply to that fixed fact. Probability applies to the repeatable
+  experiment.
+</AnalogyCallout>
+
+## Type I and Type II errors
+
+Every hypothesis test can make one of two kinds of mistakes:
+
+|                   | H₀ is true                     | H₀ is false                            |
+| ----------------- | ------------------------------ | -------------------------------------- |
+| Fail to reject H₀ | Correct ✓                      | **Type II error** (miss a real effect) |
+| Reject H₀         | **Type I error** (false alarm) | Correct ✓                              |
+
+<GlossaryTerm
+  term="Type I error"
+  definition="Rejecting the null hypothesis when it is actually true. The significance level α is the probability of making this mistake. Also called a false positive."
+>
+  Type I error
+</GlossaryTerm>
+(false positive) rate = α, the significance threshold you choose. Setting α = 0.05 means you're
+willing to be wrong 5% of the time when H₀ is true.
+
+<GlossaryTerm
+  term="Type II error"
+  definition="Failing to reject the null hypothesis when it is actually false. Rate = β. Power = 1 − β is the probability of correctly detecting a real effect."
+>
+  Type II error
+</GlossaryTerm>
+(false negative) rate = β.
+<GlossaryTerm
+  term="Statistical power"
+  definition="The probability of correctly rejecting a false null hypothesis. Power = 1 − β. Higher power means a lower chance of missing a real effect. Power increases with sample size, effect size, and significance level α."
+>
+  Statistical power
+</GlossaryTerm>
+= 1 − β — how often you'll detect a real effect when one exists.
+
+α and β trade off: reduce α to avoid false positives, and you make it harder to detect real effects (β increases). The only way to reduce both simultaneously is more data.
+
+<WorkedExample title="Setting sample size for a model A/B test">
+
+You want to test whether Model B improves accuracy over Model A's baseline of 85%. You decide:
+
+- Minimum practically-significant improvement: Δ = 1 percentage point (0.01).
+- Significance level: α = 0.05 (two-tailed).
+- Desired power: 80% (β = 0.20).
+
+For a two-proportion z-test, the required sample size per group is approximately:
+
+n ≈ 2 × (z*{α/2} + z*β)² × p̄(1 − p̄) / Δ²
+
+where p̄ ≈ 0.855 (average of 0.85 and 0.86), z*{0.025} = 1.96, z*{0.20} = 0.84.
+
+n ≈ 2 × (1.96 + 0.84)² × 0.855 × 0.145 / 0.01²
+= 2 × 7.84 × 0.124 / 0.0001
+≈ 19,440 examples per model.
+
+Collect 19,440 fresh test examples, assign them to one model each, compute the accuracy difference, run the test once. If p < 0.05, declare significance. If not, report the null result.
+
+</WorkedExample>
+
+## Watch the p-value distribution under the null
+
+The simulation below runs 500 A/B tests where **both groups are sampled from the same distribution** (no real effect). Every "significant" result below the α threshold is a false positive.
+
+<PValueSimulator />
+
+Things to notice:
+
+- The histogram is approximately **flat (uniform)** — p-values are uniformly distributed when the null is true. This is a mathematical fact, not a coincidence.
+- The fraction of bars to the left of the α line closely matches α itself. At α = 0.05, about 25 of 500 tests show "significance" — even though there's no real effect.
+- Increase the sample size: the histogram stays flat (it's still the null). What changes is that if there _were_ a real effect, bigger n would push p-values to the left (more power).
+- Click "New simulation" several times. The false positive count fluctuates around 25, demonstrating that even the false positive rate is a statistical quantity.
+
+## Statistical power and sample size
+
+<WorkedExample title="Underpowered studies miss real effects">
+
+Suppose Model B truly is 2% more accurate than Model A. You run a test with only 200 examples.
+
+With n=100 per group, SE ≈ √(2 × 0.85 × 0.15 / 100) ≈ 0.051. The true effect (0.02) is only z = 0.02 / 0.051 ≈ 0.39 standard errors away from the null. The p-value on a single run will typically be around 0.70 — far from significant.
+
+Power for this test: ≈ 7%. You'll detect the real 2% improvement only 7% of the time. The other 93% of the time, you'll conclude "no improvement" and incorrectly discard a better model.
+
+The fix: compute n before the experiment, not after.
+
+</WorkedExample>
+
+## Multiple comparisons: the silent false-positive factory
+
+Every comparison at α = 0.05 has a 5% chance of a false positive. If you run k independent comparisons:
+
+P(at least one false positive) = 1 − (1 − α)^k
+
+At k = 10: 1 − 0.95^10 ≈ 40%. At k = 20: 64%.
+
+**Corrections:**
+
+- **Bonferroni:** use α/k per comparison. Simple, conservative.
+- **Benjamini–Hochberg:** controls the False Discovery Rate (FDR) instead of the family-wise error rate. Less conservative, better for large hyperparameter sweeps.
+
+The practical rule for ML: if you tune 50 hyperparameter configurations and pick the best one, do not compare the winner to baseline without a fresh holdout. The "winner" was selected for its luck as much as its ability.
+
+<InlineQuiz
+  question="You run an A/B test comparing a new model to baseline. The p-value is 0.03. What is the correct interpretation?"
+  options={[
+    { text: "There is a 3% probability that the null hypothesis is true." },
+    { text: "There is a 97% probability that the new model is actually better." },
+    {
+      text: "If the null were true, the probability of seeing a result at least this extreme is 3%.",
+      correct: true,
+    },
+    { text: "The new model improved performance by 3%." },
+  ]}
+  explanation="The p-value is the probability of data as extreme as observed, given the null hypothesis. It says nothing about the probability the null is true, the probability the alternative is true, or the magnitude of the effect. P(null is true | data) requires Bayes' theorem; p = 0.03 gives you P(data | null), which is a different quantity entirely."
+/>
+
+<InlineQuiz
+  question="You compare 20 new model variants against a baseline at α = 0.05. All 20 models are actually identical to baseline. How many 'significant' results do you expect?"
+  options={[
+    { text: "Zero — if there's no real effect, there should be no significant results." },
+    { text: "About 1, by chance.", correct: true },
+    { text: "About 10 — half the comparisons should show significance." },
+    { text: "It depends on sample size." },
+  ]}
+  explanation="Under the null, each comparison has a 5% probability of appearing significant (Type I error). With 20 comparisons, the expected number of false positives is 20 × 0.05 = 1. The probability of getting at least one false positive is 1 − (0.95)^20 ≈ 64%. This is why multiple comparisons require correction — Bonferroni divides α by k, so you'd use α = 0.05/20 = 0.0025 per comparison."
+/>
+
+<FillInBlankCode
+  prompt="Complete the function that performs a two-sample z-test for proportions and returns the p-value."
+  before={
+    "import scipy.stats as stats\nimport numpy as np\n\ndef proportion_ztest(n_a, successes_a, n_b, successes_b):\n    p_a = successes_a / n_a\n    p_b = successes_b / n_b\n    p_pool = (successes_a + successes_b) / (n_a + n_b)\n    se = np.sqrt(p_pool * (1 - p_pool) * (1/n_a + 1/n_b))\n"
+  }
+  after={"    return 2 * (1 - stats.norm.cdf(abs(z)))"}
+  expected={["z = (p_a - p_b) / se", "z = (p_b - p_a) / se"]}
+  hints={[
+    "The z-statistic is the difference in proportions divided by the pooled standard error.",
+    "z = (p̂_A − p̂_B) / SE, where SE uses the pooled proportion p_pool.",
+  ]}
+  solution={"z = (p_a - p_b) / se"}
+/>
