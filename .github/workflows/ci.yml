@@ -41,5 +41,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Validate lesson content
+        run: npm run check-content
+
       - name: Build
         run: npm run build
