@@ -46,7 +46,18 @@ export default async function LessonPage({ params }: { params: Promise<Params> }
 
   return (
     <LessonLayout lesson={lesson} progress={progress}>
-      <MDXRemote source={lesson.body} components={mdxComponents} />
+      <MDXRemote
+        source={lesson.body}
+        components={mdxComponents}
+        // next-mdx-remote@6 defaults to stripping `{...}` expressions for
+        // user-submitted MDX safety. Our MDX is author-trusted (lives in the
+        // repo), and several shortcodes — InlineQuiz, FillInBlankCode,
+        // HintLadder, CodeBlock — depend on expression-style props
+        // (`hints={[...]}`, children={`...`}). Disable the block; the
+        // separate blockDangerousJS=true default still blocks eval/process/
+        // Function access.
+        options={{ mdxOptions: {}, blockJS: false }}
+      />
     </LessonLayout>
   );
 }
