@@ -1,0 +1,209 @@
+---
+title: "Gradient boosting: XGBoost, LightGBM, CatBoost"
+description: "The model class that wins tabular ML in 2026. Sequential trees, each fitting the residuals of the last, plus a stack of engineering tricks that turn a textbook algorithm into a production workhorse."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: gradient-boosting
+lessonCode: "A2.5"
+estMinutes: 16
+prereqs:
+  - "A2.4 Random forests and bagging"
+  - "A0.7 Bias, variance, and overfitting"
+objectives:
+  - "Describe the boosting loop: each weak learner fits the gradient of the loss with respect to the current ensemble's predictions."
+  - "Map the most important hyperparameters (learning_rate, n_estimators, max_depth, reg_lambda) to their bias-variance effect."
+  - "Pick between XGBoost, LightGBM, and CatBoost based on dataset shape and feature types."
+pitfalls:
+  - "Setting learning_rate high and n_estimators low to save time. You'll get worse final accuracy than the reverse."
+  - "Disabling early stopping. Without it you'll either overfit or train far longer than needed."
+  - "Treating XGBoost as a black box and ignoring reg_alpha / reg_lambda. They matter more than people realise."
+  - "Comparing default-XGBoost to a tuned random forest. Defaults are not strong baselines for any boosting library."
+  - "Forgetting that boosted trees cannot extrapolate. Predictions outside the training range are flat."
+importantQuestions:
+  - question: "What is the boosting loop, in pseudocode?"
+    shortAnswer: |
+      Start with a constant prediction (the mean). At step m, compute residuals (or more generally, the gradient of the loss wrt the current prediction), fit a small tree to those residuals, add η × tree to the ensemble. Repeat for M iterations.
+    detailed: |
+      For squared error: residual = y − F_{m-1}(x), tree fits residual. For other losses, the tree fits the negative gradient ∂L/∂F evaluated at F_{m-1}, which is why it's called *gradient* boosting (Friedman, 2001).
+
+      F_m(x) = F_{m-1}(x) + η · h_m(x), where η is the learning rate (often 0.01–0.1) and h_m is a shallow tree (depth 3–8). Each tree corrects the ensemble's mistakes a little. Compared to random forests, the trees are shallow (high bias individually) and sequential (each depends on the last), the opposite of bagging.
+    pitfalls:
+      - "The residuals at later iterations are tiny. If your data has heavy noise, late boosting iterations fit noise — this is what early stopping prevents."
+  - question: "How does gradient boosting differ from random forests?"
+    shortAnswer: "Forests train trees in parallel on bootstrap samples and average them (variance reduction). Boosting trains trees sequentially, each correcting the previous ensemble's errors (bias and variance reduction)."
+    detailed: |
+      Random forests aim to reduce variance: each tree should be low-bias (deep, fully grown) and decorrelated from the others. The ensemble averages them.
+
+      Boosting aims to reduce both. Each tree is shallow (high bias) and adjusted via the learning rate (a small step). The ensemble is a sum, not an average, and corrections compound. The downside: training is sequential, so you can't parallelise across trees the way you can in a forest. The upside: state-of-the-art accuracy on tabular data in nearly every benchmark.
+    pitfalls:
+      - "You can parallelise within a tree (across features and bins), which is what XGBoost and LightGBM exploit heavily on multi-core machines."
+  - question: "What are the most important hyperparameters and how do they trade off?"
+    shortAnswer: |
+      learning_rate (η) and n_estimators (M) together control fit strength: low η + high M = best accuracy but slow. max_depth controls each tree's expressiveness. reg_lambda / reg_alpha control regularisation per leaf. subsample / colsample add stochasticity.
+    detailed: |
+      A reasonable starting recipe:
+      - learning_rate = 0.05, n_estimators = 1000, max_depth = 6, subsample = 0.8, colsample_bytree = 0.8, reg_lambda = 1.0.
+      - Use early stopping on a validation set. Let n_estimators be a ceiling; let the optimiser stop when validation loss stops improving for ~50 rounds.
+
+      The lr × n_estimators trade-off: halving lr roughly doubles n_estimators for the same final fit, but the slower path generalises better. Going below lr = 0.01 has diminishing returns. max_depth matters: shallower trees (3–4) for many-feature, low-interaction problems; deeper (6–10) for problems with rich interactions.
+    pitfalls:
+      - "Hyperparameter search: Bayesian optimisation (Optuna) beats grid search by a wide margin for boosting libraries. Default grid search is mostly a waste."
+  - question: "Why are XGBoost, LightGBM, and CatBoost not interchangeable?"
+    shortAnswer: "They differ in how they choose splits, handle categorical features, and parallelise. XGBoost is the original, LightGBM is fastest on large data with categoricals, CatBoost has the best out-of-box defaults and best handling of high-cardinality categoricals."
+    detailed: |
+      XGBoost (Chen and Guestrin, 2016) introduced regularised gradient boosting and weighted quantile sketches for split-finding. It's the most widely deployed.
+
+      LightGBM (Microsoft, 2017) uses histogram-based split-finding and 'leaf-wise' tree growth instead of level-wise. Result: 2–10× faster training, lower memory, similar accuracy. Native categorical support via the Fisher-style ordered split (see [A2.3](/tracks/ml-engineer/supervised/decision-trees)).
+
+      CatBoost (Yandex, 2018) uses ordered boosting to fix a subtle target-leakage problem in vanilla gradient boosting, and has the best handling of categorical features without preprocessing. Tends to win when you have many categoricals or want the fewest knobs to tune.
+
+      Rule of thumb: large dataset + categoricals → LightGBM. Many categoricals + you don't want to tune → CatBoost. Otherwise → XGBoost (most documentation, biggest ecosystem).
+    pitfalls:
+      - "Switching between libraries changes loss surfaces enough that hyperparameters do NOT transfer. Re-tune for each."
+  - question: "Why is early stopping essential?"
+    shortAnswer: "Boosting is greedy and will overfit if you give it enough rounds. Early stopping monitors validation loss and stops when it stops improving — saves compute and prevents overfit in one move."
+    detailed: |
+      The training loss in gradient boosting decreases monotonically — there's always another residual to fit. Validation loss decreases too, then flattens, then increases. Early stopping detects this turning point.
+
+      In practice: set n_estimators to something high (say 5000), eval_set to your validation split, early_stopping_rounds to 50 or so. The library trains until validation loss hasn't improved for 50 rounds, then returns the model at the best round.
+
+      This single trick removes the n_estimators hyperparameter from your tuning loop. It's free.
+    pitfalls:
+      - "Early stopping requires a validation set that's representative of test. If your validation is from a different distribution, early stopping will pick the wrong number of rounds."
+  - question: "Why is XGBoost overconfident, and how do you fix it?"
+    shortAnswer: "The sequential additive structure pushes the model toward extreme probabilities even when uncertainty is high. Post-hoc calibration (isotonic regression or Platt scaling) fixes it for decisions that depend on actual probabilities."
+    detailed: |
+      Cross-entropy training pushes each tree to make the prediction more correct, and the additive ensemble accumulates that pressure. On well-classified examples the boosted logit grows large, pushing the sigmoid output to 0 or 1. Reliability plots show the model's probabilities are too extreme.
+
+      Calibration approaches:
+      - sklearn's CalibratedClassifierCV with method='isotonic' (non-parametric, more flexible) or 'sigmoid' (Platt scaling, parametric).
+      - Train calibration on a held-out fold (NOT the training data — that defeats the purpose).
+      - Re-check calibration after any retrain or data drift.
+
+      When does it matter? When downstream code does cost-sensitive decisions, expected-value calculations, or thresholding for asymmetric losses (fraud, medical screening). When you only need a ranking? Don't bother.
+    pitfalls:
+      - "Don't confuse calibration with accuracy. A model can be perfectly accurate and badly calibrated, or well calibrated but mediocre."
+---
+
+<TldrCallout>
+  Gradient boosting fits an ensemble of shallow trees sequentially, each one trained to predict the
+  residual error of the previous ensemble. Modern implementations — XGBoost, LightGBM, CatBoost —
+  add regularisation, histogram-based splits, and native categorical handling, and dominate tabular
+  ML benchmarks in 2026.
+</TldrCallout>
+
+## The intuition
+
+A single shallow tree underfits. But: fit one, look at the residuals (what's left unexplained), then fit a second tree to _those_. The sum of the two trees fits the data better than either alone. Repeat hundreds of times and the ensemble can model arbitrarily complex patterns.
+
+The widget below shows the first few iterations on a 1D regression problem. Each panel shows the residuals being fit; the cumulative ensemble prediction grows closer to the truth at each step.
+
+<BoostingResiduals />
+
+Notice:
+
+- The first tree captures the rough shape.
+- Each subsequent tree fits smaller and smaller residuals.
+- Late iterations chase noise — this is where early stopping kicks in.
+
+## The math, in one slide
+
+F₀(x) = constant (the mean of y, for squared error).
+
+At step m, compute pseudo-residuals: rᵢ = −∂L/∂F(xᵢ) evaluated at F\_{m−1}(xᵢ).
+
+Fit a small tree h_m to (xᵢ, rᵢ).
+
+Update: F*m(x) = F*{m−1}(x) + η · h_m(x), where η is the **learning rate**.
+
+For squared error, the pseudo-residual is just (yᵢ − F\_{m−1}(xᵢ)), which is why people say "boosting fits the residuals." For cross-entropy, the residual is (yᵢ − p̂ᵢ) — the prediction error in probability space.
+
+This is Friedman's 2001 _Greedy Function Approximation_, the paper that named the algorithm gradient boosting.
+
+<AnalogyCallout>
+  Think of sculpting in plaster. The first pass roughs out the shape. The second pass smooths the
+  lumps the first left. The third pass smooths the lumps the second left. Each pass is small. The
+  result is the sum of all passes.
+</AnalogyCallout>
+
+## The hyperparameters that matter
+
+| Hyperparameter    | Effect                                                                        | Typical range |
+| ----------------- | ----------------------------------------------------------------------------- | ------------- |
+| learning_rate (η) | Step size per tree. Lower → more iterations needed but better generalisation. | 0.01 – 0.1    |
+| n_estimators      | Maximum number of trees. Capped by early stopping.                            | 100 – 10,000  |
+| max_depth         | Per-tree depth. Higher → more interactions, more variance.                    | 3 – 10        |
+| min_child_weight  | Minimum sum-of-Hessians per leaf. Higher → more regularisation.               | 1 – 20        |
+| reg_lambda        | L2 penalty on leaf weights. Higher → smoother trees.                          | 0 – 10        |
+| reg_alpha         | L1 penalty on leaf weights. Encourages sparse leaves.                         | 0 – 1         |
+| subsample         | Fraction of rows used per tree (stochastic GB).                               | 0.5 – 1.0     |
+| colsample_bytree  | Fraction of features per tree.                                                | 0.5 – 1.0     |
+
+A solid starting recipe: `learning_rate=0.05, n_estimators=2000, max_depth=6, subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0`, early_stopping_rounds=50 on a validation split. From there, tune with Optuna or similar (Bayesian optimisation; grid search is mostly waste).
+
+## Choosing among XGBoost, LightGBM, CatBoost
+
+| Library  | Best at                                               | Watch out for                                                        |
+| -------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| XGBoost  | General default, GPU support, huge ecosystem          | Slower than LGBM on large data                                       |
+| LightGBM | Large datasets, native categoricals, fastest training | Leaf-wise growth can overfit small data without `num_leaves` control |
+| CatBoost | Many categoricals, low tuning budget, robust defaults | Slower training than LGBM                                            |
+
+In 2026 production setups: tabular regression / classification with a few hundred features and millions of rows — LightGBM. Categorical-heavy data — CatBoost. Smaller data or first-time-using-boosting — XGBoost.
+
+<InlineQuiz
+  question="You set learning_rate=0.3 and n_estimators=100 to train XGBoost quickly. Validation loss looks fine but you notice the model is much worse than a colleague's with learning_rate=0.03 and n_estimators=1000. Why?"
+  options={[
+    { text: "Your model didn't train long enough — increase n_estimators." },
+    {
+      text: "Each large step skips over the local minimum the smaller-step ensemble settles into; the smaller-step path generalises better.",
+      correct: true,
+    },
+    { text: "Your colleague is using a more recent version of XGBoost." },
+    { text: "Higher learning rates always cause numerical instability." },
+  ]}
+  explanation="The classic learning-rate × n_estimators trade-off. Small steps mean each tree is a finer correction; the ensemble converges to a smoother solution that generalises better. Large steps (0.3) make each tree commit too aggressively to noise. The smaller-step path takes 10× as long but produces a better model. This pattern recurs in deep learning too (lower lr + more steps + good schedule)."
+/>
+
+## Why it dominates tabular
+
+Three reasons:
+
+1. **Right inductive bias for tables.** Tabular data has interactions and non-linearities that boosting captures naturally. Linear models miss them; neural networks find them but need more data and care.
+2. **Engineering.** XGBoost, LightGBM, and CatBoost are extremely well-optimised — histogram-based split-finding, GPU support, distributed training. State of the art ten years running.
+3. **Robustness.** Boosting is forgiving with messy data — missing values handled natively, mixed types fine, scale-invariant. Deep learning needs more careful preprocessing.
+
+The honest counter: deep tabular models (TabNet, FT-Transformer) keep promising to overtake boosting and keep not quite getting there. In 2026, the smart default for a new tabular project is still XGBoost or LightGBM.
+
+## What boosting cannot do
+
+- **Extrapolate.** Predictions outside the training range are clipped — trees output leaf values, and leaves correspond to training examples. For genuinely extrapolative problems (forecasting beyond seen ranges), use a different model class.
+- **Beat deep learning on unstructured data.** Text, images, audio: deep models win cleanly.
+- **Give you smooth probability outputs without calibration.** Always check reliability plots before treating XGBoost probabilities as actual probabilities.
+
+<InlineQuiz
+  question="Why does early stopping make n_estimators less important to tune?"
+  options={[
+    { text: "Early stopping doesn't affect n_estimators." },
+    {
+      text: "It treats n_estimators as a maximum; the optimal stopping round is selected automatically from validation loss.",
+      correct: true,
+    },
+    { text: "It picks a constant n_estimators across runs to make experiments reproducible." },
+    { text: "It increases n_estimators dynamically if loss is still improving." },
+  ]}
+  explanation="With early stopping, you set n_estimators=5000 (or some large number) and let the validation loss decide when to stop. The library returns the model at the best round. This effectively removes n_estimators from your hyperparameter search — focus tuning effort on learning_rate, max_depth, and regularisation instead."
+/>
+
+## Inference and deployment
+
+A trained boosted model is a list of (small) trees. Serving:
+
+- The library's `predict` is fast (sub-millisecond per row on small models).
+- For large models, compile via Treelite or ONNX for 10–50× speedup.
+- LightGBM and XGBoost both support GPU inference; rarely necessary unless throughput is extreme.
+- Model size on disk: tens of MB to GBs for very large ensembles. Compress with `mmap` loading where the platform allows.
+
+`scikit-learn` ships `GradientBoostingClassifier` / `Regressor`, but they're slower and have weaker defaults than XGBoost/LightGBM. Reach for the dedicated libraries.

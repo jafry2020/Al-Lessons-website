@@ -1,0 +1,170 @@
+---
+title: "Decision trees"
+description: "The non-linear, non-parametric baseline that builds the bridge from a single splittable feature to gradient-boosted ensembles. Important as a building block, rarely deployed alone."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: decision-trees
+lessonCode: "A2.3"
+estMinutes: 12
+prereqs:
+  - "A0.7 Bias, variance, and overfitting"
+  - "A1.4 Information theory for ML"
+objectives:
+  - "Describe how a tree picks each split using Gini impurity or entropy."
+  - "Explain why a single deep tree memorises the training set and why depth is the main regularisation knob."
+  - "Identify when trees beat linear models — and why a single tree is rarely the final model in 2026."
+pitfalls:
+  - "Trusting a single tree's predictions. Their variance is enormous; small data perturbations change the structure entirely."
+  - "Letting the tree grow to pure leaves. Without depth or min-samples constraints, training accuracy will hit 100% and generalisation collapses."
+  - "Treating Gini and entropy as substantively different. They give nearly identical trees in practice."
+  - "Assuming trees handle missing values automatically. Some libraries do; sklearn's default does not."
+  - "One-hot encoding high-cardinality categoricals before fitting a tree. The split space explodes; native categorical handling (LightGBM, CatBoost) is much better."
+importantQuestions:
+  - question: "How does a tree choose where to split?"
+    shortAnswer: "Greedily — at each node, try every feature and every threshold, pick the one that most reduces impurity (Gini or entropy for classification, variance for regression). No backtracking."
+    detailed: |
+      For a candidate split that divides n examples into left (n_L) and right (n_R) groups: impurity gain = parent_impurity − (n_L/n)·left_impurity − (n_R/n)·right_impurity. Gini impurity is 1 − Σ pₖ² where pₖ is class proportion. Entropy is −Σ pₖ log pₖ. They behave similarly; Gini is slightly cheaper to compute.
+
+      The greedy choice is locally optimal but globally suboptimal — the best two-split structure isn't always built from the single best first split. CART (the standard algorithm, Breiman 1984) accepts this trade-off because considering all tree structures is NP-hard.
+    pitfalls:
+      - "Continuous features: the split candidates are between consecutive sorted unique values. For large n this is O(n log n) per feature per node."
+  - question: "Why does a deep tree overfit?"
+    shortAnswer: "It memorises. With enough depth, leaves contain one example each, training error is zero, and the tree captures noise as 'rules'. Generalisation is terrible."
+    detailed: |
+      A tree with no depth limit and no min-samples constraint will keep splitting until each leaf is pure. On training data, accuracy is 100%. On any new data, predictions follow the noise pattern in training, not the signal. This is the textbook example of low bias, sky-high variance.
+
+      Controls (hyperparameters every tree library exposes): max_depth, min_samples_split, min_samples_leaf, max_leaf_nodes. In practice, depth 4–10 with min_samples_leaf around 1% of training size is a reasonable starting point. The honest answer for "what depth?" is "tune on a validation set."
+    pitfalls:
+      - "Cost-complexity pruning (post-fit) is rarely used today — most practitioners constrain depth up-front and ensemble for variance reduction."
+  - question: "Why are trees rarely deployed as single models?"
+    shortAnswer: "Variance. A single tree's structure changes wildly with small data perturbations, so its predictions are unstable. Ensembles (random forests, gradient boosting) average this away."
+    detailed: |
+      Trees have very high variance: take 80% of your training data, fit a tree; do it again on a different 80%, and you'll often get a completely different tree. Predictions vary too. The bias-variance argument says: average many trees and the variance shrinks while bias stays the same.
+
+      Random forests do this with bagging (next lesson). Gradient boosting goes further, fitting each tree to correct the previous ensemble's mistakes — and dominates tabular ML in 2026 in the forms of XGBoost, LightGBM, and CatBoost. The single tree is a building block, not a final answer.
+    pitfalls:
+      - "Decision trees are still used as final models when interpretability is legally required (credit decisions, healthcare). One tree you can explain beats an ensemble you can't."
+  - question: "When do trees beat linear models?"
+    shortAnswer: "When the relationship between features and target is non-linear, when feature interactions matter, or when features are on different scales and types. Linear models need careful engineering for the same behaviour."
+    detailed: |
+      Trees handle three things natively that linear models don't: non-linearity (any monotonic transformation of a feature gives the same tree), interactions (deep trees represent x₁ × x₂ patterns without engineering), and mixed feature types (categoricals + numerics + missingness, with the right library).
+
+      They lose to linear models when: the data is high-dimensional and sparse (text features, embeddings — millions of dimensions with few non-zero entries each), the relationships actually are linear, or you need extreme interpretability and fast inference. NLP and computer vision moved to deep models partly because trees don't scale to those dimensions.
+    pitfalls:
+      - "Trees can't extrapolate. Predictions outside the training feature range are clipped to the training extremes."
+  - question: "What's the difference between Gini and entropy?"
+    shortAnswer: "Tiny. Both measure impurity; they agree on most splits. Entropy slightly prefers more balanced splits; Gini is cheaper to compute. In practice the choice rarely changes anything."
+    detailed: |
+      Gini = 1 − Σ pₖ². Entropy = −Σ pₖ log pₖ. Plot them as functions of p for binary classification: both are maximum at p=0.5 (most impure) and zero at p=0 or 1 (pure). The curves differ slightly in shape but the ordering of candidate splits is almost always the same.
+
+      Trees are mostly tuned by structural hyperparameters (depth, samples-per-leaf, regularisation), not the impurity measure. Scikit-learn's default is Gini; libraries like LightGBM use specialised variants. Don't waste time on this knob.
+    pitfalls:
+      - "For regression trees: the impurity is variance (or MSE within a node). Same idea, different formula."
+  - question: "How do trees handle categorical features?"
+    shortAnswer: "Scikit-learn requires you to one-hot or label encode first — neither is ideal. LightGBM and CatBoost handle categoricals natively, considering all subset splits, which is dramatically better for high-cardinality features."
+    detailed: |
+      A categorical feature with K values has 2^(K−1) − 1 possible subset splits. Scanning them all is expensive but Fisher (1958) showed an O(K log K) trick when the target is binary or regression: sort categories by mean target, then split at thresholds in that ordering. LightGBM uses this.
+
+      One-hot encoding works but explodes the feature count and forces the tree into single-category splits, losing the subset structure. Label encoding (assigning integers) implies an ordering that may not exist — the tree treats 'red' < 'blue' < 'green' as meaningful.
+
+      In production for tabular work: pick a library with native categorical support and pass categorical features as-is.
+    pitfalls:
+      - "Target encoding (replacing a category with its target mean) leaks information; use proper out-of-fold encoding (see lesson A2.8)."
+---
+
+<TldrCallout>
+  A decision tree partitions the feature space into rectangles by greedily splitting on the feature
+  and threshold that most reduce impurity. Single trees overfit easily — depth and
+  minimum-samples-per-leaf are the main controls — and modern tabular ML uses them only as building
+  blocks of ensembles (random forests, gradient boosting).
+</TldrCallout>
+
+## The model
+
+A tree is a sequence of if-else questions: "Is feature 3 > 0.4? If yes, ask about feature 7. If no, ask about feature 1." Each leaf holds a prediction (a class for classification, a number for regression). Inference is O(depth), which is fast.
+
+Trees are **non-parametric**: the number of "parameters" (splits) is set by the data, not fixed in advance. This is why they can fit arbitrarily complex patterns — and why they overfit so easily.
+
+## How a split is chosen
+
+At every node, the algorithm tries every feature and every candidate threshold, and picks the split that most reduces impurity. For classification with Gini:
+
+Gini(node) = 1 − Σₖ pₖ²
+
+For a candidate split into left and right children:
+
+Gain = Gini(parent) − [n_L/n · Gini(left) + n_R/n · Gini(right)]
+
+Larger gain = better split. Repeat recursively in each child until a stopping criterion (max depth, min samples, no positive gain) is hit.
+
+<AnalogyCallout>
+  Imagine carving a chunk of marble into clean white and clean black pieces by making one straight
+  cut at a time. Each cut should leave the two halves more uniformly coloured than before. The order
+  and angle of cuts is greedy: pick the best cut now and never reconsider.
+</AnalogyCallout>
+
+## Build a split — interactive
+
+Below is a 2D dataset with two classes. Pick a feature (x₁ or x₂) and a threshold; the widget shows the resulting split, the Gini impurity of each side, and the impurity reduction. Try to beat the algorithm's choice.
+
+<DecisionTreeSplit />
+
+Things to notice:
+
+- The optimal first split (highest gain) is usually obvious visually — it's where one half is mostly one class.
+- A "balanced" split (50/50 samples) isn't always optimal — what matters is class purity per side.
+- For real datasets in many dimensions, you can't eyeball the best feature. The algorithm scans them all.
+
+## Why one tree is not enough
+
+Train a tree, hold 20% of data out, score it. Now retrain on a different 80%. The resulting tree often looks structurally different — different root, different splits — and predictions on borderline points flip. This is **high variance**: predictions are unstable across resamplings of training data.
+
+Two ways forward, both covered in the next lessons:
+
+- **Bagging** (random forests). Fit many trees on bootstrap samples, average their predictions. Variance shrinks as O(1/B) where B is the number of trees.
+- **Boosting** (XGBoost, LightGBM). Fit each tree to correct the previous ensemble's mistakes. Reduces both bias and variance. This is what wins tabular ML in 2026.
+
+A single tree is a building block. As a final model, deploy it only when interpretability or auditing forces it.
+
+<InlineQuiz
+  question="You train a decision tree with no max_depth constraint on 10,000 training examples. Training accuracy is 100%, validation accuracy is 67%. What's the most likely fix?"
+  options={[
+    { text: "Train on more data only — depth is fine." },
+    {
+      text: "Set max_depth or min_samples_leaf to constrain growth, or move to an ensemble.",
+      correct: true,
+    },
+    { text: "Switch from Gini to entropy as the impurity measure." },
+    { text: "Standardise the features before fitting." },
+  ]}
+  explanation="The 33-point train/val gap is severe overfit. Unconstrained tree depth is almost certainly the cause — leaves are too pure on training data. Constrain max_depth (try 6–10) and min_samples_leaf, or switch to a random forest / XGBoost which handle variance via ensembling. Impurity measure and standardisation don't help here (trees are scale-invariant)."
+/>
+
+## Trees in 2026: where they fit in the stack
+
+| Use case                                | Use a single tree?     | Better choice                  |
+| --------------------------------------- | ---------------------- | ------------------------------ |
+| Regulated credit / healthcare decisions | Yes (interpretability) | Often required by law          |
+| Tabular Kaggle / business problem       | No                     | XGBoost / LightGBM / CatBoost  |
+| Feature importance for analysis         | Sometimes              | Permutation importance on RF   |
+| Real-time inference at scale            | Yes if very shallow    | Compiled tree (Treelite, ONNX) |
+| Text or image data                      | No                     | Transformers / CNNs            |
+
+The honest summary: a single tree is taught because it makes the ensembling story make sense, not because you'll often deploy one. The next four lessons (A2.4 random forests, A2.5 gradient boosting, A2.6 SVMs, A2.7 kNN) are about what people actually ship.
+
+<InlineQuiz
+  question="Which of these is NOT a benefit of decision trees over linear models?"
+  options={[
+    { text: "Native handling of non-linear relationships." },
+    { text: "Robustness to feature scaling (no standardisation needed)." },
+    { text: "Smooth, calibrated probability outputs.", correct: true },
+    { text: "Captures interactions between features without manual engineering." },
+  ]}
+  explanation="Trees produce step-function probability outputs (the leaf's class proportion). They are NOT well-calibrated and the step structure means probabilities cluster at the empirical leaf fractions. Linear models like logistic regression give smoother, naturally calibrated probabilities. The other three are genuine tree advantages."
+/>
+
+## A note on libraries
+
+`sklearn.tree.DecisionTreeClassifier` is the canonical implementation: CART, Gini default, single-threaded, no native categorical support. Useful for learning, rarely used in production. The libraries that matter — XGBoost, LightGBM, CatBoost — are built on the tree primitive but with serious engineering on top (next two lessons).

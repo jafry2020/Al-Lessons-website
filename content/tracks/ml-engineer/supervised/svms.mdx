@@ -1,0 +1,143 @@
+---
+title: "Support vector machines"
+description: "Once the default classifier; now a niche tool. The geometric intuition — maximum margin and the kernel trick — is still worth knowing, even if you won't deploy one in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: svms
+lessonCode: "A2.6"
+estMinutes: 10
+prereqs:
+  - "A2.2 Logistic regression and the sigmoid"
+  - "A0.5 Linear algebra for machine learning"
+objectives:
+  - "State the maximum-margin objective and explain why it differs from logistic regression's loss."
+  - "Describe the kernel trick — implicit projection into high-dimensional feature spaces — and why it matters mathematically."
+  - "Identify the narrow set of problems where an SVM is still the right choice today."
+pitfalls:
+  - "Assuming SVMs scale. Training is O(n² – n³); they are impractical above a few hundred thousand examples."
+  - "Treating SVM outputs as probabilities. They're signed distances to the margin; you need Platt scaling."
+  - "Using an RBF kernel on a problem where a linear kernel works. The kernel adds variance you'll regret on small data."
+  - "Reaching for SVMs in 2026 reflexively. For tabular, XGBoost wins. For text/image, transformers win."
+importantQuestions:
+  - question: "What is the maximum-margin classifier?"
+    shortAnswer: "Among all linear classifiers that correctly separate the data, pick the one whose decision boundary is furthest from the nearest examples on either side. The 'margin' is twice that distance."
+    detailed: |
+      Geometrically: imagine fitting the widest possible street between the two classes. The middle of the street is the decision boundary. The 'support vectors' are the few examples sitting on the edge of the street — they alone determine the solution. The intuition (Vapnik, 1995) was that this max-margin choice generalises better than other separators, supported by VC-dimension bounds.
+
+      In practice the relationship between margin and generalisation is murkier than the theory suggested; the boost over logistic regression on real data is usually modest. The geometric framing is still pedagogically useful.
+    pitfalls:
+      - "Most real datasets aren't linearly separable. Soft-margin SVMs allow violations, controlled by a hyperparameter C."
+  - question: "What is the kernel trick?"
+    shortAnswer: "Replace every inner product xᵢᵀxⱼ in the SVM formulation with K(xᵢ, xⱼ), where K corresponds to an inner product in some (possibly infinite-dimensional) feature space. You get a non-linear classifier without ever computing the high-dimensional features."
+    detailed: |
+      Any algorithm that depends on data only through inner products (xᵢᵀxⱼ) can be 'kernelised'. The RBF kernel K(x, x') = exp(−γ‖x − x'‖²) implicitly maps each point into an infinite-dimensional feature space; the polynomial kernel maps to polynomial feature combinations.
+
+      This was a huge deal in the 1990s — non-linear classification with the elegance of linear math. In 2026 the comparable power comes from explicit feature learning (deep networks) or from gradient-boosted trees, both of which scale better. The kernel trick is gorgeous mathematics; it's not the right tool for most modern problems.
+    pitfalls:
+      - "Kernel methods don't scale: the Gram matrix is n × n, which is intractable above ~10⁵ examples."
+  - question: "When should you actually use an SVM today?"
+    shortAnswer: "Small datasets (a few thousand examples), high-dimensional sparse features (bag-of-words on small corpora), or when you want a strong baseline that doesn't need hyperparameter tuning beyond C and γ. Otherwise pick something else."
+    detailed: |
+      Niche but real cases: bioinformatics with hundreds of samples and thousands of features, document classification on small labeled sets, a baseline in a research paper. Linear SVMs (sklearn's LinearSVC) scale better than kernel SVMs and remain competitive for high-dimensional sparse problems where logistic regression would also work.
+
+      For anything else — large data, image, text with embeddings, tabular with many examples — SVMs are a footnote. The honest summary: learn the geometric ideas; deploy XGBoost or a transformer.
+    pitfalls:
+      - "If your features are dense and low-dimensional, even a small dataset is better handled by LR or a boosted tree."
+  - question: "How does the hinge loss differ from cross-entropy?"
+    shortAnswer: "Hinge loss is max(0, 1 − y·f(x)) where y ∈ {−1, +1}. It's zero for confident-correct predictions and linear in the violation otherwise. Cross-entropy never reaches zero; it always wants more confidence."
+    detailed: |
+      The hinge loss has a flat region: once a point is correctly classified with margin ≥ 1, it stops contributing to the loss. This is why SVM solutions are 'sparse in examples' — only the support vectors (those at or inside the margin) matter.
+
+      Cross-entropy keeps pushing every correctly classified point further from the boundary, leading to overconfident probabilities. Hinge loss doesn't, but it also doesn't give you probabilities — only signed distances. The two losses optimise for different things; cross-entropy is dominant today because it pairs cleanly with neural networks and gives calibrated probabilities.
+    pitfalls:
+      - "Squared hinge loss exists and is sometimes used. It's smoother and easier to optimise but loses some sparsity."
+---
+
+<TldrCallout>
+  An SVM finds the linear boundary with the widest possible margin between classes. The kernel trick
+  extends this to non-linear boundaries by implicit projection into high-dimensional feature spaces.
+  Beautiful theory, important historically — but in 2026 you'll rarely deploy one. Use this lesson
+  to understand the geometric ideas; reach for XGBoost or a neural network in practice.
+</TldrCallout>
+
+## The maximum-margin idea
+
+Among all hyperplanes that separate two linearly separable classes, pick the one whose distance to the nearest point on either side is largest. This is the **margin**.
+
+The optimisation: minimise ‖w‖² subject to yᵢ(xᵢᵀw + b) ≥ 1 for all i. The reciprocal of ‖w‖ is the margin, so minimising ‖w‖² maximises the margin. For non-separable data, soft-margin SVMs introduce slack variables and a hyperparameter C that trades off margin width against misclassification:
+
+minimise (1/2)‖w‖² + C Σᵢ max(0, 1 − yᵢ(xᵢᵀw + b))
+
+The second term is the **hinge loss**. C controls regularisation: high C = small margin, fit training data hard; low C = wide margin, tolerate misclassifications.
+
+<AnalogyCallout>
+  Picture the data as red and blue tokens on a table. Find the widest plank of wood you can wedge
+  between them without tipping any tokens. The plank's centre line is the boundary; the plank's
+  width is the margin. Only the tokens touching the plank matter — those are the support vectors.
+</AnalogyCallout>
+
+## The kernel trick — in one paragraph
+
+The whole SVM machinery only ever uses inner products xᵢᵀxⱼ between training points. Replace every such inner product with a function K(xᵢ, xⱼ) and you get a classifier in a new feature space, without ever computing the features. The **RBF kernel** K(x, x') = exp(−γ‖x − x'‖²) corresponds to an infinite-dimensional feature space. The **polynomial kernel** corresponds to all degree-d feature combinations. The **linear kernel** is just the original inner product (no trick — and it's what you'd usually want).
+
+This was revolutionary in the 1990s. Today: explicit non-linear features come from neural networks; tree ensembles capture interactions automatically; both scale better than kernel SVMs.
+
+## Why SVMs lost their dominance
+
+Three reasons:
+
+1. **They don't scale.** Training is O(n²) to O(n³) for kernel SVMs. Above ~10⁵ examples it's impractical.
+2. **No native probability output.** SVMs output signed distances; you have to fit a logistic on top (Platt scaling) for calibrated probabilities. Logistic regression gives you this directly.
+3. **Better alternatives emerged.** Boosted trees beat SVMs on tabular data. Deep learning beats SVMs on text and images. Both scale where SVMs don't.
+
+In 2026, SVMs survive in niches: small bioinformatics datasets, high-dimensional sparse text classification on tight budgets, baseline comparisons in academic papers. That's about it.
+
+| Setting                          | Use SVM?                  | Better choice             |
+| -------------------------------- | ------------------------- | ------------------------- |
+| n < 5k, sparse high-dim features | Reasonable                | Linear SVM, or LR         |
+| Tabular, n > 10k                 | No                        | XGBoost / LightGBM        |
+| Text, n > 10k                    | No                        | Transformer + linear head |
+| Image                            | No                        | CNN or ViT                |
+| Need calibrated probabilities    | No (unless Platt scaling) | Logistic regression       |
+
+<InlineQuiz
+  question="You're building a sentiment classifier with 800 labeled tweets and ~10,000 unique word features (bag-of-words). What's a reasonable first model?"
+  options={[
+    { text: "Fine-tune a 7B parameter LLM." },
+    {
+      text: "Linear SVM or logistic regression — both work well for small, sparse, high-dim text data.",
+      correct: true,
+    },
+    { text: "XGBoost on the raw bag-of-words." },
+    { text: "Random forest with 5000 trees." },
+  ]}
+  explanation="This is one of the surviving niches for SVMs (or LR — they perform similarly here). The data is small, high-dimensional, and sparse — the regime where kernel SVMs with linear kernels are competitive and train quickly. XGBoost over-engineers for this data size and is poor at sparse text; an LLM is wildly overkill. SVM and LR are honest first answers."
+/>
+
+## What to remember
+
+The geometric framing — maximum margin, support vectors, the kernel trick — is one of the most elegant ideas in classical ML. It's why SVMs are in every textbook. But:
+
+- The theoretical generalisation bounds underperformed expectations in practice.
+- The scaling limits are real.
+- Newer methods (gradient boosting, deep learning) cover SVMs' use cases with better practical properties.
+
+Learn the geometry; recognise the kernel trick when you see it (it appears in Gaussian processes, kernel PCA, and in some attention-related theory); reach for SVMs only in their small remaining niche.
+
+Vapnik's _Statistical Learning Theory_ (1995) and the original SVM papers are still worth reading for the elegance of the formulation. As a deployment choice in 2026, they rarely beat the alternatives.
+
+<InlineQuiz
+  question="Why does the SVM solution depend only on the support vectors, not on all training examples?"
+  options={[
+    { text: "The optimiser ignores non-support vectors to save memory." },
+    {
+      text: "Non-support vectors have hinge loss exactly zero, so they contribute nothing to the gradient and the optimal w is determined entirely by the points at or inside the margin.",
+      correct: true,
+    },
+    { text: "The kernel only considers nearby points." },
+    { text: "Support vectors are sampled randomly each iteration." },
+  ]}
+  explanation="Hinge loss = max(0, 1 − y·f(x)). For correctly classified points with margin ≥ 1, the loss is exactly zero and the gradient is zero. Only points at the margin or violating it contribute. This 'sparseness in examples' is unique to SVMs — logistic regression has gradients from every example, however small."
+/>

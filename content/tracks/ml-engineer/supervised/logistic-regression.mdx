@@ -1,0 +1,187 @@
+---
+title: "Logistic regression and the sigmoid"
+description: "How to turn a linear model into a calibrated probability — the dominant baseline for binary classification, still the right default in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: logistic-regression
+lessonCode: "A2.2"
+estMinutes: 14
+prereqs:
+  - "A2.1 Linear regression from scratch"
+  - "A0.8 Evaluation metrics"
+objectives:
+  - "Explain why squared error is the wrong loss for classification and how cross-entropy fixes it."
+  - "Read the sigmoid function as a probability mapping and identify its decision boundary."
+  - "Diagnose under- and over-confident predictions using calibration intuition."
+pitfalls:
+  - "Calling the threshold 0.5 'the' decision boundary. The right threshold depends on class balance and the cost of false positives vs. false negatives."
+  - "Using accuracy on imbalanced data. A model predicting 'majority class always' can score 99% accurate and be useless."
+  - "Forgetting that 'logistic regression' is a classification model, not a regression model. The 'regression' is on the log-odds."
+  - "Treating the output of a non-logistic classifier (random forest, raw SVM) as a probability. They aren't calibrated."
+  - "Confusing the sigmoid for softmax. Sigmoid is the binary case (one output); softmax handles K-way."
+importantQuestions:
+  - question: "Why is squared error wrong for classification?"
+    shortAnswer: "Squared error on labels {0, 1} gives weak gradients near correct predictions and almost no gradient when very wrong. Cross-entropy gives strong gradients to wrong predictions and shrinks them as the model becomes correct — exactly the desired feedback."
+    detailed: |
+      With y ∈ {0, 1} and a probabilistic prediction p ∈ (0,1), squared error (y − p)² is bounded above by 1 — even a wildly confident wrong prediction barely matters. Cross-entropy −[y log p + (1−y) log(1−p)] is unbounded: a confident wrong prediction (p = 0.001 when y = 1) has loss log(1000) ≈ 6.9, and the gradient pushes hard.
+
+      There's also a probabilistic reason. Cross-entropy is the negative log-likelihood of a Bernoulli model. Minimising it is maximum-likelihood estimation, the principled choice. Squared error corresponds to Gaussian noise, which doesn't make sense for binary labels.
+    pitfalls:
+      - "PyTorch's BCEWithLogitsLoss combines sigmoid + cross-entropy in one numerically stable op. Use it; don't compose them manually."
+  - question: "What does the sigmoid actually do?"
+    shortAnswer: "Squashes any real number into (0, 1), giving a probability. σ(z) = 1/(1 + e^(−z)). z = 0 → 0.5, z → ∞ → 1, z → −∞ → 0."
+    detailed: |
+      The sigmoid is the inverse of the logit (log-odds). If p = P(y=1), the logit is log(p/(1−p)). Logistic regression models the logit as linear in features: log(p/(1−p)) = xᵀw. Solve for p and you get p = σ(xᵀw). The decision boundary is xᵀw = 0, the same hyperplane a linear model produces — but now the model expresses uncertainty smoothly through the sigmoid.
+
+      The sigmoid's slope is steepest at z=0 and tapers off. Near the boundary, small changes in z change p meaningfully. Far from the boundary, the model says "I'm sure" and is hard to budge. This shape matters for gradient flow during training.
+    pitfalls:
+      - "Sigmoid saturates: for |z| > 6, σ'(z) ≈ 0, so gradients vanish. This is one reason deep networks moved to ReLU for hidden layers, keeping sigmoid only for output."
+  - question: "How do you set the decision threshold?"
+    shortAnswer: "Match the threshold to the cost ratio of errors. Default 0.5 is correct only when false positives and false negatives are equally bad and classes are balanced. In fraud detection or medical screening, the optimal threshold is rarely 0.5."
+    detailed: |
+      Logistic regression outputs a probability. Turning it into a decision requires a threshold τ — predict positive iff p ≥ τ. The Bayes-optimal threshold is τ* = c_FP / (c_FP + c_FN) where c is the cost of each error type. If false negatives are 10× as bad as false positives (missing fraud vs. flagging legit), τ* ≈ 0.09.
+
+      Practical workflow: train the model, then sweep τ on a validation set, plotting the precision-recall curve and picking τ for your operating point. See [A0.8 Evaluation metrics](/tracks/ml-engineer/foundations/evaluation-metrics) for the cost-sensitive view. The model and the threshold are separate decisions.
+    pitfalls:
+      - "Tuning the threshold on the test set leaks evaluation. Use a validation set; report on held-out test."
+  - question: "Is logistic regression's output calibrated?"
+    shortAnswer: "Reasonably well on its own training distribution, much better than tree models or vanilla neural networks. Still worth checking with a calibration plot when probabilities matter (pricing, risk scoring)."
+    detailed: |
+      Calibrated means: among examples where the model says p=0.7, roughly 70% are actually positive. Logistic regression is trained on cross-entropy under a Bernoulli model, so it's calibrated by construction on the training distribution. Random forests and deep networks are usually overconfident — they get the ranking right but their probabilities are wrong. Tools: `sklearn.calibration.CalibratedClassifierCV`, isotonic regression, Platt scaling (which is literally fitting a logistic regression on top of a non-probabilistic model).
+
+      In production: when downstream code multiplies the probability by a dollar value (expected revenue, expected loss), calibration matters more than accuracy. When you only need a ranking (top-K retrieval), it doesn't.
+    pitfalls:
+      - "Calibration on the training set doesn't guarantee calibration on a shifted distribution. Always re-check."
+  - question: "When does logistic regression beat XGBoost?"
+    shortAnswer: "When you have few features, lots of linearly separable structure, or you need fast inference and interpretable coefficients. Also when your data is small enough that boosted trees would overfit."
+    detailed: |
+      Real cases where LR wins or ties: ad click-through prediction with hashed feature crosses (used to be Google's bread and butter — see Vowpal Wabbit), credit scoring (regulators want coefficients), search ranking baselines, A/B test analysis. LR trains in milliseconds, inference is one dot product, model is one vector — all big practical wins for online systems.
+
+      XGBoost dominates when interactions matter (non-linear feature combinations), when there are many features with non-monotonic effects, or when you don't care about interpretability. In 2026 most tabular pipelines start with LR as a baseline and only promote to boosted trees if the gain is worth the complexity.
+    pitfalls:
+      - "LR can model interactions if you engineer the features (x₁·x₂, log(x), one-hot bins). Trees do it automatically."
+  - question: "How is multi-class classification different?"
+    shortAnswer: "Replace the sigmoid with softmax and the binary cross-entropy with categorical cross-entropy. The model outputs a vector of K logits, softmax normalises them to a probability distribution."
+    detailed: |
+      For K classes, learn a weight matrix W ∈ ℝᵈˣᴷ. The logits are z = Wᵀx ∈ ℝᴷ, and softmax(z)ₖ = e^(zₖ) / Σⱼ e^(zⱼ). The loss is −log p_y where y is the true class. This is exactly what the final layer of every transformer classifier and every neural-net image classifier is doing.
+
+      Multinomial logistic regression is identifiable only up to an additive constant per example (adding c to every zₖ leaves softmax unchanged). Some implementations fix this by setting one class as reference.
+    pitfalls:
+      - "For very large K (vocabulary in language modelling), the softmax denominator is expensive. Hierarchical softmax or sampled softmax exist for this case."
+---
+
+<TldrCallout>
+  Logistic regression turns a linear model xᵀw into a probability via the sigmoid σ(z) = 1/(1+e⁻ᶻ),
+  and trains by minimising cross-entropy — the negative log-likelihood of a Bernoulli model. The
+  decision boundary is still a hyperplane; the sigmoid wraps it in calibrated uncertainty.
+</TldrCallout>
+
+## The setup
+
+You want to predict a binary label y ∈ {0, 1}. The simplest idea — run linear regression and threshold at 0.5 — fails for two reasons:
+
+1. The output is unbounded; predictions can be 1.4 or −0.3, which aren't probabilities.
+2. Squared error gives terrible gradients on classification (see Q1 above).
+
+Logistic regression fixes both with one change: pass the linear output through a sigmoid.
+
+## The sigmoid: linear in, probability out
+
+p̂ = σ(xᵀw) = 1 / (1 + exp(−xᵀw))
+
+σ maps the real line to (0, 1). It's monotone, smooth, and its inverse is the **logit** log(p/(1−p)). The interpretation: logistic regression models the log-odds as a linear function of features.
+
+<AnalogyCallout>
+  Imagine a switch with an infinitely smooth lever. Far to the left, fully off (p = 0). Far to the
+  right, fully on (p = 1). Around the centre, a gentle slope: small changes in input nudge the
+  probability. The sigmoid is that lever.
+</AnalogyCallout>
+
+## The widget
+
+The left panel shows σ(z) and where your current input z = xᵀw lands. The right panel shows a 2D dataset with the decision boundary {x : xᵀw = 0} — a line in 2D, a hyperplane in d-D. Move the weights w and the bias b; the boundary rotates and shifts.
+
+<LogisticBoundary />
+
+Things to try:
+
+- Set b = 0 and rotate w. The boundary pivots through the origin.
+- Increase ‖w‖. The sigmoid gets steeper — the model becomes more confident near the boundary, sharper transition from 0 to 1.
+- Move the boundary far from the data. All points get p close to 0 or 1 — high confidence but mostly wrong.
+
+## The loss: binary cross-entropy
+
+L(w) = −(1/n) Σᵢ [yᵢ log p̂ᵢ + (1 − yᵢ) log(1 − p̂ᵢ)]
+
+Each term is the negative log-probability the model assigns to the correct label. Confident-correct predictions cost little; confident-wrong predictions cost a lot (potentially unbounded). Compared to squared error, cross-entropy gives the optimiser a much sharper signal.
+
+The loss is convex in w. Unlike linear regression there's no closed-form solution — you need iterative optimisation. In practice: `scikit-learn.linear_model.LogisticRegression` uses L-BFGS by default; large-scale systems use SGD or its variants.
+
+<InlineQuiz
+  question="Your binary classifier is trained on a dataset where 99% of examples are class 0. Accuracy is 99.1%. What's the most likely explanation?"
+  options={[
+    { text: "The model is excellent." },
+    {
+      text: "The model is predicting 'class 0' for nearly everything and barely beating the trivial baseline.",
+      correct: true,
+    },
+    { text: "The model is overfit to the training set." },
+    { text: "There's a bug in the evaluation code." },
+  ]}
+  explanation="On a 99/1 imbalanced set, predicting 'majority always' yields 99% accuracy. The 0.1% improvement is essentially nothing. Always check precision and recall on the minority class, not raw accuracy. This is a textbook reason to use PR-AUC or F1 on imbalanced data."
+/>
+
+## Why the boundary is still a line
+
+The probability surface is curved (it's a sigmoid), but the set of points where p = 0.5 is exactly {x : xᵀw + b = 0} — a hyperplane. Logistic regression is a **linear classifier** in this sense, even though it produces non-linear probability outputs.
+
+Implication: if the true boundary between classes is curved, logistic regression won't find it without engineered features (polynomial expansions, interaction terms) or a non-linear model (kernel methods, trees, neural nets).
+
+## Calibration: a property that matters when probabilities matter
+
+| Metric           | What it asks                                                    | When you care                     |
+| ---------------- | --------------------------------------------------------------- | --------------------------------- |
+| Accuracy         | Did the model get the label right?                              | Balanced data; tied costs         |
+| Precision/Recall | What fraction of predicted-positive is correct, and vice versa? | Imbalanced data; asymmetric costs |
+| AUROC            | Does the model rank positives above negatives?                  | Threshold-agnostic ranking        |
+| Calibration      | Does p=0.7 actually mean 70% positive rate?                     | Downstream cost decisions         |
+
+Logistic regression is naturally well-calibrated because the loss is the log-likelihood of a probabilistic model. Boosted trees and neural nets typically need post-hoc calibration (Platt scaling, isotonic regression) before their "probabilities" can be trusted.
+
+## Multi-class: softmax in one paragraph
+
+For K classes, replace sigmoid with **softmax**: pₖ = e^(zₖ) / Σⱼ e^(zⱼ), where z = Wᵀx ∈ ℝᴷ. The loss is −log p_y (negative log-prob of the true class). This is the output layer of essentially every modern classifier — image models, transformers, the lot. Sigmoid is the K=2 special case (one logit, threshold at 0).
+
+<InlineQuiz
+  question="A logistic-regression fraud detector outputs probabilities. False negatives (missed fraud) cost $1000 each; false positives (legitimate flagged) cost $10 each. What threshold should you use?"
+  options={[
+    { text: "0.5 — the default." },
+    {
+      text: "Around 0.01 — flag aggressively because missed fraud is 100× as costly.",
+      correct: true,
+    },
+    { text: "Around 0.99 — be conservative to avoid annoying customers." },
+    { text: "Threshold doesn't matter; just retrain the model." },
+  ]}
+  explanation="Bayes-optimal threshold is c_FP / (c_FP + c_FN) = 10 / (10 + 1000) ≈ 0.0099. The model output is fine; the threshold is a business decision separate from training. This is why 'should I use 0.5?' is the wrong question."
+/>
+
+<FillInBlankCode
+  prompt="Implement the sigmoid and binary cross-entropy from scratch. Beware: a naive cross-entropy is numerically unstable for p near 0 or 1."
+  before={
+    "import numpy as np\n\ndef sigmoid(z):\n    # Avoid overflow for very negative z.\n    return 1.0 / (1.0 + np.exp(-z))\n\ndef bce_loss(p, y, eps=1e-12):\n    # Clip p to avoid log(0). Average over the batch.\n"
+  }
+  after={"    return loss"}
+  expected={[
+    "p = np.clip(p, eps, 1 - eps)\n    loss = -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))",
+  ]}
+  hints={[
+    "Use np.clip(p, eps, 1 - eps) to keep p strictly in (0, 1).",
+    "BCE = -mean(y·log(p) + (1-y)·log(1-p)).",
+  ]}
+  solution={
+    "p = np.clip(p, eps, 1 - eps)\n    loss = -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))"
+  }
+/>

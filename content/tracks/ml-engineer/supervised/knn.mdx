@@ -1,0 +1,206 @@
+---
+title: "k-Nearest neighbours and vector search"
+description: "The simplest non-parametric classifier — and the conceptual ancestor of the vector search systems behind every RAG pipeline in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: knn
+lessonCode: "A2.7"
+estMinutes: 12
+prereqs:
+  - "A2.2 Logistic regression and the sigmoid"
+  - "A0.5 Linear algebra for machine learning"
+objectives:
+  - "Predict from labeled neighbours by majority vote (classification) or average (regression)."
+  - "Explain how the choice of k trades off bias against variance and how distance metric shapes the boundary."
+  - "Connect kNN to modern vector search: embeddings + approximate nearest neighbours (Faiss, pgvector) powering RAG."
+pitfalls:
+  - "Forgetting to scale features. kNN uses Euclidean distance; unscaled features dominate the metric."
+  - "Using kNN on high-dimensional data without an embedding. Distances become meaningless above ~50 dimensions in raw feature space."
+  - "Choosing k = 1. Pure memorisation, zero training error, terrible variance."
+  - "Treating exact kNN as scalable. For millions of vectors you need approximate methods (HNSW, IVF)."
+  - "Confusing kNN with k-means. kNN is supervised; k-means is unsupervised clustering."
+importantQuestions:
+  - question: "How does kNN make a prediction?"
+    shortAnswer: "For a new point, find the k nearest training examples (by some distance metric). For classification, take the majority vote of their labels. For regression, average their target values."
+    detailed: |
+      No training in the traditional sense — kNN stores the entire training set and defers all work to inference time. This makes it a 'lazy learner.' The hyperparameters: k (number of neighbours), the distance metric (Euclidean is default; cosine is standard for embeddings), and optionally a weighting scheme that weights closer neighbours more.
+
+      kNN is the simplest example of a non-parametric model: the number of effective parameters grows with n, the dataset size. There are no weights to fit; the data is the model.
+    pitfalls:
+      - "Memory cost: you must store every training example. For millions of examples and high-dimensional vectors, this is heavy."
+  - question: "How does k trade off bias and variance?"
+    shortAnswer: "Small k = low bias, high variance (single noisy neighbour can flip a prediction). Large k = high bias, low variance (predictions smooth toward the global majority). Tune k on validation."
+    detailed: |
+      k=1 gives zero training error and a decision boundary that exactly traces the training set — pure memorisation. k=n (the whole dataset) predicts the global majority class everywhere — pure underfit. The sweet spot is in between, typically k = 5 to 30 depending on dataset size.
+
+      A useful default: try odd k values to avoid ties, choose by validation accuracy. For small datasets, leave-one-out cross-validation is feasible since kNN training is free.
+    pitfalls:
+      - "Even k can produce ties in binary classification. Use odd k or distance-weighted voting."
+  - question: "Why is distance metric so important?"
+    shortAnswer: "kNN is entirely defined by 'nearness.' Different metrics produce different neighbours, hence different predictions. Euclidean assumes isotropic features; cosine assumes direction matters more than magnitude (standard for embeddings)."
+    detailed: |
+      Euclidean: standard for low-dim numerical data. Sensitive to feature scale — standardise first.
+
+      Cosine: measures angle between vectors. Standard for text embeddings, image embeddings, anything where 'direction in feature space' matches semantic similarity better than absolute coordinates. Insensitive to vector magnitude.
+
+      Manhattan (L1): less sensitive to outliers than Euclidean. Useful when features have very different scales after standardisation.
+
+      Mahalanobis: accounts for feature correlations. Effectively the distance after a whitening transform.
+
+      For modern embedding-based search, cosine similarity is almost universal — most embedding models are trained with a cosine-similarity objective.
+    pitfalls:
+      - "Cosine similarity is 1 − cosine distance. Don't confuse them in library APIs."
+  - question: "Why does kNN break down in high dimensions?"
+    shortAnswer: "The 'curse of dimensionality.' In high-dim space, all points become roughly equidistant — the nearest neighbour isn't meaningfully closer than the farthest. Distance-based methods lose their signal."
+    detailed: |
+      Sample n random points uniformly in d dimensions. The ratio of farthest-to-nearest distance from any query point tends to 1 as d grows. Distance stops differentiating neighbours from non-neighbours.
+
+      The fix is not to use kNN on raw high-dimensional features, but to first project into a lower-dimensional embedding where 'distance' has semantic meaning. For text: sentence-transformers, OpenAI embeddings, etc. For images: CLIP, DINO. The embedding compresses what matters; kNN over the embedding works beautifully even though kNN over raw pixels or raw token counts would not.
+
+      This is the move that underlies modern retrieval systems.
+    pitfalls:
+      - "Even good embeddings can have noise dimensions. Dimensionality reduction (PCA, UMAP) sometimes helps further."
+  - question: "How does this connect to RAG and vector databases?"
+    shortAnswer: "Modern RAG retrieves relevant documents via k-nearest-neighbour search over embeddings. The 'k' in 'top-k retrieval' is literally the k of kNN."
+    detailed: |
+      In retrieval-augmented generation: chunk a corpus, embed each chunk into a fixed-dimensional vector (with sentence-transformers, OpenAI ada, etc.), store them in a vector database (Faiss, pgvector, Pinecone, Weaviate, Qdrant). At query time, embed the query, retrieve the top-k most similar chunks by cosine distance, feed them as context to an LLM.
+
+      That entire retrieval step is kNN. The intelligence is in the embeddings and the chunking, not the search algorithm. The search is approximate kNN for speed (HNSW, IVF-PQ), but conceptually it's the same model you learned here.
+    pitfalls:
+      - "Approximate kNN is a different beast at scale — sub-millisecond recall on a billion vectors requires careful index choice."
+  - question: "When is kNN actually deployed as a model in 2026?"
+    shortAnswer: "Two main places: retrieval (vector search at the heart of RAG, recommender systems, image search) and small low-stakes tabular problems where you want a quick non-linear baseline."
+    detailed: |
+      As a classifier on tabular data, kNN is a baseline only — boosted trees outperform it. But as a retrieval primitive over learned embeddings, it powers a huge fraction of production AI:
+      - RAG (chunks indexed in pgvector, served via Postgres)
+      - Recommender systems (user/item embeddings, retrieve nearest items)
+      - Image search (CLIP embeddings + Faiss)
+      - Deduplication and clustering (find near-duplicates by embedding distance)
+      - Few-shot classification on embeddings (retrieve nearest labeled example, use its label)
+
+      The shift in 2026: kNN matters most when the embeddings are good. The model isn't dead; its centre of gravity moved from raw features to learned representations.
+    pitfalls:
+      - "Approximate methods (HNSW, IVF, ScaNN) trade recall for speed. Always measure recall@k on your data before relying on the index."
+---
+
+<TldrCallout>
+  k-Nearest neighbours predicts a new example by looking at its k closest training examples. It has
+  no training phase — the data is the model. Conceptually obsolete as a tabular classifier;
+  conceptually central in 2026 as the retrieval primitive behind every RAG pipeline, recommender
+  system, and embedding-based search.
+</TldrCallout>
+
+## The algorithm
+
+1. Store all training examples (xᵢ, yᵢ).
+2. For a query x, compute distance d(x, xᵢ) to each training point.
+3. Find the k smallest distances; collect their labels.
+4. Predict the majority label (classification) or mean target (regression).
+
+There is no fitting. The "training" cost is O(1); the inference cost is O(n·d) per query for exact search. This trade-off matters at scale.
+
+## Watch the decision boundary change with k
+
+The widget plots a 2D dataset with two classes. The k slider controls the number of neighbours; the background is shaded by majority class in the kNN prediction.
+
+<KnnRegions />
+
+Notice:
+
+- k = 1: the boundary is jagged. Every training point carves out its own region. Memorisation.
+- k = 5: smoother boundary. A single outlier no longer dictates a region.
+- k = 30: most of the plane is the global majority class. Underfit.
+
+This is the bias-variance trade-off in pure visual form.
+
+## Distance is everything
+
+kNN is defined by the distance metric. Different metrics → different neighbours → different predictions. Three you should know:
+
+| Metric    | Formula                     | When to use                           |
+| --------- | --------------------------- | ------------------------------------- |
+| Euclidean | √Σ(xᵢ − x'ᵢ)²               | Low-dim numerical data, after scaling |
+| Cosine    | 1 − (x · x') / (‖x‖ · ‖x'‖) | Embeddings, text, image features      |
+| Manhattan | Σ                           | xᵢ − x'ᵢ                              |
+
+For embedding-based retrieval, cosine is the default — embedding models are typically trained to make semantically similar things have small cosine distance.
+
+<AnalogyCallout>
+  Euclidean asks "how far apart are these two points on the map?" Cosine asks "do they face the same
+  direction from the origin?" For semantic embeddings, direction is the right question; magnitude
+  often encodes confidence or document length, which you don't want to factor into similarity.
+</AnalogyCallout>
+
+## The curse of dimensionality
+
+In high-dimensional spaces, distance stops differentiating points. Sample n random vectors in 1000 dimensions: the ratio of farthest-to-nearest distance from any query is close to 1. Every neighbour is "about the same distance" away, which means the nearest neighbour isn't meaningfully closer than a random one.
+
+The way modern systems get past this: don't run kNN on raw high-dim features. Embed first. A 768-dimensional sentence embedding from a pretrained model has structure — semantically similar sentences are genuinely closer — that raw 50,000-dimensional bag-of-words does not. The embedding compresses what matters; kNN over the embedding works.
+
+## kNN is the algorithm behind RAG
+
+A modern RAG (retrieval-augmented generation) pipeline:
+
+1. **Index time.** Chunk a corpus. Embed each chunk with a model like `text-embedding-3-large` or a sentence-transformer. Store the vectors in a database — Faiss, pgvector (Postgres), Pinecone, Weaviate, Qdrant, Chroma, ScaNN.
+2. **Query time.** Embed the user query. Retrieve the top-k chunks by cosine similarity. Concatenate them into the LLM prompt.
+
+Step 2 is kNN. The "k" in "top-k retrieval" is literally the k of this lesson. The interesting engineering is in the embeddings and the index (approximate nearest neighbours via HNSW or IVF-PQ for sub-millisecond queries on billions of vectors), but the underlying model is what you just learned.
+
+The same algorithm powers:
+
+- **Recommender systems.** User and item embeddings; retrieve nearest items per user.
+- **Image search.** CLIP embeddings; retrieve images closest to a query image or text.
+- **Deduplication.** Near-duplicate detection by embedding distance.
+- **Few-shot classification.** Embed the query; retrieve the nearest labelled examples; predict their label.
+
+<InlineQuiz
+  question="In a RAG pipeline using OpenAI embeddings, why is cosine similarity preferred over Euclidean distance for retrieval?"
+  options={[
+    { text: "Cosine similarity is faster to compute than Euclidean distance." },
+    {
+      text: "Embedding models are typically trained with a contrastive objective that aligns directions, so cosine is the geometry that semantic similarity respects.",
+      correct: true,
+    },
+    { text: "Euclidean distance returns negative values for similar vectors." },
+    { text: "Cosine is the default in all vector databases and cannot be changed." },
+  ]}
+  explanation="Models like OpenAI's embeddings, sentence-transformers, and CLIP are trained with contrastive losses that maximise cosine similarity between semantically related pairs. The embedding magnitude often encodes length or confidence, which isn't relevant for similarity. Most ANN libraries support either metric; the choice should match how the embedding was trained. Practical note: on normalised vectors, cosine and Euclidean differ only by a monotone transform — they rank neighbours identically."
+/>
+
+## Approximate kNN: how scale is achieved
+
+Exact kNN on a billion vectors is impractical. Production systems use **approximate nearest-neighbour (ANN)** search:
+
+- **HNSW** (Hierarchical Navigable Small World, Malkov & Yashunin 2016) — graph-based, the default in Faiss, pgvector, Weaviate, Qdrant. High recall, low latency.
+- **IVF** (Inverted File) — cluster vectors into Voronoi cells, search only the relevant cells. Often combined with **product quantisation (PQ)** to compress vectors. Used in Faiss for very large indexes.
+- **ScaNN** (Google) — anisotropic quantisation, optimised for inner product search.
+
+These return the _approximate_ k nearest neighbours — close enough for retrieval, much faster than exact search. Measure recall@k on your data before deploying.
+
+<InlineQuiz
+  question="You train a kNN classifier on a tabular dataset with 50 features. k=1 gives 100% training accuracy and 60% validation accuracy. What's the most useful next move?"
+  options={[
+    { text: "Switch to k=50 — more neighbours always helps." },
+    {
+      text: "Try a range of larger k values on validation, and consider scaling features and switching to a tree-based model.",
+      correct: true,
+    },
+    { text: "Add more training examples — that will fix overfitting." },
+    { text: "Train an LLM on the dataset." },
+  ]}
+  explanation="k=1 is memorisation; a 40-point train/val gap is severe overfit. Sweep k on validation (5, 10, 30…), and verify features are scaled (kNN is very sensitive to scale). For tabular data with 50 features, XGBoost will probably crush both. More data helps but rarely as much as switching model class or fixing scaling."
+/>
+
+## The bottom line
+
+| Use case                                  | Model of choice                     |
+| ----------------------------------------- | ----------------------------------- |
+| Tabular classification baseline           | Logistic regression / XGBoost       |
+| Tabular regression baseline               | Linear regression / XGBoost         |
+| **Retrieve relevant chunks for RAG**      | **Approximate kNN over embeddings** |
+| **Find similar items for recommendation** | **Approximate kNN over embeddings** |
+| Few-shot classification on embeddings     | kNN (with k=1 to 5)                 |
+
+kNN as a tabular classifier: nice idea for intuition, rarely deployed. kNN as a vector-search primitive: everywhere.

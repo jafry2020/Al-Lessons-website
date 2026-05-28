@@ -1,0 +1,263 @@
+---
+title: "Feature engineering and selection"
+description: "Where most of the wins in production tabular ML actually come from. Target encoding, time features, leakage prevention, and the difference between features your model needs and features your business has."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: feature-engineering
+lessonCode: "A2.8"
+estMinutes: 15
+prereqs:
+  - "A2.5 Gradient boosting: XGBoost, LightGBM, CatBoost"
+  - "A0.3 Datasets, features, labels"
+objectives:
+  - "Apply the standard feature transformations — scaling, target encoding, datetime decomposition, interactions — and know when each helps."
+  - "Detect and prevent the three common forms of data leakage: target, temporal, and group-level."
+  - "Choose between filter, wrapper, and embedded feature selection methods based on dataset size and model class."
+pitfalls:
+  - "Computing scaler statistics on the full dataset before splitting. Validation/test stats leak into training."
+  - "Target encoding without out-of-fold computation. Train accuracy looks fantastic; test collapses."
+  - "Adding 'data from the future' — features that would not be available at prediction time. The single most common failure mode."
+  - "One-hot encoding a 10,000-category column for XGBoost. Use native categorical handling instead."
+  - "Using SHAP / feature_importance as causal evidence. They're attribution to the model's behaviour, not the world's."
+importantQuestions:
+  - question: "Why is feature engineering still the biggest lever for tabular ML in 2026?"
+    shortAnswer: "Because boosted trees do learn interactions, but they can only combine features that exist. Adding a domain-informed feature — a ratio, a lag, an aggregation — often moves the needle more than tuning. Model architecture rarely is the bottleneck on tabular data."
+    detailed: |
+      A common pattern in production: XGBoost is already chosen, hyperparameters are tuned, more data isn't coming. The remaining gains come from features. 'Days since last purchase' beats raw timestamps. 'Items in cart / items viewed' beats either alone. 'Rolling 7-day spend' beats single-day spend. The model can't invent these — humans with domain knowledge can.
+
+      Deep learning shifted feature engineering away from text and images (representations are learned). It hasn't done the same for tabular data, despite repeated attempts (TabNet, FT-Transformer, NODE). In 2026 the practical reality is: tabular ML rewards engineers who know their data.
+    pitfalls:
+      - "More features ≠ better. Each adds variance; with limited data, fewer well-chosen features beat many noisy ones."
+  - question: "What is target encoding and how do you do it without leaking?"
+    shortAnswer: "Replace each categorical value with the mean of the target for examples with that value. Without care, this leaks the target into the feature. Fix: compute the mean on out-of-fold data only."
+    detailed: |
+      Naive target encoding: for category 'New York', set feature value = mean(target) among all training rows with 'New York'. For a row with target = 1, that mean already includes itself — the feature trivially predicts the target. Validation looks great; test collapses.
+
+      Correct version: K-fold target encoding. Split the training data into K folds; for each row, compute the target mean using only the other K−1 folds. CatBoost implements this natively ('ordered target statistics'). LightGBM has a similar approach. Doing it by hand requires care and a held-out fold for the final model fit.
+
+      Why it matters: for high-cardinality categoricals (user IDs, zip codes, product SKUs), one-hot is impossible (millions of features) and label-encoding implies a nonsensical ordering. Target encoding compresses the category to a single scalar that's actually informative.
+    pitfalls:
+      - "Smoothing matters: regularise toward the global mean for rare categories (otherwise rare cats encode their handful of targets directly)."
+  - question: "What are the most common kinds of data leakage?"
+    shortAnswer: |
+      Target leakage (a feature contains the target), temporal leakage (a feature uses future information at prediction time), and group leakage (the same entity appears in train and test).
+    detailed: |
+      **Target leakage.** A feature uses information that wouldn't exist before the target was known. Classic example: 'time_until_default' as a feature for default prediction.
+
+      **Temporal leakage.** Features computed from future data leak into training. If you compute 'average_purchase_value_for_user' on the full dataset and use it to predict events at time t, you're using post-t data. Time-aware features must respect the prediction time: average only over data observed before t.
+
+      **Group leakage.** The same patient, customer, or session appears in both training and validation sets. The model memorises the entity and looks great on the val set, then fails on truly new entities. Fix: use GroupKFold (sklearn) or any split that respects entity boundaries.
+
+      In all three cases the symptom is the same: training/validation performance much better than reality. The cause is hard to spot if you're not looking for it.
+    pitfalls:
+      - "Leakage is the most common reason a model that 'worked' in offline evaluation fails in production. Always trace each feature back to its data source and time."
+  - question: "How do you encode time features for ML?"
+    shortAnswer: "Decompose timestamps into multiple components: year, month, day-of-week, hour, holiday flags. Use cyclical encoding (sin/cos of hour) for hour-of-day and day-of-week. Compute time-since-event features ('days since last login') for relevant entities."
+    detailed: |
+      Trees can split on raw timestamps but they treat 'difference between Tuesday and Wednesday' the same as 'difference between Tuesday and Saturday' if days are encoded as integers 0–6. Cyclical encoding (x_sin = sin(2π·day/7), x_cos = cos(2π·day/7)) makes 'Sunday is close to Monday' true geometrically.
+
+      For business problems, time-since-event features are gold: 'days since last purchase,' 'months as a customer,' 'session length so far.' These features encode user state and dynamics that raw timestamps don't.
+
+      One common pattern: build lag features (value at t-1, t-7, t-30), rolling aggregates (mean over last 7 days), and trend features (slope of last 30 days). Together they let a static model approximate dynamics — and beat naive time series models in many business contexts.
+    pitfalls:
+      - "Time features are where temporal leakage is born. Always compute lagged and rolling features using only past observations."
+  - question: "When should you scale features, and what scaler should you use?"
+    shortAnswer: |
+      Always scale for distance-based models (kNN, SVM, k-means), linear models with regularisation, and neural networks. Trees don't need it. Use StandardScaler for normally distributed features; RobustScaler when there are outliers; min-max for bounded features.
+    detailed: |
+      Trees are scale-invariant — they only care about ordering, not magnitude. Linear and distance-based models care a great deal. A feature on a 0–10⁶ scale will dominate any model whose loss depends on Σxᵢ².
+
+      StandardScaler: subtract mean, divide by std. Standard for normally distributed data.
+
+      RobustScaler: subtract median, divide by IQR. Robust to outliers.
+
+      MinMaxScaler: scale to [0, 1]. Useful when you need a bounded range (e.g., neural network inputs).
+
+      One non-negotiable: fit the scaler on training data only, then apply to validation/test. Otherwise the scaler statistics leak test information.
+    pitfalls:
+      - "Pipeline the scaler with the model (sklearn Pipeline) so this is enforced automatically. Manual scaling is leakage waiting to happen."
+  - question: "Filter vs. wrapper vs. embedded feature selection — which to use?"
+    shortAnswer: "Filter (correlation / mutual information): fast, model-agnostic, useful for first cuts. Wrapper (recursive feature elimination): more accurate, model-specific, expensive. Embedded (L1 regularisation, tree feature importance): bundled with model training, the practical default."
+    detailed: |
+      **Filter methods** rank features by a univariate statistic (correlation with target, mutual information, chi-squared). Fast and model-agnostic. Useful to drop obviously useless features from a 10,000-feature set. Miss feature interactions and redundancy.
+
+      **Wrapper methods** train a model with different feature subsets and pick the best. Recursive feature elimination (RFE) is the standard. Captures interactions, but trains the model many times — expensive.
+
+      **Embedded methods** are part of training. L1 regularisation (Lasso) drives coefficients to zero, selecting features automatically. Tree models report feature importance natively (Gini or permutation). XGBoost and LightGBM have `feature_importances_` attributes you can use to drop noise features and retrain.
+
+      In practice for tabular ML in 2026: train an XGBoost with all features; look at permutation importance on validation; drop the bottom of the distribution; retrain. Embedded selection covers nearly every practical case.
+    pitfalls:
+      - "Permutation importance is more honest than built-in (Gini) importance, especially with correlated features."
+  - question: "Do feature importance scores tell you what causes the target?"
+    shortAnswer: "No. They tell you what the model uses. A spurious feature correlated with the target (because both are caused by a third variable) will have high importance. Treat importance as 'how the model behaves,' not 'how the world works.'"
+    detailed: |
+      Classic example: ice-cream sales is a 'predictive' feature for drowning deaths. Both are caused by hot weather, but ice-cream doesn't cause drowning. A model trained on the two would rank ice-cream sales as important.
+
+      SHAP values, LIME explanations, and feature_importance all suffer the same problem. They explain the model, not the world. Causal inference requires interventions or careful design (instrumental variables, randomised experiments) — see [A1.3 Correlation vs. causation](/tracks/ml-engineer/math-stats/correlation-causation).
+
+      In practice: importance scores are great for debugging ('why does my model rely on this weird feature?') and for compression ('which features can I drop?'). They're not evidence for business decisions about causes.
+    pitfalls:
+      - "Correlated features split importance between them, making each look less important than the group really is."
+---
+
+<TldrCallout>
+  In tabular ML, the model class is often a settled question — XGBoost — and the remaining gains come from features. This lesson covers the standard transformations (scaling, target encoding, datetime decomposition), the three forms of leakage that destroy real-world performance, and pragmatic feature selection. Domain knowledge + careful pipeline > more model tuning.
+</TldrCallout>
+
+## The unglamorous truth
+
+In Kaggle write-ups and conference talks, the model gets the attention. In production tabular ML, most of the work and most of the wins come from features. The model is XGBoost; the features are what separate a 0.71 AUC from a 0.83 AUC. This lesson is the engineering knowledge that doesn't fit into a model API.
+
+## Scaling: when it matters
+
+| Model                        | Scaling required?  | Why                                             |
+| ---------------------------- | ------------------ | ----------------------------------------------- |
+| Linear / Logistic regression | Yes if regularised | L1/L2 penalty is unfair to large-scale features |
+| Tree models (XGBoost, RF)    | No                 | Split-finding only uses ordering                |
+| kNN, SVM                     | Yes                | Distance-based; raw magnitudes dominate         |
+| Neural networks              | Yes                | Bigger inputs → bigger gradients                |
+
+**Always fit the scaler on training data only.** Fitting on the full dataset leaks validation statistics into training, inflating estimated performance. Wrap scaler + model in a `sklearn.pipeline.Pipeline` so this is enforced automatically.
+
+For features with outliers, prefer `RobustScaler` (median, IQR) over `StandardScaler` (mean, std). The outliers won't pull the mean around.
+
+## Encoding categorical features
+
+For low-cardinality (< 10 unique values): one-hot is fine.
+
+For medium cardinality (10–1000): label encoding for trees; one-hot for linear models.
+
+For high cardinality (> 1000 — user IDs, zip codes, SKUs):
+
+- **One-hot** explodes the feature space, slows training, doesn't help.
+- **Native categorical** support (LightGBM, CatBoost) — best for tree models.
+- **Target encoding** — replace category with the _out-of-fold_ mean target for that category. Universally useful, leakage-prone if done wrong.
+- **Hashing** — map categories into a fixed-size feature space via a hash. Used in online learning systems (Vowpal Wabbit, click prediction).
+- **Embedding layer** — learn a dense vector per category. The neural-network approach.
+
+CatBoost's 'ordered target statistics' is the easiest correct target encoding. If you're rolling your own, K-fold computation is non-negotiable.
+
+<AnalogyCallout>
+  Think of target encoding as compressing each category to "how does this category usually behave on
+  the target?" Done right, you get a strong numerical feature. Done wrong (using all training data
+  including the current row), the feature contains the target value, and you'll wake up to a
+  perfect-then-broken model.
+</AnalogyCallout>
+
+## Time features: decompose, lag, aggregate
+
+A raw `timestamp` is one of the worst features you can give a model. Decompose it:
+
+```python
+df["year"] = ts.year
+df["month"] = ts.month
+df["day_of_week"] = ts.dayofweek
+df["hour"] = ts.hour
+df["is_weekend"] = ts.dayofweek >= 5
+df["is_holiday"] = is_holiday(ts)  # from a calendar
+```
+
+For periodic features where 'distance' should be cyclical (hour 23 is close to hour 0):
+
+```python
+df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
+df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+```
+
+Then **lag and rolling features** for the entity (user, store, item):
+
+- `days_since_last_purchase`
+- `mean_spend_last_7d`
+- `count_logins_last_30d`
+- `slope_of_engagement_last_60d`
+
+These are where domain knowledge meets the data. They turn a static row into a snapshot of dynamics.
+
+## The three leakages (where most projects die)
+
+| Type             | What it looks like                                | Symptom                                        |
+| ---------------- | ------------------------------------------------- | ---------------------------------------------- |
+| Target leakage   | A feature contains or is computed from the target | Suspiciously high training/validation accuracy |
+| Temporal leakage | A feature uses future information                 | Offline-validation excellent, production-fail  |
+| Group leakage    | Same entity in train and validation               | Cross-validated metric inflated                |
+
+Three rules:
+
+1. **Audit each feature's data lineage.** Trace it back to a specific data source and timestamp. Could this value have been computed at prediction time?
+2. **Time-aware cross-validation.** When data is temporal, use `TimeSeriesSplit`, not `KFold`. The validation set must always be after training in time.
+3. **Group-aware cross-validation.** Use `GroupKFold` when entities (users, patients) recur. The model must generalise to unseen entities, not just unseen rows.
+
+<InlineQuiz
+  question="You're building a 30-day churn prediction model. You include the feature 'total_spend_last_30d'. Your training cutoff is March 1, 2026, predicting churn by April 1, 2026. Is there a leakage problem?"
+  options={[
+    { text: "No — total_spend_last_30d is computed before March 1, so it's fine." },
+    {
+      text: "Yes — total_spend_last_30d might be computed as 'last 30 days of available data,' which could overlap with the prediction window for some examples.",
+      correct: true,
+    },
+    { text: "Yes — any feature computed over 30 days is leakage." },
+    { text: "Cannot be determined without knowing the model architecture." },
+  ]}
+  explanation="The danger is subtle: if 'total_spend_last_30d' is computed as 'spend in the 30 days before the row's most recent activity,' it might include data from after the training cutoff for some users. Always compute lag features relative to the prediction time, not the data extract time. This kind of temporal leakage is invisible in cross-validation and devastating in production."
+/>
+
+## Feature interactions
+
+Trees discover interactions natively — that's a major reason boosting wins on tabular. But you can sometimes help by adding interaction features explicitly:
+
+- Ratios: `clicks / impressions`, `spend / income`
+- Products: `age * income`
+- Differences: `current_price - last_year_price`
+- Aggregations: `mean_price_for_category`, `rank_within_user`
+
+These compress what the model would otherwise need many splits to learn. Even XGBoost benefits when an interaction is meaningful and rare in the data.
+
+For linear models, interaction features are essential — without them, linear regression can only fit additive effects.
+
+## Feature selection in 2026
+
+The practical workflow:
+
+1. Train XGBoost / LightGBM with all features.
+2. Compute permutation importance on a held-out validation set.
+3. Drop the bottom of the distribution (often the bottom 30–50%).
+4. Retrain.
+
+This is **embedded selection** — built into model training. For most tabular problems this is enough. Filter methods are useful when you have 10,000+ features and need a fast first cut. Wrapper methods (RFE) are accurate but expensive — reserve for small datasets where every feature matters.
+
+A note on SHAP: `shap` values are the dominant modern feature attribution method. They tell you how much each feature contributed to each individual prediction. Great for debugging individual predictions, model audits, and presenting model behaviour. Not causal evidence.
+
+<InlineQuiz
+  question="Your XGBoost model has 200 features. You sort by feature_importances_ (Gini-based) and notice 'user_id' is the third most important feature. What's the most likely issue?"
+  options={[
+    { text: "user_id genuinely encodes useful information; keep it." },
+    {
+      text: "Gini importance is biased toward high-cardinality features. user_id has millions of unique values and is being preferred for split candidates regardless of true signal.",
+      correct: true,
+    },
+    { text: "user_id is leaking the target." },
+    { text: "XGBoost cannot handle ID features and will crash." },
+  ]}
+  explanation="Gini-based importance is inflated for high-cardinality features because they offer more candidate splits. user_id often shows up as 'important' even when it's pure noise. Verify with permutation importance (which is unbiased), and consider whether user_id should be encoded differently (e.g., user-level aggregates) or dropped entirely. Including raw IDs also risks the model memorising specific users — group leakage."
+/>
+
+## A pragmatic checklist
+
+When you finish a feature pipeline, ask:
+
+- For each feature: when was this value first known? Could it be computed at prediction time?
+- Is the split (train/val/test) time-aware? Entity-aware?
+- Are scalers and encoders fit on training data only?
+- Are high-cardinality categoricals encoded with leakage-safe target encoding (CatBoost-style) or native handling (LightGBM)?
+- Are time features decomposed into useful components (DOW, hour, lag, rolling)?
+- Have you dropped clearly noisy features by permutation importance?
+
+If you can answer all six honestly, the model is unlikely to surprise you in production. That answer matters more than the choice of model.
+
+## Where this leaves you
+
+Module A2 has covered: linear & logistic regression (the baselines you must understand), decision trees (the building block), random forests (the bagging story), gradient boosting (what wins tabular ML in 2026), SVMs (honest niche), kNN and vector search (the surprising heart of modern retrieval), and now feature engineering (where the real wins live).
+
+The next module (A3) shifts to unsupervised learning — clustering, dimensionality reduction, anomaly detection. The supervised toolkit is in place; from here on, it's about working without labels, then moving up the stack into neural networks and deep learning.

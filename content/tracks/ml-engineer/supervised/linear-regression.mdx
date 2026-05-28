@@ -1,0 +1,189 @@
+---
+title: "Linear regression from scratch"
+description: "The simplest learning algorithm — fit a line by minimising squared error — and the lens through which most of supervised learning is best understood."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: linear-regression
+lessonCode: "A2.1"
+estMinutes: 14
+prereqs:
+  - "A0.6 Calculus and gradients"
+  - "A1.5 Matrix calculus, just enough"
+objectives:
+  - "State the linear regression model, its loss function, and what 'fitting' means in concrete terms."
+  - "Derive the closed-form normal equations and explain when gradient descent is preferable."
+  - "Diagnose underfit, multicollinearity, and outlier sensitivity in a fitted line."
+pitfalls:
+  - "Treating R² as a model quality verdict. A high R² on training data tells you almost nothing about generalisation."
+  - "Assuming linear regression handles outliers gracefully. Squared error is dominated by the worst point."
+  - "Adding correlated features. The closed-form solution becomes numerically unstable when XᵀX is near-singular."
+  - "Forgetting the intercept. Without a bias term, the line is forced through the origin — almost never what you want."
+  - "Comparing coefficients across unscaled features. A coefficient on 'income (USD)' and one on 'age (years)' aren't comparable in raw magnitude."
+importantQuestions:
+  - question: "What does linear regression actually minimise?"
+    shortAnswer: "Mean squared error between predictions and targets: L(w) = (1/n) Σ (xᵢᵀw − yᵢ)². Squared error is convex in w, so there's exactly one global minimum."
+    detailed: |
+      The loss L(w) = (1/n)‖Xw − y‖² is a quadratic in w. Convexity guarantees a unique minimiser — no saddle points, no local traps. Setting ∇L = 0 yields the normal equations XᵀXw = Xᵀy, solvable in closed form when XᵀX is invertible. The squared form is chosen for three reasons: it has a clean derivative (linear in w), it corresponds to a Gaussian noise assumption (maximum likelihood), and it penalises large errors quadratically, which is sometimes what you want and sometimes not.
+    pitfalls:
+      - "Squared error is sensitive to outliers. Use Huber loss or MAE when outliers are real."
+  - question: "When should you use the closed-form solution vs. gradient descent?"
+    shortAnswer: "Closed form when n features ≲ 10⁴ and the design matrix is well-conditioned. Gradient descent (or its variants) for everything else — millions of features, streaming data, or when XᵀX is ill-conditioned."
+    detailed: |
+      The closed form w = (XᵀX)⁻¹Xᵀy requires O(d²n + d³) work. For d = 100, that's trivial. For d = 10⁶ (NLP features, image pixels), inverting a million-by-million matrix is impossible. Gradient descent scales as O(nd) per step and works fine on streaming data. In practice scikit-learn's `LinearRegression` uses an SVD-based solver; for large d people reach for SGD, L-BFGS, or specialised tools (Vowpal Wabbit). The choice rarely matters for the answer — both converge to the same minimum on a convex problem. It matters for runtime.
+    pitfalls:
+      - "Never literally invert XᵀX. Use a Cholesky or QR factorisation — more numerically stable and as fast."
+  - question: "What is multicollinearity and why does it break linear regression?"
+    shortAnswer: "Two or more features carry the same information. XᵀX becomes near-singular, coefficients blow up, and small data changes flip their signs. The model still predicts well; the coefficients become uninterpretable."
+    detailed: |
+      If feature 'height in cm' and 'height in inches' are both in X, one column is exactly a multiple of the other. XᵀX is singular and (XᵀX)⁻¹ doesn't exist. With near-collinear features (correlation 0.99), the inverse exists but has huge entries — coefficients become enormous and opposite in sign, perfectly cancelling each other.
+
+      Predictions remain correct on the training distribution. But the coefficients can't be trusted for interpretation, and even tiny changes in the data shift them wildly. Fixes: drop one of the correlated features, use ridge regression (which adds λI to XᵀX, making it invertible), or use principal component regression.
+    pitfalls:
+      - "Multicollinearity hurts interpretation, not always prediction. Check VIF (variance inflation factor) when coefficients matter."
+  - question: "Why does linear regression assume Gaussian noise?"
+    shortAnswer: "Because minimising squared error is equivalent to maximum-likelihood estimation under the assumption that y = xᵀw + ε with ε ~ N(0, σ²). Other noise assumptions give different losses."
+    detailed: |
+      Write p(y | x, w) = N(xᵀw, σ²). The log-likelihood of the dataset is −(1/2σ²)Σ(yᵢ − xᵢᵀw)² plus terms independent of w. Maximising it is identical to minimising squared error. Different noise gives different losses: Laplace noise → mean absolute error (L1), Student-t → robust regression. The reason squared error 'works' so well in practice is the Central Limit Theorem: aggregated noise from many small independent sources is approximately Gaussian, exactly the assumption.
+    pitfalls:
+      - "If residuals are visibly non-Gaussian (skewed, heavy-tailed), the loss is mismatched. Plot residual histograms."
+  - question: "What does R² measure and how is it misleading?"
+    shortAnswer: "R² = 1 − (SS_res / SS_tot) is the fraction of target variance the model explains. It's bounded above by 1 but can be negative for bad models. Crucially, it always increases when you add a feature — even garbage."
+    detailed: |
+      R² compares your model to a constant 'predict the mean' baseline. R² = 0.85 means the model captures 85% of the variance the mean predictor misses. It's a useful summary on a held-out set. On training data it's a trap: every extra feature can only decrease training squared error, so training R² is monotonically non-decreasing. Adjusted R² penalises model complexity, but it's a weak signal. Always report R² on a validation set, alongside RMSE in the units of y (which is more interpretable for stakeholders).
+    pitfalls:
+      - "R² of 0.99 on training and 0.20 on validation = severe overfit. Always report both."
+  - question: "Should you standardise features before fitting linear regression?"
+    shortAnswer: "For prediction quality: it doesn't change the fit (linear regression is scale-equivariant). For interpretability and regularisation: yes, always. Ridge/Lasso penalties are unfair to features on small scales otherwise."
+    detailed: |
+      Plain OLS finds the same predictions whether 'income' is in dollars or thousands of dollars — the coefficient adjusts. But the coefficient values aren't comparable across features without standardisation: a coefficient of 0.001 on income (USD) and 5.0 on number_of_kids might represent the same relative impact. Standardise (z-score) so each feature has mean 0 and std 1, then coefficients reflect relative importance.
+
+      Critically, when you add L1 or L2 regularisation (next lesson on ridge/lasso), the penalty λ‖w‖² is applied uniformly across coefficients. Without standardisation, features with large numerical range get penalised more harshly. Standardise. Always.
+    pitfalls:
+      - "Compute scaler stats on training data only, then apply to validation/test. Otherwise you leak."
+---
+
+<TldrCallout>
+  Linear regression fits the equation y = xᵀw + b by minimising mean squared error. The minimisation
+  has a closed-form solution (the normal equations) and a unique global minimum because the loss is
+  convex. Every interesting issue in supervised learning — overfitting, regularisation,
+  interpretability, leakage — already shows up here.
+</TldrCallout>
+
+## The model
+
+Given features x ∈ ℝᵈ and a target y ∈ ℝ, predict ŷ = xᵀw + b. Learn weights w and bias b from n training pairs (xᵢ, yᵢ).
+
+Fold the bias into w by appending a 1 to every x. Then ŷ = xᵀw and the whole model is one dot product per prediction. Cheap to compute, cheap to store, easy to debug.
+
+This is the simplest supervised learner that does something nontrivial. Every concept further in this module (boundaries, regularisation, generalisation) is best learned by first internalising it here.
+
+## What "fitting" means
+
+Pick the w that makes predictions match training targets as closely as possible. The standard measure is mean squared error:
+
+L(w) = (1/n) Σᵢ (xᵢᵀw − yᵢ)² = (1/n) ‖Xw − y‖²
+
+where X is the n×d design matrix. L is a quadratic in w, hence convex, hence has a single global minimum.
+
+<AnalogyCallout>
+  Imagine the loss surface as a parabolic bowl in d-dimensional space. The bottom is the unique
+  answer; any starting point reaches it by rolling downhill. No local minima, no traps. This is what
+  convex means in practice.
+</AnalogyCallout>
+
+## The drag-the-line widget
+
+Drag the line. The two endpoints move; the slope and intercept update. Live MSE on the right tells you how well you're doing. The optimal fit (minimum MSE) is shown as a faint reference.
+
+<LinearRegressionFit />
+
+A few things to notice:
+
+- MSE rises quadratically as you move away from optimal. Small misalignments are nearly free; large ones explode.
+- A single dragged outlier shifts the optimum noticeably. Squared error gives outliers a megaphone.
+- The optimal line passes through (mean x, mean y). This is true for any OLS fit with an intercept.
+
+## The normal equations
+
+Set the gradient of L to zero (see [A1.5 Matrix calculus, just enough](/tracks/ml-engineer/math-stats/matrix-calculus)):
+
+∇L = (2/n) Xᵀ(Xw − y) = 0 ⟹ XᵀX w = Xᵀy
+
+When XᵀX is invertible, w\* = (XᵀX)⁻¹ Xᵀy. One matrix solve, no iteration. This is the **OLS estimator** — Carl Friedrich Gauss derived it in 1795 to track Ceres.
+
+In practice you don't invert. `numpy.linalg.lstsq` and `scikit-learn.linear_model.LinearRegression` use an SVD-based solver: same answer, more numerically stable, handles rank-deficient X gracefully.
+
+<InlineQuiz
+  question="You fit linear regression on a dataset where one feature is exactly twice another. What happens?"
+  options={[
+    { text: "The model errors out — the loss is undefined." },
+    {
+      text: "XᵀX is singular; no unique closed-form solution exists but predictions are still well-defined.",
+      correct: true,
+    },
+    { text: "The model fits but predictions are biased toward zero." },
+    { text: "Nothing — linear regression handles correlated features without issue." },
+  ]}
+  explanation="Perfect collinearity makes XᵀX rank-deficient and non-invertible. There's no unique (w₁, w₂) — many combinations give identical predictions. Predictions are still well-defined; coefficients are not. Practical solvers (SVD, ridge) pick a specific solution but it's not 'the' answer."
+/>
+
+## Gradient descent: when closed form isn't an option
+
+For d in the millions (text features, embeddings, image pixels), inverting a d×d matrix is impossible. Use gradient descent:
+
+w ← w − η · (2/n) Xᵀ(Xw − y)
+
+η is the learning rate. On a quadratic loss, gradient descent converges at a rate determined by the **condition number** of XᵀX (ratio of largest to smallest eigenvalue). Highly correlated features ⟹ bad conditioning ⟹ slow convergence. This is the connection between data quality and optimisation speed that gets much louder for neural networks.
+
+Stochastic gradient descent (SGD) — one example at a time — scales to streaming data and is what backs production large-scale linear models (ad click-through prediction, Vowpal Wabbit-style systems).
+
+## Diagnosing a fit
+
+Three habits worth building:
+
+1. **Plot residuals vs. predicted.** If you see structure (curves, fans), the linear assumption is wrong. Add features, transform, or pick a nonlinear model.
+2. **Plot residual histogram.** Heavy tails or skew mean MSE is the wrong loss; consider MAE or Huber.
+3. **Hold out a validation set.** Training R² always improves with more features. Validation R² is the only honest signal.
+
+| Symptom                            | Likely cause         | Fix                                         |
+| ---------------------------------- | -------------------- | ------------------------------------------- |
+| Residuals show a curve             | Missing nonlinearity | Add x², log(x), or use a tree model         |
+| One huge residual dominates        | Outlier              | Inspect; use Huber loss; remove if bad data |
+| Coefficients enormous and unstable | Multicollinearity    | Ridge regression; drop redundant features   |
+| Train R² ≫ validation R²           | Overfit              | Fewer features; regularise; more data       |
+
+## What linear regression doesn't do
+
+It doesn't capture nonlinear relationships unless you engineer them in. It doesn't handle categorical targets — that's logistic regression (next lesson). And the squared loss is a deliberate choice tied to Gaussian noise; if your data is heavy-tailed (a recurring theme — see [A1.1 Distributions in the wild](/tracks/ml-engineer/math-stats/distributions)), you want a different loss.
+
+Still, in 2026, linear regression is what serious tabular pipelines start with as a baseline — and what they compare against to justify any added complexity. If XGBoost can't beat OLS by a meaningful margin, the problem may not need a tree.
+
+<InlineQuiz
+  question="You train linear regression on housing prices with features {sqft, num_bedrooms, sqft × num_bedrooms}. Training R² is 0.92, validation R² is 0.31. What's the most likely cause?"
+  options={[
+    { text: "The model is too simple — add more features." },
+    {
+      text: "Multicollinearity from the interaction term combined with too few training examples, causing overfit.",
+      correct: true,
+    },
+    { text: "The features need standardisation." },
+    { text: "Linear regression cannot handle interaction terms." },
+  ]}
+  explanation="The interaction term sqft × num_bedrooms is highly correlated with both parents, inflating coefficient variance. With limited training data the model fits noise — hence the huge train/val gap. Fixes: drop the interaction, add regularisation (ridge), or collect more data. Linear regression handles interaction terms fine in principle; the issue is variance."
+/>
+
+<FillInBlankCode
+  prompt="Complete the closed-form OLS solver. Given design matrix X (n×d, intercept column included) and target y (n,), return the weight vector."
+  before={
+    "import numpy as np\n\ndef ols_fit(X, y):\n    # Solve the normal equations: (X^T X) w = X^T y\n    # Use np.linalg.solve, NOT np.linalg.inv — more stable.\n"
+  }
+  after={"    return w"}
+  expected={["w = np.linalg.solve(X.T @ X, X.T @ y)", "w = np.linalg.lstsq(X, y, rcond=None)[0]"]}
+  hints={[
+    "np.linalg.solve(A, b) returns x such that A @ x = b. Here A = X.T @ X and b = X.T @ y.",
+    "Even better: np.linalg.lstsq(X, y, rcond=None)[0] uses SVD and handles rank-deficient X.",
+  ]}
+  solution={"w = np.linalg.solve(X.T @ X, X.T @ y)"}
+/>

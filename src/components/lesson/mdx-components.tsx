@@ -14,6 +14,12 @@ import { DistributionExplorer } from "../viz/DistributionExplorer";
 import { PValueSimulator } from "../viz/PValueSimulator";
 import { SimpsonsParadox } from "../viz/SimpsonsParadox";
 import { EntropyCalculator } from "../viz/EntropyCalculator";
+import { LinearRegressionFit } from "../viz/LinearRegressionFit";
+import { LogisticBoundary } from "../viz/LogisticBoundary";
+import { DecisionTreeSplit } from "../viz/DecisionTreeSplit";
+import { BaggingVariance } from "../viz/BaggingVariance";
+import { BoostingResiduals } from "../viz/BoostingResiduals";
+import { KnnRegions } from "../viz/KnnRegions";
 
 /**
  * Components available inside any .mdx lesson file.
@@ -42,6 +48,12 @@ export const mdxComponents: MDXComponents = {
   PValueSimulator,
   SimpsonsParadox,
   EntropyCalculator,
+  LinearRegressionFit,
+  LogisticBoundary,
+  DecisionTreeSplit,
+  BaggingVariance,
+  BoostingResiduals,
+  KnnRegions,
 
   // Markdown overrides: align native MD output with the design system.
   h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,

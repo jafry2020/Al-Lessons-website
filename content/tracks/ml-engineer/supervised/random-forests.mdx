@@ -1,0 +1,173 @@
+---
+title: "Random forests and bagging"
+description: "Average many high-variance trees to get one low-variance model. The first ensemble worth knowing and a strong default when you don't want to tune anything."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: supervised
+moduleLabel: "Module 2 · Supervised Learning"
+lesson: random-forests
+lessonCode: "A2.4"
+estMinutes: 12
+prereqs:
+  - "A2.3 Decision trees"
+  - "A0.7 Bias, variance, and overfitting"
+objectives:
+  - "Explain how bagging reduces variance and why it leaves bias roughly unchanged."
+  - "Distinguish bootstrap aggregation from random feature subsampling — both ingredients in a random forest."
+  - "Decide when a random forest is a sensible default versus when gradient boosting is worth the tuning effort."
+pitfalls:
+  - "Adding more trees forever, hoping accuracy improves. After a few hundred trees, returns vanish; compute is wasted."
+  - "Treating out-of-bag (OOB) error as a substitute for a proper held-out test set. OOB is a good shortcut, not a replacement."
+  - "Interpreting Gini-based feature importance as causal. It's biased toward high-cardinality features."
+  - "Forgetting that bagging requires high-variance base learners. Bagging shallow trees gives little benefit."
+  - "Assuming random forests beat XGBoost. On tabular data with proper tuning, XGBoost almost always wins."
+importantQuestions:
+  - question: "What is bagging, in one sentence?"
+    shortAnswer: "Bootstrap aggregating: train B copies of the same model on B different bootstrap samples of the data, then average their predictions."
+    detailed: |
+      A bootstrap sample is drawn with replacement and has the same size as the original dataset. About 63% of the original examples appear in any given bootstrap (others appear multiple times); the remaining 37% are 'out-of-bag' for that tree.
+
+      If the base learners' errors are roughly uncorrelated, averaging B of them reduces the variance of predictions by a factor of B — without changing bias. This is the central limit theorem applied to model predictions. Bagging by itself was Breiman's 1996 paper; random forests (Breiman, 2001) added one more ingredient: random feature subsampling at each split, which decorrelates the trees further.
+    pitfalls:
+      - "Bagging gives almost nothing for low-variance models (linear regression, shallow trees). Use it on deep trees, where variance is the limiting factor."
+  - question: "Why also subsample features?"
+    shortAnswer: "Without it, every bootstrap tree latches onto the same strongest feature for its root split. Trees end up correlated; averaging them gains less."
+    detailed: |
+      In a random forest, at each node, the algorithm only considers a random subset of features (typically √d for classification, d/3 for regression) when choosing the best split. This forces different trees to use different features and makes their errors more independent.
+
+      The intuition: averaging 500 nearly-identical trees gives you the same prediction as one tree. Averaging 500 genuinely diverse trees gives you actual variance reduction. Feature subsampling buys that diversity. Without it you have "bagged trees", which is strictly worse than a random forest.
+    pitfalls:
+      - "Too-small feature subsets hurt bias. The default √d works well; you rarely need to tune it."
+  - question: "Why does variance shrink while bias stays the same?"
+    shortAnswer: "Averaging cancels noise; it does not correct systematic error. If every tree under-fits a region in the same direction, the average under-fits it too."
+    detailed: |
+      For B i.i.d. predictions with variance σ², the average has variance σ²/B. With correlated predictions (correlation ρ), the variance is ρσ² + (1−ρ)σ²/B. The 'irreducible' term ρσ² is why correlation matters — and why feature subsampling exists.
+
+      Bias is determined by the model class, not by averaging. If shallow trees can't represent some pattern, neither can their average. This is also why random forests benefit from letting each tree grow deep: each tree should be low-bias / high-variance, and the ensemble fixes the variance.
+    pitfalls:
+      - "Random forests are not magic: if your problem is fundamentally non-tree-shaped (smooth surfaces, sparse text), they won't suddenly fit it."
+  - question: "What is out-of-bag (OOB) error?"
+    shortAnswer: "For each training example, average the predictions from only the trees that didn't see it during training. OOB error gives you a free validation score without holding out data."
+    detailed: |
+      Each tree only sees ~63% of the training data; the other 37% are out-of-bag. For example i, ask the ~37% of trees that didn't see it for their predictions, then aggregate. Do this for all i and you get an unbiased estimate of test error.
+
+      OOB error is implemented in sklearn (oob_score=True) and is genuinely useful for tuning forest size without a separate validation set. The caveat: OOB error correlates with validation error but isn't identical, and it doesn't catch distribution shift between train and deployment. Still hold out a true test set if stakes are high.
+    pitfalls:
+      - "OOB stops being useful when B is small. Need at least ~50 trees for the average over 37% to be stable."
+  - question: "When does a random forest beat XGBoost?"
+    shortAnswer: "When you can't or won't tune hyperparameters. RFs work reasonably well out of the box; XGBoost needs tuning to reach its full potential. On well-tuned setups, XGBoost almost always wins."
+    detailed: |
+      Random forests have two hyperparameters that matter (n_estimators, max_features) and are forgiving. XGBoost has more (learning_rate, n_estimators, max_depth, reg_lambda, reg_alpha, subsample, colsample) and they interact. Reasonable defaults exist but the gap between out-of-box and tuned XGBoost is large.
+
+      In a hurry, with no tuning budget, on a tabular problem? RF is a strong default. With time to tune and a leaderboard to climb? XGBoost or LightGBM. The honest summary: random forests are the 'I'll regret it less' choice for a baseline; gradient boosting is what production ML engineers tune for the last few points of accuracy.
+    pitfalls:
+      - "RFs are large at inference: 500 trees × 1000 nodes each = lots of memory. Use compiled tree libraries (Treelite, ONNX) for serving."
+  - question: "How do you compute feature importance from a forest?"
+    shortAnswer: "Two main ways: Gini importance (sum of impurity reduction across all splits using each feature) and permutation importance (how much accuracy drops when a feature is randomly shuffled). Permutation is more trustworthy."
+    detailed: |
+      Gini (or 'mean decrease in impurity') is cheap — it's free during training — but biased: it inflates the importance of high-cardinality and continuous features over low-cardinality categoricals, because they have more candidate splits.
+
+      Permutation importance shuffles one feature at a time on a held-out set and measures the accuracy drop. It's slower (one extra forward pass per feature) but unbiased and respects feature interactions. Scikit-learn provides both: feature_importances_ (Gini) and permutation_importance (permutation). Trust the latter when stakes are high.
+    pitfalls:
+      - "Correlated features split importance between them, sometimes making each look unimportant. Group them or use SHAP values for a cleaner attribution."
+---
+
+<TldrCallout>
+  A random forest trains many decision trees on bootstrap samples and averages their predictions.
+  Two sources of randomness — bootstrap samples (bagging) and random feature subsets at each split —
+  decorrelate the trees, so averaging them genuinely reduces variance. It's the strongest model you
+  can deploy without tuning.
+</TldrCallout>
+
+## The recipe
+
+1. Draw a bootstrap sample (n examples drawn with replacement) from the training set.
+2. Grow a deep decision tree on it, but at each split consider only a random subset of features (size √d for classification, d/3 for regression).
+3. Repeat B times to get B trees.
+4. To predict: average tree outputs (regression) or take a majority vote (classification).
+
+That's it. Breiman (2001) showed this beats single trees by a large margin, with two hyperparameters (B and the feature subsample size) and very little tuning.
+
+## Why averaging works: the variance demo
+
+A single deep tree on a small dataset has predictions that wobble dramatically — small changes in training data flip its structure. Average enough of them and the wobble cancels.
+
+The widget below lets you sample many trees on bootstrap samples and watch the average smooth out. The blue spread is the variability of individual trees; the bold red line is the average. As you increase the number of trees, the average stabilises.
+
+<BaggingVariance />
+
+The math: if individual trees have error variance σ² and pairwise correlation ρ, the ensemble's error variance is
+
+Var(avg) = ρσ² + (1 − ρ)σ² / B
+
+For ρ = 0 (uncorrelated): variance → 0 as B → ∞. For ρ = 1 (identical trees): no benefit. Reality is in between, and feature subsampling pushes ρ down.
+
+<AnalogyCallout>
+  A single expert is opinionated and sometimes wrong. A roomful of moderately diverse experts,
+  averaged, is steadier — provided they're not all in the same echo chamber. Random feature
+  subsampling is what stops the trees from echo-chambering.
+</AnalogyCallout>
+
+## What the trees look like
+
+Each tree in a random forest is allowed to grow deep — typically with no max_depth at all. That's deliberate: bagging fixes variance, so each tree should be aggressive about bias (fit the training data well). Underfitting trees waste the ensemble.
+
+This is the opposite of single-tree practice, where you constrain depth to prevent overfit. The trade-off changes once you're averaging.
+
+<InlineQuiz
+  question="You train a random forest with 50 trees and get 86% validation accuracy. You retrain with 500 trees and get 86.4% accuracy. With 5000 trees you get 86.5%. Why does adding trees stop helping?"
+  options={[
+    { text: "The model is overfit; more trees would help if you regularise." },
+    {
+      text: "Variance has already been substantially reduced; the remaining error is mostly bias.",
+      correct: true,
+    },
+    { text: "There's a bug — random forests scale linearly with the number of trees." },
+    { text: "The trees are correlated; switching to bagged shallow trees would unblock progress." },
+  ]}
+  explanation="The Var(avg) = ρσ² + (1−ρ)σ²/B formula tells the story: as B grows, the (1−ρ)σ²/B term shrinks, leaving the irreducible ρσ² and the bias of the model class. After a few hundred trees you're paying compute for almost nothing. The fix for the remaining gap is changing model class (gradient boosting) or better features — not more trees."
+/>
+
+## Random forest vs. XGBoost — the honest comparison
+
+| Aspect                  | Random Forest           | XGBoost / LightGBM          |
+| ----------------------- | ----------------------- | --------------------------- |
+| Tuning required         | Minimal                 | Substantial                 |
+| Out-of-box accuracy     | Strong                  | Good (worse than tuned)     |
+| Tuned accuracy          | Good                    | Usually best in class       |
+| Training parallelism    | Embarrassingly parallel | Sequential (tree-by-tree)   |
+| Inference cost          | Sum over B trees        | Sum over B trees            |
+| Handles missing values  | With imputation         | Natively                    |
+| Handles categoricals    | Needs encoding          | Native (LightGBM, CatBoost) |
+| Calibration             | Reasonable              | Often overconfident         |
+| Native support in tools | sklearn                 | XGBoost, LightGBM, CatBoost |
+
+For a project where you'll spend hours on data and minutes on the model, RF. For a Kaggle leaderboard or a production model where the last 1% matters, gradient boosting.
+
+## Out-of-bag error: a free validation set
+
+Each tree only sees ~63% of training examples (consequence of bootstrap sampling — the limit as n → ∞ is 1 − 1/e). For example i, you can ask only the ~37% of trees that didn't see i for their predictions. Aggregate these for every i and you have an unbiased estimate of test error, without holding any data out. Set `oob_score=True` in sklearn to get it for free.
+
+It's not magic — it can't catch distribution shift, and it's noisy for small B — but it saves a fold of cross-validation in many cases.
+
+<InlineQuiz
+  question="Why is feature subsampling at each split critical for a random forest, and not just bootstrap sampling?"
+  options={[
+    { text: "It makes training faster by skipping features." },
+    {
+      text: "Without it, bootstrap trees would still split on the same dominant features at the top, leaving the trees correlated.",
+      correct: true,
+    },
+    { text: "It is a regularisation technique that prevents individual trees from overfitting." },
+    { text: "Feature subsampling is optional; bootstrap sampling alone gives the same benefit." },
+  ]}
+  explanation="The variance formula Var(avg) = ρσ² + (1−ρ)σ²/B shows correlation ρ between trees is the limiting factor. Bootstrap sampling reduces ρ a little; feature subsampling reduces it a lot, by forcing different trees to ask different questions. Bagged trees without feature subsampling underperform; the 'random' in 'random forest' is the feature trick."
+/>
+
+## In the toolchain
+
+- `sklearn.ensemble.RandomForestClassifier / Regressor` — the canonical implementation.
+- For larger datasets: H2O.ai's distributed random forest, or just LightGBM in `boosting_type='rf'` mode.
+- For inference: Treelite or ONNX compile the trained forest into native code, often 10× faster than the original library.
+
+Random forests have been the "first thing to try" on tabular data since 2005, and remain so for engineers who don't want to babysit hyperparameters. The next lesson is the model that wins when babysitting is allowed.
