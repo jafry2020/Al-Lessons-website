@@ -54,10 +54,53 @@ Open http://localhost:3000.
 ## Other scripts
 
 ```bash
-npm run build       # Production build
-npm run start       # Run the production build
-npm run typecheck   # TypeScript only, no emit
+npm run build           # Production build
+npm run start           # Run the production build
+npm run typecheck       # TypeScript only, no emit
+npm run check-content   # Validate every .mdx against the Zod schema + registry
+npm run lint            # ESLint
+npm run format          # Prettier write
 ```
+
+## Deploying to Vercel (preview-per-PR workflow)
+
+This connects the repo to Vercel so every push to `main` deploys to production
+and every PR gets its own preview URL.
+
+1. Go to https://vercel.com/new and sign in with GitHub.
+2. **Import Git Repository** → pick `jafry2020/Al-Lessons-website`.
+3. Framework preset: **Next.js** (auto-detected). Root directory: leave as is.
+4. **Environment Variables** — paste the same names from `.env.local`:
+   - `DATABASE_URL` — your Neon **production** connection string (use the
+     non-pooled variant for Prisma migrations, the pooled one for the runtime).
+     Easiest: just use the pooled one for both.
+   - `AUTH_SECRET` — generate a fresh one for production, do **not** reuse
+     your local value.
+   - `AUTH_TRUST_HOST` — leave unset; Vercel sets this implicitly.
+   - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` — see step 5.
+5. Create a **second GitHub OAuth App** for production:
+   - https://github.com/settings/developers → New OAuth App
+   - Homepage URL: `https://<your-vercel-project>.vercel.app`
+   - Callback URL: `https://<your-vercel-project>.vercel.app/api/auth/callback/github`
+   - Use these credentials for the Vercel env vars. (Keep the local-dev one
+     separate so callbacks don't collide.)
+6. Click **Deploy**. After the first deploy succeeds, run the schema
+   migration against the production DB once:
+   ```bash
+   DATABASE_URL="<your prod connection string>" npx prisma migrate deploy
+   ```
+   You can do this locally — `prisma migrate deploy` only runs migrations
+   that haven't been applied yet, so it's safe to re-run.
+
+From now on:
+
+- Every push to `main` → production deploy at your `*.vercel.app` URL.
+- Every PR → its own preview URL posted as a check on the PR. Click through
+  to review content changes before merging.
+
+CI (`.github/workflows/ci.yml`) runs `lint → typecheck → check-content → build`
+on every PR and push to `main`, with placeholder env values. A failing CI
+blocks the merge.
 
 ## Authoring lessons
 

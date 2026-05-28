@@ -70,8 +70,9 @@ export function Landing() {
 
         <div className="grid gap-6 md:grid-cols-2">
           <TrackCard
+            href="/tracks/ml-engineer"
             icon={<BarChart3 size={20} />}
-            badge="53 lessons · 9 modules"
+            badge="ML Engineer Path · 9 modules"
             title="ML Engineer Path"
             tagline="Build models that learn from data."
             description="From linear regression to deep CNNs and MLOps. The track for people who want to ship trained models in production."
@@ -88,8 +89,9 @@ export function Landing() {
             ]}
           />
           <TrackCard
+            href="/tracks/genai-builder"
             icon={<Layers size={20} />}
-            badge="47 lessons · 10 modules"
+            badge="GenAI Builder Path · 10 modules"
             title="GenAI Builder Path"
             tagline="Build systems with foundation models."
             description="Transformers, LLMs, RAG, fine-tuning, diffusion, agents. The track for people who want to build the next generation of AI products."
@@ -106,6 +108,15 @@ export function Landing() {
               "Evaluation, Safety & Ethics",
             ]}
           />
+        </div>
+
+        <div className="mt-8 text-center">
+          <Link
+            href="/tracks"
+            className="inline-flex items-center gap-2 text-body-sm font-medium text-accent-500 hover:text-accent-600"
+          >
+            View the full catalog <ArrowRight size={14} />
+          </Link>
         </div>
       </section>
 
@@ -160,6 +171,7 @@ export function Landing() {
 }
 
 interface TrackProps {
+  href: string;
   icon: React.ReactNode;
   badge: string;
   title: string;
@@ -168,9 +180,12 @@ interface TrackProps {
   modules: string[];
 }
 
-function TrackCard({ icon, badge, title, tagline, description, modules }: TrackProps) {
+function TrackCard({ href, icon, badge, title, tagline, description, modules }: TrackProps) {
   return (
-    <Card interactive className="flex flex-col">
+    <Link
+      href={href}
+      className="group flex flex-col rounded-md border border-border-subtle bg-surface p-6 shadow-sm transition-all hover:-translate-y-0.5 hover:border-border-strong hover:shadow-md"
+    >
       <div className="mb-4 flex items-center gap-3">
         <div className="grid h-10 w-10 place-items-center rounded-md bg-accent-50 text-accent-700">
           {icon}
@@ -195,6 +210,6 @@ function TrackCard({ icon, badge, title, tagline, description, modules }: TrackP
       <div className="mt-6 flex items-center gap-2 border-t border-border-subtle pt-6 text-body-sm font-medium text-accent-500 transition-all group-hover:gap-3">
         Explore the path <ArrowRight size={14} />
       </div>
-    </Card>
+    </Link>
   );
 }
