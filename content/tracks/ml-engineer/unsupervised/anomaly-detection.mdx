@@ -1,0 +1,270 @@
+---
+title: "Anomaly detection in production"
+description: "Find the rare and unusual when labels are scarce. Isolation Forest, Local Outlier Factor, reconstruction-based methods, and the production realities of running them at scale."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: anomaly-detection
+lessonCode: "A3.7"
+estMinutes: 14
+prereqs:
+  - "A3.6 Autoencoders"
+  - "A2.4 Random forests and bagging"
+objectives:
+  - "Pick between Isolation Forest, LOF, and reconstruction-based methods based on data size and dimensionality."
+  - "Set thresholds responsibly: anomaly scores are continuous; the cut depends on cost ratios, not statistics."
+  - "Diagnose distribution shift in deployed models using anomaly detection on input features and predictions."
+pitfalls:
+  - "Calling anomaly detection 'unsupervised' as if labels never help. Even a small set of confirmed anomalies enables better evaluation and tuning."
+  - "Assuming a 1% anomaly threshold is universally right. The right rate depends on cost asymmetry, not on what's 'usual.'"
+  - "Using Mahalanobis distance or Gaussian-based methods on multi-modal data. They assume one centre; multi-modal data confuses them."
+  - "Evaluating anomaly detectors by 'accuracy.' Almost all examples are normal; predict-normal-always wins on accuracy and is useless."
+  - "Confusing concept drift with anomaly. An anomaly is a rare individual; drift is a moving population."
+importantQuestions:
+  - question: "What's the difference between anomaly detection, outlier detection, and novelty detection?"
+    shortAnswer: |
+      Often used interchangeably. Strictly: outlier detection finds atypical points in your training data; novelty detection finds atypical points in new data the model hasn't seen; anomaly detection is the production framing of either.
+    detailed: |
+      The semantics differ slightly:
+      - **Outlier detection.** Fit on a dataset; identify which points in the dataset are unusual. Train and test on the same data.
+      - **Novelty detection.** Fit on "normal" data only; at inference, score new points as novel or normal. The expected production framing.
+      - **Anomaly detection.** Umbrella term for both, used in industry.
+
+      Practically, the algorithms (Isolation Forest, LOF, OCSVM, autoencoders) work in either setting; the distinction is about evaluation and deployment.
+    pitfalls:
+      - "Don't confuse with 'classification of anomalies' — that's supervised. Anomaly detection means you don't have labels for the rare cases at training time (or have very few)."
+  - question: "How does Isolation Forest work?"
+    shortAnswer: |
+      Builds many random binary trees that recursively partition the data on random features at random thresholds. Anomalies are isolated in fewer splits than normal points. Anomaly score = average path length across the trees.
+    detailed: |
+      Isolation Forest (Liu, Ting, Zhou, 2008) flips the usual approach: instead of modelling what's normal and flagging deviations, it directly identifies what's easy to isolate.
+
+      Algorithm: build T random trees. For each tree, recursively split on a randomly chosen feature at a randomly chosen threshold. Stop when each leaf has one point or some depth limit. For a query point, average its path length across trees. Short path = easy to isolate = likely anomaly.
+
+      Why it works: anomalies are by definition rare and unusual, so random splits separate them quickly. Normal points sit in dense clusters and take longer to isolate. The clever insight is that you don't need to model density to do anomaly detection — you just need to measure separability.
+
+      Scales to millions of points (sub-sampling each tree to a small batch), handles high dimensions reasonably, no distance metric needed. Sklearn's `IsolationForest` is the canonical implementation; in 2026 it's still the default for tabular anomaly detection.
+    pitfalls:
+      - "Contamination parameter: you specify expected anomaly fraction. Set it carefully — too high flags too many; too low misses real anomalies."
+  - question: "When should you use LOF instead of Isolation Forest?"
+    shortAnswer: |
+      Local Outlier Factor (LOF) works on density — a point is anomalous if its local density is much lower than its neighbours'. Use it when anomalies are defined by *local* sparseness, not global rarity.
+    detailed: |
+      LOF (Breunig et al., 2000) computes, for each point, the ratio of its k-nearest-neighbour density to the average density of its neighbours. A point in a sparse region surrounded by points in a dense region scores high (anomalous). A point in a sparse region surrounded by other sparse points scores low (just part of a sparse cluster).
+
+      This local view matters when:
+      - The data has multiple clusters with different densities.
+      - "Anomaly" means "weird relative to my neighbours," not "weird overall."
+
+      LOF doesn't scale as well as Isolation Forest (O(n²) for naive implementations), and the k hyperparameter requires tuning. In practice: Isolation Forest first; LOF when you suspect local-density-mismatch anomalies.
+    pitfalls:
+      - "LOF gives outlier scores, not yes/no labels. You still need a threshold."
+  - question: "How does autoencoder-based anomaly detection compare?"
+    shortAnswer: |
+      Train autoencoder on normal data; flag inputs with high reconstruction error. Best for high-dim, complex-manifold data (images, audio, time series) where structure is hard to characterise statistically.
+    detailed: |
+      The pattern:
+      1. Train an autoencoder on a large sample of normal data.
+      2. At inference, encode + decode the input; compute reconstruction MSE.
+      3. Flag inputs with reconstruction error above a threshold.
+
+      Why this works: the autoencoder learns to reconstruct what's typical efficiently. Unusual inputs aren't represented in the bottleneck and reconstruct poorly.
+
+      Real production uses:
+      - Industrial sensor monitoring (CNN autoencoder on spectrograms).
+      - Medical imaging anomaly detection (e.g., flag unusual MRI patches).
+      - Network intrusion (autoencoder on packet sequences).
+      - Manufacturing defect detection.
+
+      For tabular data, Isolation Forest is usually faster and competitive. Autoencoders earn their place when input is structured (images, sequences) and you have enough normal data to train a neural network.
+    pitfalls:
+      - "Autoencoder anomaly detection is sensitive to bottleneck size. Too small and normal data reconstructs poorly; too large and anomalies reconstruct fine."
+  - question: "How do you evaluate an anomaly detector?"
+    shortAnswer: |
+      Not by accuracy. Use precision-recall on a labelled validation set (even a small one), area under PR curve, or operating-point precision at a fixed false-positive rate. Cost-sensitive metrics if you have cost numbers.
+    detailed: |
+      Accuracy is useless: with 1% anomaly rate, "predict normal always" scores 99%. Precision-recall on a labelled subset is the standard tool:
+
+      - **Precision** at threshold τ: fraction of flagged points that are real anomalies.
+      - **Recall** at threshold τ: fraction of real anomalies flagged.
+      - **PR-AUC**: integrates precision over all thresholds.
+      - **Recall @ fixed FPR**: "how many real anomalies do we catch while flagging at most 1% of normal traffic?"
+
+      In production, you almost always have a small ground-truth set (confirmed fraud cases, confirmed equipment failures). Evaluate against it; tune the threshold accordingly. If you genuinely have zero labels, use the percentile of scores ("flag the top 0.1%") as a rough start and refine based on review.
+    pitfalls:
+      - "Labels for anomalies are noisy. Investigators miss real positives; some flagged anomalies are false alarms. Trust your metric numbers within ±10%."
+  - question: "How is anomaly detection used to monitor production ML models?"
+    shortAnswer: |
+      Two ways: detect anomalous *inputs* (data drift, individual edge cases) and detect anomalous *predictions* (model confidence collapse, weird outputs). Both flag when the deployment context has shifted from training.
+    detailed: |
+      Three monitoring patterns that combine anomaly detection with MLOps:
+
+      - **Input anomaly score per request.** Run Isolation Forest or autoencoder on the input features. High scores indicate the model is being asked something unlike training data — likely to give bad predictions. Used to route to a fallback or human review.
+
+      - **Distribution drift detection.** Compute population-level anomaly scores over rolling time windows. If the mean score is rising, the deployment population has shifted from training. Triggers retraining alerts.
+
+      - **Prediction anomaly.** Score the model's output distribution. If confidence collapses or predictions cluster in one class abnormally, something has broken upstream.
+
+      In 2026 production these are standard in MLOps platforms (Weights & Biases monitoring, Arize, WhyLabs, Evidently). The unsupervised methods in this module are the building blocks under the hood.
+    pitfalls:
+      - "Anomalous input ≠ wrong prediction. The model might handle the anomaly correctly; the score is a signal, not a verdict."
+---
+
+<TldrCallout>
+  Anomaly detection finds rare and unusual examples when you don't have enough labels for supervised
+  classification. In 2026 production, Isolation Forest dominates tabular use cases; autoencoders win
+  on high-dim structured data (images, time series). The hardest part isn't the algorithm — it's the
+  threshold and the evaluation.
+</TldrCallout>
+
+## The problem
+
+Find the unusual points in your dataset (or your live traffic), without labels telling you which are unusual. The applications are real and high-stakes:
+
+- Fraud detection in payments
+- Manufacturing defect detection
+- Network intrusion monitoring
+- Medical imaging abnormalities
+- Equipment failure prediction
+- Production ML model monitoring (data drift, edge cases)
+
+The label scarcity is the core constraint. If you had plenty of confirmed positives, you'd build a classifier (XGBoost, neural net) and skip the unsupervised methods entirely.
+
+## Isolation Forest: the tabular default
+
+The intuition is unusual. Instead of asking "what's normal density, and how far from it is this point?", Isolation Forest asks "how easy is it to isolate this point with random splits?"
+
+Algorithm:
+
+1. Build T random binary trees. At each node, pick a random feature and a random threshold. Split.
+2. Repeat until each leaf has one point (or hits a depth limit).
+3. For any query point, average the path length to its leaf across all T trees.
+4. Short path → easy to isolate → high anomaly score.
+
+The widget below visualises this. Each random tree partitions the plane; an anomaly (the orange point) ends up in a leaf quickly. Click "Run" to score all points; darker shades = higher anomaly scores.
+
+<IsolationForestDemo />
+
+Why this works: anomalies are rare by definition, so random splits land near them quickly. Normal points sit in dense clusters and take many splits to isolate. The method is fast (sub-linear in n with sub-sampling), high-dim friendly, no distance metric needed.
+
+`sklearn.ensemble.IsolationForest` is the canonical implementation. It's the first thing to try on tabular anomaly problems.
+
+<AnalogyCallout>
+  Think of throwing random cleavers into a crowd to separate individuals. Most people are in dense
+  knots — it takes many random cleavers to isolate them. A lone person standing apart gets isolated
+  by the first or second cleaver. Isolation Forest counts how many cleavers it took.
+</AnalogyCallout>
+
+## Local Outlier Factor: when "weird" is local
+
+LOF (Breunig et al., 2000) compares each point's local density to its neighbours' local densities. A point in a sparse region surrounded by a dense region scores high — it's a local outlier. A point in a sparse region surrounded by other sparse points doesn't — it's just part of a sparse cluster.
+
+When LOF beats Isolation Forest:
+
+- Data has multiple clusters with different densities (Isolation Forest gets confused).
+- Anomalies are defined by being weird _relative to their immediate context_.
+
+When it loses:
+
+- Large datasets (LOF is O(n²) without indexes).
+- Very high dimensions (curse of dimensionality on distances).
+
+For a tabular problem with mixed cluster densities, LOF; otherwise default to Isolation Forest.
+
+## Autoencoder reconstruction error
+
+For high-dim structured data — images, audio, time series — the autoencoder approach (A3.6) works well:
+
+1. Train autoencoder on a large sample of normal data only.
+2. At inference, run the input through encoder + decoder.
+3. Compute reconstruction MSE.
+4. Flag inputs with MSE above a threshold.
+
+Why: the AE learns to reconstruct typical inputs efficiently. Atypical inputs aren't in the latent space the AE learned, so they reconstruct poorly.
+
+This dominates in:
+
+- Industrial sensor monitoring (1D autoencoders on time series).
+- Image defect detection (CNN autoencoders).
+- Medical imaging.
+
+For tabular data, Isolation Forest is usually faster and competitive. Reach for autoencoders when the input has rich structure neural nets can exploit.
+
+## The threshold problem
+
+All these methods produce continuous anomaly _scores_, not yes/no labels. You have to pick a threshold. There is no statistical "correct" answer; the right threshold depends on:
+
+- **Cost ratio.** What's the cost of a false positive (waste of investigator time) vs. a false negative (missed fraud)?
+- **Operational capacity.** If you can investigate 100 flagged items per day, flag the top 100.
+- **Domain rate.** A roughly known anomaly fraction in production data.
+
+Practical workflow:
+
+1. Train the detector on a sample of (mostly normal) data.
+2. Score a validation set that includes some confirmed anomalies.
+3. Compute precision-recall at various thresholds.
+4. Pick the threshold matching your operating point.
+5. Monitor precision over time — drift can degrade it.
+
+| Metric             | What it asks                                                             | Good for                  |
+| ------------------ | ------------------------------------------------------------------------ | ------------------------- |
+| Accuracy           | Are predictions right?                                                   | Useless — class imbalance |
+| Precision @ K      | Of the top K flagged, how many are real?                                 | Operational systems       |
+| Recall @ fixed FPR | What fraction of real anomalies do we catch while flagging X% of normal? | Threshold-agnostic        |
+| PR-AUC             | Integrated precision over recall                                         | Model comparison          |
+
+<InlineQuiz
+  question="Your Isolation Forest with default contamination=0.1 flags 10% of credit card transactions as anomalies. Your fraud team can investigate 100/day, and you have 100,000 transactions/day. What's the most useful adjustment?"
+  options={[
+    { text: "Lower contamination to 0.001 to flag fewer transactions." },
+    {
+      text: "Use the anomaly score directly — sort all transactions by score and flag the top 100, regardless of contamination.",
+      correct: true,
+    },
+    { text: "Train a separate classifier on the flagged transactions." },
+    { text: "Increase the number of trees to 5000." },
+  ]}
+  explanation="contamination is a hyperparameter for the binary threshold, but the underlying scores are what matter. Sort transactions by score and take the top 100 — this matches your operational capacity precisely. Decoupling the threshold from the model lets you adjust capacity without retraining. In production, anomaly detectors are almost always operated this way: score continuously, threshold dynamically."
+/>
+
+## Anomaly detection for MLOps
+
+A modern production pattern: deploy a supervised model, and run unsupervised anomaly detection alongside it on the inputs.
+
+- **Input anomaly score per request.** Flag predictions on unusual inputs for downstream review. The model might be wrong; the prediction is at minimum suspect.
+- **Rolling distribution drift.** Compute mean anomaly score over time windows. Rising mean = the production distribution has shifted from training. Trigger retraining.
+- **Prediction anomaly.** Score the model's _output_ distribution. If confidences collapse or one class spikes, upstream data has likely broken.
+
+Platforms like Weights & Biases, Arize, WhyLabs, and Evidently AI implement these patterns; the unsupervised methods in this module are the building blocks.
+
+<InlineQuiz
+  question="You deploy an Isolation Forest for fraud detection. Six months in, the precision has dropped from 0.45 to 0.22. What's the most likely cause and fix?"
+  options={[
+    { text: "The model has overfit. Train a deeper Isolation Forest." },
+    {
+      text: "Distribution drift: the 'normal' population has changed since training. Retrain on recent data and consider periodic refits.",
+      correct: true,
+    },
+    { text: "Anomaly detection accuracy always degrades; this is expected." },
+    { text: "Switch to a deep learning model." },
+  ]}
+  explanation="Static anomaly detectors degrade as the world changes. The 'normal' baseline drifts — new merchant categories, new customer behaviours, new payment methods. The fix is monitoring + retraining: track precision (using your investigation outcomes as labels), retrain on recent data on a schedule, and consider models that adapt online (streaming anomaly detection). 'Anomaly detection always degrades' is fatalism; deeper models don't help if the distribution itself has shifted."
+/>
+
+## Production-ready libraries (2026)
+
+| Library                                        | Best for                                                    |
+| ---------------------------------------------- | ----------------------------------------------------------- |
+| `sklearn.ensemble.IsolationForest`             | Tabular default                                             |
+| `sklearn.neighbors.LocalOutlierFactor`         | Tabular with mixed densities                                |
+| `PyOD`                                         | Unified API across 40+ anomaly methods; production-friendly |
+| PyTorch / TensorFlow autoencoders              | High-dim structured data                                    |
+| Streaming: `river`                             | Online anomaly detection                                    |
+| MLOps monitoring: Arize, WhyLabs, Evidently AI | Drift + anomaly together                                    |
+
+PyOD deserves a name-check: it's the most complete unsupervised anomaly detection library in Python and supports a unified scoring interface across dozens of algorithms. Worth knowing when you're building a real anomaly system.
+
+## Bottom line
+
+Anomaly detection is the most reliably useful unsupervised technique in 2026 production work. The methods are simple; the hard part is the threshold and the evaluation. Build the detector with a clear cost ratio in mind, evaluate against whatever labelled positives you can scrape together, monitor precision continuously, and accept that "rare" is a moving target.

@@ -1,0 +1,227 @@
+---
+title: "Gaussian Mixture Models and density estimation"
+description: "Soft clustering and density modelling: when k-means' hard assignments aren't enough and you need probabilities. EM algorithm intuition + a brief look at kernel density estimation."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: gmm-density
+lessonCode: "A3.8"
+estMinutes: 10
+prereqs:
+  - "A3.2 k-means clustering"
+  - "A1.1 Distributions in the wild"
+objectives:
+  - "Describe a GMM as a weighted sum of Gaussians and explain what 'soft assignment' means."
+  - "Sketch what the EM algorithm does at each step without writing the equations."
+  - "Identify when GMMs (and density estimation in general) make sense in 2026 production."
+pitfalls:
+  - "Treating GMM as 'always better than k-means.' GMMs need more data, take more compute, and assume Gaussian components — which may not hold."
+  - "Using GMM on high-dim data without dimensionality reduction. Full covariance matrices have d² parameters per component; you'll run out of data fast."
+  - "Confusing density estimation with classification. Density tells you 'how likely under this distribution?' — not 'what class does this belong to?'"
+  - "Picking k by maximising training likelihood. Likelihood always improves with more components; use BIC or held-out likelihood."
+importantQuestions:
+  - question: "What is a Gaussian Mixture Model?"
+    shortAnswer: |
+      A probability distribution that's a weighted sum of K Gaussians: p(x) = Σ πₖ · N(x | μₖ, Σₖ). Each Gaussian is a "component"; mixture weights πₖ sum to 1. Used for soft clustering and density estimation.
+    detailed: |
+      Each component has its own mean μₖ, covariance Σₖ, and mixing weight πₖ. The model defines a probability density everywhere in feature space. For any point x, you can compute:
+
+      - Total density p(x) = Σₖ πₖ · N(x | μₖ, Σₖ).
+      - Soft assignment: P(component k | x) = πₖ N(x | μₖ, Σₖ) / p(x) — the responsibility of component k for point x.
+
+      Soft assignment is the key difference from k-means. A point near the boundary of two clusters gets, say, 60% / 40% probabilities for the two components, instead of being hard-assigned to one. This is useful when the data has overlapping clusters.
+
+      GMM with shared spherical covariances and uniform weights reduces to k-means. GMM is k-means with knobs for component shape, size, and overlap.
+    pitfalls:
+      - "Full covariance matrices have O(d²) parameters per component. For high-d data, use 'diagonal' or 'spherical' covariance to reduce dimensions."
+  - question: "How is a GMM fit?"
+    shortAnswer: |
+      The Expectation-Maximisation (EM) algorithm: alternately compute soft assignments (E-step) and update component parameters as weighted means and covariances (M-step). Monotonically increases the data likelihood.
+    detailed: |
+      EM (Dempster, Laird, Rubin, 1977):
+
+      **E-step:** with current parameters, compute the responsibility of each component for each point (probability the point came from that component).
+
+      **M-step:** update each component's mean as the responsibility-weighted average of points; covariance as the responsibility-weighted covariance; mixing weight as the average responsibility.
+
+      Both steps monotonically increase the data log-likelihood (this is provable). The algorithm converges to a local maximum — same caveat as k-means. Multiple random starts and pick the best.
+
+      EM is the general framework for fitting models with latent variables. Many algorithms — GMM, HMM, factor analysis — are special cases. Modern deep generative models (VAEs, diffusion) use variational generalisations of the same idea.
+    pitfalls:
+      - "EM converges to a local maximum. Initialise with k-means centroids for stable results — most libraries do this by default."
+  - question: "How do you pick the number of components K?"
+    shortAnswer: |
+      BIC (Bayesian Information Criterion) is the standard. It rewards higher data likelihood and penalises more parameters. Sweep K, pick the lowest BIC. Held-out log-likelihood works too.
+    detailed: |
+      Training log-likelihood always improves with more components — eventually you'd have one Gaussian per training point. To pick K honestly:
+
+      - **BIC** = -2 · log L + p · log n, where L is the likelihood, p the number of parameters, n the dataset size. Lower is better. Penalises model complexity proportionally to log n.
+      - **AIC** = -2 · log L + 2p. Weaker complexity penalty; tends to over-select components.
+      - **Held-out log-likelihood**. Train on a subset, evaluate likelihood on a held-out set. The honest test.
+      - **Dirichlet Process GMM** (sklearn's `BayesianGaussianMixture`). Lets the model "choose" K by including a prior that suppresses unused components. Effectively non-parametric.
+
+      In practice for production, BIC is the standard quick choice; held-out likelihood for serious work.
+    pitfalls:
+      - "BIC assumes the model family is correct. If your data isn't a mixture of Gaussians, BIC may not pick the most useful K."
+  - question: "When is a GMM the right tool?"
+    shortAnswer: |
+      Soft clustering on tabular data with roughly Gaussian-shaped clusters. Density estimation for anomaly detection (low p(x) = anomaly). Initialising downstream models (clustering before supervised learning).
+    detailed: |
+      Concrete production uses in 2026:
+
+      - **Soft clustering** when you need probabilistic assignments (mixed-membership users, biology, voice activity detection).
+      - **Density-based anomaly detection.** Fit GMM on normal data, flag points with very low p(x). Often competitive with Isolation Forest on tabular data.
+      - **Mixture models for downstream tasks.** E.g., model a regression target as conditional GMM for capturing multimodal outputs (mixture density networks).
+      - **Initialising k-means or downstream methods** when soft assignment is useful.
+
+      Where GMM doesn't fit: image / text / audio (the Gaussian assumption is wrong for raw representations), very high-dim data without preprocessing, when k-means is sufficient.
+    pitfalls:
+      - "GMMs scale O(n·K·d²) per iteration with full covariance. Use diagonal covariance for d > 50."
+  - question: "What's kernel density estimation, briefly?"
+    shortAnswer: |
+      A non-parametric density estimate: place a small kernel (usually Gaussian) on every training point and average. Smooth and flexible, but scales poorly and requires bandwidth tuning.
+    detailed: |
+      KDE: p̂(x) = (1/n) Σᵢ K_h(x − xᵢ), where K_h is a kernel (Gaussian, Epanechnikov) with bandwidth h.
+
+      Pros: makes no parametric assumption about distribution shape. The density adapts to the data.
+
+      Cons: O(n) cost per evaluation (every training point contributes). Bandwidth h must be tuned and dominates the result. Curse of dimensionality — KDE needs exponentially more data as d grows.
+
+      Use cases: 1D or 2D density visualisation (alternative to histograms — `seaborn.kdeplot`), anomaly detection in low-dim feature spaces, smooth interpolation of empirical distributions.
+
+      In 2026 production: mostly visualisation. For density-based anomaly detection on tabular data, GMM or Isolation Forest scale much better.
+    pitfalls:
+      - "Bandwidth selection (Scott's rule, Silverman's rule) is essential and frequently bad. Cross-validate when stakes are high."
+---
+
+<TldrCallout>
+  GMMs model data as a weighted sum of Gaussian components, fit via the Expectation-Maximisation
+  algorithm. They produce soft cluster assignments (probabilities, not hard labels) and act as full
+  probability density estimators. Useful in 2026 for soft clustering, density-based anomaly
+  detection, and as conceptual closure on how EM and probabilistic clustering work.
+</TldrCallout>
+
+## What a GMM is
+
+A Gaussian Mixture Model is a distribution made of K Gaussians:
+
+p(x) = π₁ · N(x | μ₁, Σ₁) + π₂ · N(x | μ₂, Σ₂) + ... + π_K · N(x | μ_K, Σ_K)
+
+with mixing weights πₖ summing to 1. Each component k has its own mean μₖ and covariance Σₖ.
+
+Two interpretations, both useful:
+
+1. **Soft clustering.** Each point belongs to every component with some probability. A point at the border of two components might be 70% / 30%.
+2. **Density estimation.** The model gives you p(x) anywhere — useful for anomaly detection (low p(x) = anomalous) and likelihood-based comparisons.
+
+## GMM vs k-means
+
+Both partition the data into clusters. The differences:
+
+| Aspect                 | k-means               | GMM                                            |
+| ---------------------- | --------------------- | ---------------------------------------------- |
+| Assignment             | Hard (one cluster)    | Soft (probabilities)                           |
+| Cluster shape          | Spherical (Euclidean) | Ellipsoidal (covariance allows tilt and scale) |
+| Output                 | Cluster IDs           | Probabilities + density p(x)                   |
+| Parameters per cluster | mean only             | mean + covariance + weight                     |
+| Training               | Lloyd iteration       | EM algorithm                                   |
+| Sensitive to init      | Yes                   | Yes (initialise with k-means)                  |
+
+For roughly spherical, balanced clusters with clean boundaries: k-means is fine. For overlapping clusters, elongated components, or when you need probabilities: GMM.
+
+## EM in one paragraph
+
+Expectation-Maximisation alternates two steps:
+
+- **E-step.** With current parameters, compute the responsibility of each component for each point (the probability the point came from that component).
+- **M-step.** Update each component's mean, covariance, and weight from the responsibilities (weighted averages).
+
+Both steps monotonically increase the data log-likelihood, so the algorithm converges. To a local maximum — multiple random inits required. `sklearn.mixture.GaussianMixture` initialises with k-means centroids by default.
+
+EM (Dempster, Laird, Rubin, 1977) is the general algorithm for fitting models with latent variables. Many algorithms — GMM, HMM, factor analysis, even modern variational methods — are special cases or generalisations.
+
+<AnalogyCallout>
+  Imagine a school with several classes you can't directly see. You watch students arrive at the
+  building. You guess which class each belongs to from their backpack (E-step). Then you update your
+  stereotype of each class based on the students you assigned to it (M-step). You re-guess each
+  student's class given your updated stereotypes. Repeat. You arrive at consistent stereotypes and
+  consistent guesses — but only one of many possible consistent answers.
+</AnalogyCallout>
+
+## Picking K with BIC
+
+Likelihood always improves with more components — at K = n you have a Gaussian per training point and infinite likelihood. To pick K honestly, penalise complexity:
+
+BIC = -2 · log L + p · log n
+
+where L is the likelihood, p the parameter count, n the dataset size. Lower BIC is better. Sweep K, plot BIC, pick the minimum.
+
+For modest data, BIC tends to be conservative; for very large data it can over-select. Held-out log-likelihood is the most direct test if you can afford the data split.
+
+## Where GMMs earn their place in 2026
+
+- **Soft clustering** when probabilistic membership matters (mixed-membership models, voice activity detection, biology).
+- **Density-based anomaly detection.** Fit on normal data; low p(x) = anomaly. Competitive with Isolation Forest on tabular.
+- **Mixture density networks** (Bishop, 1994). Output a GMM from a neural network — useful when the target distribution is multimodal (robot trajectory prediction, future video frame prediction).
+- **Speaker / source separation** in audio (older but still used).
+- **Pedagogically**, as the canonical example of latent-variable models — the bridge to VAEs and modern probabilistic deep learning.
+
+Where they're not the right tool:
+
+- Image, text, audio raw representations (Gaussian assumption wrong).
+- Very high-dim data without dimensionality reduction (covariance matrices blow up).
+- Anywhere k-means is sufficient (cheaper).
+
+<InlineQuiz
+  question="Your data has two heavily overlapping elongated clusters at a 30-degree angle to each other. Which algorithm is most appropriate?"
+  options={[
+    { text: "k-means with k=2." },
+    {
+      text: "GMM with K=2 and full covariance — the ellipsoidal components capture orientation and overlap.",
+      correct: true,
+    },
+    { text: "DBSCAN." },
+    { text: "Hierarchical clustering with single linkage." },
+  ]}
+  explanation="k-means assumes spherical clusters and would split the elongated shapes poorly. DBSCAN doesn't handle overlap well (the dense regions merge). Hierarchical with single linkage chains points along the overlap. GMM with full covariance allows each component to have its own orientation and shape — exactly fitting elongated tilted clusters. This is one of the cases where GMM's extra parameters pay off."
+/>
+
+## A note on kernel density estimation
+
+KDE is the non-parametric alternative: place a small Gaussian on every training point, average. Get a smooth density estimate without assuming any parametric form.
+
+p̂(x) = (1/n) Σᵢ K_h(x − xᵢ)
+
+Pros: very flexible. Cons: O(n) per evaluation, bandwidth h must be tuned, scales terribly with dimensions.
+
+In 2026 production, KDE is mostly used for 1D / 2D visualisations (`seaborn.kdeplot`, `matplotlib.contour`). For density-based anomaly detection on real data, GMM or Isolation Forest are more practical.
+
+<InlineQuiz
+  question="You fit a GMM to your training data and the log-likelihood is monotonically increasing as you add components. What's the right next step?"
+  options={[
+    { text: "Add components until the training likelihood stops improving — that's the right K." },
+    {
+      text: "Compute BIC or held-out log-likelihood for each K — training likelihood alone always favours more components.",
+      correct: true,
+    },
+    { text: "Switch to k-means; GMM is overfitting." },
+    { text: "Standardise the features before fitting." },
+  ]}
+  explanation="Training likelihood is monotonic in K; using it to pick K leads to K = n with each Gaussian centred on one training point and infinite likelihood. BIC adds a complexity penalty proportional to log(n); held-out likelihood directly tests generalisation. Both reveal the right K. This is the GMM equivalent of 'don't pick k-means k by inertia alone.'"
+/>
+
+## Closing the unsupervised module
+
+This module has covered:
+
+- **A3.1** — framing the problem and its evaluation challenges.
+- **A3.2** — k-means as the fast, ubiquitous baseline.
+- **A3.3** — DBSCAN / HDBSCAN / hierarchical when k-means breaks.
+- **A3.4** — PCA, the linear dimensionality-reduction workhorse.
+- **A3.5** — t-SNE and UMAP for visualising embeddings.
+- **A3.6** — autoencoders, the bridge to learned representations.
+- **A3.7** — anomaly detection as the most reliable production use.
+- **A3.8** — GMMs and density estimation, closing the probabilistic thread.
+
+The next module shifts to neural networks proper (Module 4), where the optimisation patterns from A2 and A3 get applied at depth and scale. The unsupervised techniques here resurface in pipelines: PCA before neural compression, autoencoders for anomaly detection on deep features, UMAP for visualising what trained models have learned. They're rarely the headline, often the supporting cast.

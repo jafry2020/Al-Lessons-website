@@ -1,0 +1,225 @@
+---
+title: "Principal Component Analysis (PCA)"
+description: "The dimensionality reduction workhorse. Find the orthogonal directions in your data that capture the most variance, project, and proceed — still indispensable in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: pca
+lessonCode: "A3.4"
+estMinutes: 15
+prereqs:
+  - "A0.5 Linear algebra for machine learning"
+  - "A3.1 The unsupervised problem"
+objectives:
+  - "Derive PCA as the eigendecomposition of the covariance matrix and explain why those eigenvectors are the directions of maximum variance."
+  - "Read the explained-variance curve and choose the number of components for a target retention level."
+  - "Decide between PCA, random projection, and a learned encoder for compression in production."
+pitfalls:
+  - "Skipping standardisation. PCA on unscaled features finds the directions of the highest-variance feature, not the structure you want."
+  - "Treating PCA components as interpretable. They're linear combinations of features; sometimes a story is there, often not."
+  - "Using PCA on non-linear data and expecting it to find non-linear structure. It can't — that's what kernel PCA, t-SNE, UMAP, and autoencoders are for."
+  - "Computing covariance and eigendecomposing for huge d. Use SVD on the (centred) data matrix; numerically stable and faster."
+  - "Forgetting to fit on training data only. Test-time PCA must use training-time mean and components."
+importantQuestions:
+  - question: "What does PCA actually compute?"
+    shortAnswer: "The orthogonal directions (principal components) along which the data has the most variance, plus how much variance each captures. Project data onto the top-k components to compress from d to k dimensions."
+    detailed: |
+      Formally: centre the data (subtract the mean of each feature). Compute the covariance matrix Σ = (1/n)XᵀX. Eigendecompose: Σ = V D Vᵀ, where columns of V are eigenvectors (principal components) and D is diagonal with eigenvalues (variances along each component). Sort eigenvectors by eigenvalue in descending order.
+
+      The top-k eigenvectors give the k-dimensional subspace that, among all k-dimensional projections, preserves the most variance of the original data. Project: Z = X V_k (where V_k is the d×k matrix of top-k eigenvectors). To reconstruct: X̂ = Z V_kᵀ. The reconstruction error is exactly the sum of the discarded eigenvalues.
+
+      In practice, you use SVD on the centred data matrix instead of eigendecomposing covariance — numerically much better. `sklearn.decomposition.PCA` does this for you.
+    pitfalls:
+      - "PCA is sensitive to scale. Standardise features first (StandardScaler) unless they're already on comparable scales."
+  - question: "Why is PCA the same as minimising reconstruction error?"
+    shortAnswer: "Maximising captured variance and minimising reconstruction MSE are mathematically equivalent. The k-dim subspace that loses the least squared error in reconstruction is exactly the subspace of top-k principal components."
+    detailed: |
+      Total variance in the data = sum of eigenvalues. Captured variance with top-k components = sum of top-k eigenvalues. Discarded variance = sum of bottom (d−k) eigenvalues = reconstruction MSE.
+
+      This duality is why PCA pops up under different names: principal subspace, low-rank matrix approximation, optimal linear compression. The Eckart-Young theorem (1936) gave it formally: the best rank-k approximation of a matrix (in Frobenius norm) is obtained by zeroing out the smallest singular values in its SVD.
+
+      Practical implication: the "explained variance ratio" — eigenvalue / sum of eigenvalues — tells you how much information you keep. Plot the cumulative version and pick k where you've kept enough (often 90-95% for downstream models).
+    pitfalls:
+      - "Reconstruction error is in feature units; if features have different scales (which is why you standardised), interpret cautiously."
+  - question: "How do you choose the number of components?"
+    shortAnswer: |
+      Three approaches: variance threshold (keep enough components to explain 90-95% variance), elbow on the explained-variance plot, or cross-validate downstream performance. The last is the most honest.
+    detailed: |
+      **Variance threshold**: `PCA(n_components=0.95)` in sklearn keeps the minimum number of components needed to retain 95% of variance. Common defaults: 0.90 to 0.99. Quick and reasonable for noise reduction.
+
+      **Elbow / scree plot**: plot eigenvalue (or explained variance) vs component index. The "elbow" is where additional components start adding marginal variance. Subjective.
+
+      **Downstream cross-validation**: if PCA feeds a downstream model, sweep the number of components and pick the value that gives the best validation score. The principled answer.
+
+      In NLP and computer vision, PCA used to be used as a denoising preprocessor (e.g., word embedding decompression). Modern practice is to use the learned representation directly. PCA stays popular in tabular ML, financial modelling, and where deep models can't go (regulatory constraints).
+    pitfalls:
+      - "Holding out a few extra components 'just in case' is wasteful. Components after your chosen k contain almost only noise; including them often hurts."
+  - question: "When does PCA fail?"
+    shortAnswer: "When the structure in your data is non-linear. PCA only finds linear subspaces; a swiss roll, a spiral, or any non-linear manifold in high-dim space looks like noise to PCA."
+    detailed: |
+      Classic failure case: the swiss roll dataset. The true intrinsic structure is 2D (the roll, unrolled), but it's curved through 3D space. PCA's best 2D projection captures the variance of the rolling motion, not the underlying 2D coordinate.
+
+      Fixes:
+      - **Kernel PCA**: apply PCA in a higher-dim feature space implicitly via a kernel. Can capture some non-linearity but doesn't scale (Gram matrix is O(n²)).
+      - **t-SNE / UMAP**: non-linear dimensionality reduction for visualisation (A3.5).
+      - **Autoencoders**: learn the projection function with a neural network. Captures arbitrary non-linearity (A3.6).
+      - **Manifold learning** (Isomap, LLE): historically interesting; rarely used today.
+
+      For 2026 deployment: if your data is linear or close to it, PCA. If it's non-linear and you need a learned representation, train (or use a pretrained) encoder. Use t-SNE/UMAP for visualisation only.
+    pitfalls:
+      - "Kernel PCA was a 2000s favourite. Today, autoencoders dominate for the same use case — better scalability, learnable."
+  - question: "What's the difference between PCA and SVD?"
+    shortAnswer: "PCA is a *use* of SVD applied to the centred data matrix. SVD is the general matrix factorisation X = U Σ Vᵀ. PCA = SVD on (X − mean), with the right eigenvectors becoming the principal components."
+    detailed: |
+      SVD factorises any matrix: X = U Σ Vᵀ, where U has left singular vectors, V has right singular vectors, and Σ is diagonal with singular values. For centred X:
+
+      - V = principal components (the eigenvectors of XᵀX).
+      - Σ² = eigenvalues of XᵀX (variance along each component).
+      - U·Σ = projected data Z.
+
+      Practical: `np.linalg.svd(X_centred)` is what sklearn's PCA calls under the hood. SVD is numerically more stable than forming XᵀX and eigendecomposing (especially for ill-conditioned X).
+
+      SVD also has uses beyond PCA: matrix completion (recommendation systems, Netflix prize-era), latent semantic analysis in NLP, image compression. PCA is the centred-data, eigenvalue-sorted use case.
+    pitfalls:
+      - "Truncated SVD (`sklearn.decomposition.TruncatedSVD`) is PCA without centring — used for sparse data (e.g., TF-IDF matrices) where you can't afford to centre."
+  - question: "When does PCA still matter in 2026?"
+    shortAnswer: "Tabular feature compression, denoising before classical models, financial risk modelling (factor models), visualising classical data, and as a fast baseline for any compression task. Less prominent in modern NLP/vision; still ubiquitous in tabular."
+    detailed: |
+      Strong production uses today:
+      - **Tabular feature compression** before linear or boosted-tree models. Reduces correlated features to uncorrelated components.
+      - **Factor models in quant finance.** Returns decomposed into market, size, value, momentum factors (essentially PCA).
+      - **Image preprocessing** for classical computer vision (whitening, dewhitening).
+      - **Initialising matrices in deep learning** (whitening initialisation).
+      - **Fast baselines for embedding compression**: shrinking a 1536-dim OpenAI embedding to 256 dims with PCA often loses very little retrieval quality.
+
+      What's faded: PCA as a preprocessor for deep models (they learn their own features), PCA for non-linear data (autoencoders and UMAP took over).
+    pitfalls:
+      - "Random projection (Johnson-Lindenstrauss) is even cheaper than PCA and surprisingly competitive for many compression tasks. Worth knowing."
+---
+
+<TldrCallout>
+  PCA finds the orthogonal directions in your data that capture the most variance. Project onto the
+  top-k of these directions and you have a k-dim compression that loses the least possible squared
+  error. Mathematically: SVD of the centred data matrix. Practically: still the default for tabular
+  feature compression, denoising, and fast baselines — even in an era of learned representations.
+</TldrCallout>
+
+## The intuition
+
+You have data in d dimensions. Most of the "spread" is along a few directions; the rest is noise. PCA finds those directions.
+
+For a 2D dataset shaped like a tilted ellipse, the first principal component is the long axis of the ellipse, the second is the short axis. Project onto the long axis only and you've gone from 2D to 1D while keeping most of the variation.
+
+Generalise to d dimensions: PCA finds d orthogonal axes ordered by how much variance they capture. Keep the top k, throw away the rest. Compression with the smallest possible squared reconstruction error.
+
+<AnalogyCallout>
+  Imagine a school of fish that swims mostly forward, slightly up-and-down, and barely sideways. PCA
+  hands you three axes: "forward," "up-down," "sideways," ordered by how much fish-motion happens
+  along each. Keep only the first axis and you've captured most of the school's behaviour in a 1D
+  summary.
+</AnalogyCallout>
+
+## See it on a 2D dataset
+
+The widget below shows a 2D dataset and its two principal components as arrows from the mean. The lengths are proportional to standard deviation along each axis. Toggle "Project to PC1" to see the data collapsed onto the first component (and the reconstruction).
+
+<PCAProjection />
+
+Things to notice:
+
+- PC1 aligns with the elongation of the cloud — the direction of maximum variance.
+- PC2 is perpendicular to PC1.
+- Projecting to PC1 only loses the perpendicular spread (PC2 variance). That spread is the reconstruction error.
+
+## The math, briefly
+
+1. Centre the data: X̃ = X − mean(X) column-wise.
+2. Compute the covariance matrix: Σ = (1/n) X̃ᵀ X̃ (a d × d matrix).
+3. Eigendecompose Σ: Σ = V D Vᵀ. Columns of V are eigenvectors (principal components); diagonal of D contains eigenvalues (variances along each).
+4. Sort by eigenvalue descending. The top k columns of V form V_k.
+5. Project: Z = X̃ V_k. Reconstruct: X̂ = Z V_kᵀ + mean.
+
+In practice you skip the covariance matrix and run SVD on X̃ directly — numerically much better. `sklearn.decomposition.PCA` does this under the hood.
+
+## Reading the explained variance curve
+
+After fitting PCA, look at `explained_variance_ratio_` — the fraction of total variance captured by each component. Plot the cumulative version:
+
+| Components kept | Variance retained (typical tabular) |
+| --------------- | ----------------------------------- |
+| 1               | 30–60%                              |
+| 5               | 60–85%                              |
+| 20              | 85–95%                              |
+| All             | 100%                                |
+
+Pick k where the curve flattens, or where you've crossed your target threshold (often 90% or 95%). Going past that point keeps mostly noise.
+
+## When PCA fails
+
+PCA is linear. If your data lives on a curved manifold — a swiss roll, a spiral, the natural image manifold — PCA can't find it.
+
+For such data:
+
+| Method            | When                                                                        |
+| ----------------- | --------------------------------------------------------------------------- |
+| Kernel PCA        | Small to medium data with known non-linear kernel structure                 |
+| t-SNE / UMAP      | Visualisation of clusters (not a model in the supervised pipeline)          |
+| Autoencoder       | Learnable encoder for non-linear compression — modern default               |
+| Random projection | When you need any low-dim projection cheaply and don't care about structure |
+
+The honest summary: for linear-ish tabular data, PCA. For non-linear data and visualisation, t-SNE/UMAP (A3.5). For non-linear data and downstream models, an autoencoder (A3.6).
+
+<InlineQuiz
+  question="You apply PCA to 100,000 images (32×32×3 = 3072 pixels each) and find the first 50 components explain 95% of variance. You feed those 50-d projections to a logistic regression and accuracy is 35%. A small CNN on the raw images gets 78%. What's the most likely explanation?"
+  options={[
+    { text: "PCA needs more components." },
+    {
+      text: "Image structure is highly non-linear; PCA's linear projection discards features the CNN learns to use.",
+      correct: true,
+    },
+    { text: "The logistic regression is overfit." },
+    { text: "Centring the images was a mistake." },
+  ]}
+  explanation="PCA's 95% variance is variance in raw pixels — which doesn't correspond to semantic image content. The CNN learns non-linear features (edges, textures, parts) that PCA can't represent in any number of linear components. This is exactly why deep learning replaced PCA-based pipelines in computer vision. PCA is still fine for compressing tabular data or pre-extracted embeddings; not for raw pixels."
+/>
+
+## PCA in production, 2026
+
+The places PCA shows up regularly:
+
+- **Tabular feature compression.** Reducing 200 correlated features to 30 uncorrelated ones before a linear model.
+- **Embedding compression.** 1536-dim OpenAI embeddings → 256 dims via PCA loses very little retrieval quality and quarters your storage.
+- **Whitening.** Decorrelating features before downstream models or training data augmentation.
+- **Factor models in finance.** PCA on stock returns to identify market factors (the largest eigenvector is "the market").
+- **Visualisation baseline.** Project to 2D for a quick look before reaching for UMAP.
+
+What's faded: PCA as preprocessing for image/text deep models (they learn their own representations), kernel PCA for non-linear problems (autoencoders).
+
+<InlineQuiz
+  question="You PCA-compress a 1536-dim text embedding to 256 dims. Retrieval recall@10 drops from 0.94 to 0.92. Is this acceptable?"
+  options={[
+    { text: "No — any drop in recall is unacceptable." },
+    {
+      text: "Usually yes — the 6× storage saving and faster inference are worth a 2-point recall hit for most systems.",
+      correct: true,
+    },
+    { text: "No — PCA shouldn't be applied to learned embeddings." },
+    { text: "Acceptable only if the embeddings were trained with PCA in mind." },
+  ]}
+  explanation="2-point recall@10 for 6× compression is a typical and acceptable trade-off in production retrieval systems. PCA on learned embeddings is a well-known technique (OpenAI's docs explicitly recommend it for the latest models). Some embedding models (Matryoshka representations) are even trained to be truncation-friendly without PCA. The 'never compress' position ignores deployment realities."
+/>
+
+## A pragmatic cheat sheet
+
+| Use case                                            | Method                              |
+| --------------------------------------------------- | ----------------------------------- |
+| Compress correlated tabular features                | PCA                                 |
+| Compress learned embeddings (text, image)           | PCA or Matryoshka truncation        |
+| Denoising before classical model                    | PCA with ~90% variance retained     |
+| Visualise high-dim data (clusters)                  | UMAP or t-SNE (A3.5)                |
+| Non-linear compression for a downstream model       | Autoencoder (A3.6)                  |
+| Random fast compression with theoretical guarantees | Gaussian random projection          |
+| Sparse high-dim text features (TF-IDF)              | TruncatedSVD (PCA without centring) |
+
+In short: PCA is the linear baseline you always know and often reach for; reach past it only when you have a reason.

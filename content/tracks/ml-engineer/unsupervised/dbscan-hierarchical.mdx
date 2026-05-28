@@ -1,0 +1,204 @@
+---
+title: "DBSCAN and hierarchical clustering"
+description: "What to reach for when k-means breaks: density-based clustering for irregular shapes, agglomerative clustering when you want the full tree."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: dbscan-hierarchical
+lessonCode: "A3.3"
+estMinutes: 11
+prereqs:
+  - "A3.2 k-means clustering"
+objectives:
+  - "Apply DBSCAN's density rule (core, border, noise) and pick its two hyperparameters."
+  - "Read a dendrogram and choose where to cut it to obtain k clusters."
+  - "Choose between k-means, DBSCAN, HDBSCAN, and agglomerative clustering for a given dataset."
+pitfalls:
+  - "Tuning eps by guessing. Use the k-distance plot — it's almost the only honest way."
+  - "Using DBSCAN on data with widely varying density. Single eps can't fit both tight and loose clusters."
+  - "Reading a dendrogram top-down. Read it bottom-up: nearby leaves merge first."
+  - "Picking hierarchical for large n. It's O(n²) or worse — impractical above ~10⁵ points."
+importantQuestions:
+  - question: "How does DBSCAN decide what's a cluster?"
+    shortAnswer: "Cluster = connected region of points where each point has at least min_samples neighbours within distance eps. Points that don't meet that bar are noise."
+    detailed: |
+      DBSCAN (Ester et al., 1996) uses two parameters:
+      - **eps** (ε): the neighbourhood radius.
+      - **min_samples**: the minimum number of points within eps for a point to be a "core point."
+
+      Algorithm: for each unvisited point, check if it has ≥ min_samples within eps. If yes, it's a core point — start a cluster, recursively include all its eps-reachable neighbours. Points within eps of a core point but not themselves core are "border" points. Points reachable from no core point are "noise" (label −1).
+
+      Result: clusters of arbitrary shape, no need to specify k in advance, explicit noise labels. The trade-off: two hyperparameters that don't generalise across datasets, and a single eps that works poorly when clusters have very different densities.
+    pitfalls:
+      - "DBSCAN doesn't predict on new points natively. You'd assign a new point by checking which cluster's points are within eps."
+  - question: "How do you choose eps and min_samples?"
+    shortAnswer: |
+      min_samples ≈ 2·d (twice the dimensionality) is a common default. For eps, plot the sorted distance from each point to its k-th nearest neighbour (k = min_samples − 1) and pick the 'knee' — the distance where the curve bends upward.
+    detailed: |
+      The k-distance plot is the standard tool. Sort all points by their distance to their k-th nearest neighbour (k = min_samples − 1). The curve is mostly flat at first (most points have similar local density) then bends upward (the noise points have farther neighbours). The bend is your eps.
+
+      For min_samples: rule of thumb is 2·d (for 2D, use 4; for 10D, use 20). Larger min_samples → fewer, more conservative clusters and more noise; smaller → many small clusters.
+
+      In high-dimensional spaces (d > 50), eps becomes uninformative — distances cluster around a single value. This is the curse of dimensionality, and DBSCAN inherits it. Reduce dimensionality first (PCA, UMAP) or use HDBSCAN, which handles varying density better.
+    pitfalls:
+      - "If your data has clusters with different densities, no single eps works. Use HDBSCAN (hierarchical density-based)."
+  - question: "What's HDBSCAN, and why is it usually a better default?"
+    shortAnswer: "HDBSCAN runs DBSCAN at all eps simultaneously and selects the most stable clusters. It handles varying densities, has one main hyperparameter (min_cluster_size), and is the modern default for density-based clustering."
+    detailed: |
+      HDBSCAN (Campello, Moulavi, Sander, 2013) builds a hierarchy of DBSCAN-like clusters across the full range of eps values, then extracts the most "stable" flat clustering — clusters that persist across many eps levels. This solves DBSCAN's biggest weakness: needing one eps for everything.
+
+      One parameter: min_cluster_size (the smallest cluster you'd consider real). The library `hdbscan` is widely used; sklearn 1.3+ has it as `HDBSCAN`.
+
+      In production for embedding-based clustering (UMAP → HDBSCAN is a common pattern in NLP, topic modelling, customer analytics), HDBSCAN is the dominant choice. It identifies natural cluster counts and handles noise gracefully.
+    pitfalls:
+      - "HDBSCAN doesn't give you 'k clusters' on demand. The algorithm decides; sometimes it picks fewer or more than you expected."
+  - question: "What's a dendrogram and how do you read one?"
+    shortAnswer: "A tree showing which points (and then which clusters) merge first when distance is increased. Bottom = individual points; top = one big cluster. Cut at a chosen height to get a flat clustering."
+    detailed: |
+      Hierarchical agglomerative clustering starts with each point as its own cluster, then repeatedly merges the two closest clusters until everything is one. The merge order is the dendrogram.
+
+      To get k clusters, draw a horizontal line at a height that crosses exactly k branches — every branch below the line is a cluster. The height encodes how "different" the merged groups were when they joined.
+
+      The "linkage" choice determines how cluster-to-cluster distance is defined:
+      - **single**: minimum distance between any pair (chains together long thin clusters; vulnerable to one bridge of points connecting them).
+      - **complete**: maximum distance (compact, spherical clusters).
+      - **average**: mean of all pairwise distances.
+      - **Ward**: minimises within-cluster variance (most popular, produces k-means-like clusters).
+
+      Dendrograms are diagnostic: you can see whether the data has a clear cluster count (big gap before final merges) or a continuum (all merge heights roughly similar).
+    pitfalls:
+      - "Hierarchical clustering is O(n²) memory and O(n³) time in naive implementations. For n > 10⁴, you'll need approximate methods or k-means + UMAP first."
+  - question: "Which algorithm should you reach for, when?"
+    shortAnswer: |
+      k-means for fast preprocessing or roughly spherical clusters with known k. DBSCAN / HDBSCAN for arbitrary-shape clusters or unknown k. Hierarchical / Ward when you want the dendrogram for analysis. UMAP+HDBSCAN as the modern default for clustering embeddings.
+    detailed: |
+      | Scenario | Algorithm |
+      | -------- | --------- |
+      | Vector quantisation, fast pipelining | k-means / mini-batch k-means |
+      | Known k, blob-like clusters | k-means |
+      | Irregular shapes, unknown k | DBSCAN (single density) or HDBSCAN (varying density) |
+      | Need a tree / want to inspect cluster structure | Agglomerative with Ward linkage |
+      | Clustering high-dim embeddings (text, images) | UMAP to 2D-10D, then HDBSCAN |
+      | Billion-scale | Mini-batch k-means or Faiss IVF |
+
+      For modern NLP topic modelling (BERTopic, top2vec), the pattern is: embed sentences with sentence-transformers → UMAP to ~5-10 dims → HDBSCAN → label each cluster with extracted keywords or an LLM call. This pipeline is far more useful than any single classical algorithm.
+    pitfalls:
+      - "Don't choose by familiarity. Look at the data shape (try 2D projections) before picking the algorithm."
+---
+
+<TldrCallout>
+  When k-means fails — irregular shapes, unknown k, varying density — the right tools are
+  density-based clustering (DBSCAN, HDBSCAN) for arbitrary shapes and hierarchical clustering for
+  inspecting the cluster structure as a tree. In production, UMAP + HDBSCAN on embeddings is the
+  modern default for clustering text or image data.
+</TldrCallout>
+
+## DBSCAN: density-based clustering
+
+DBSCAN (Ester et al., 1996) defines a cluster as a connected region of dense points. Two parameters:
+
+- **eps (ε)** — the neighbourhood radius.
+- **min_samples** — the minimum number of points in an eps-radius ball for a point to be considered a "core point."
+
+Every point falls into one of three categories:
+
+- **Core point.** Has ≥ min_samples neighbours within eps. Anchors a cluster.
+- **Border point.** Within eps of a core point but doesn't itself meet the density threshold. Joins the cluster.
+- **Noise point.** Reachable from no core point. Gets label −1.
+
+The output: a number of clusters of arbitrary shape, plus a noise set. No need to pre-specify k.
+
+<AnalogyCallout>
+  Imagine spreading marbles on a table. A cluster is any group of marbles where every marble has at
+  least four neighbours within an inch. Marbles too far from the crowd are loners — noise. The
+  clusters can be any shape: a circle, a crescent, a long snake. DBSCAN finds them all.
+</AnalogyCallout>
+
+## Picking eps with the k-distance plot
+
+For each point, compute its distance to its k-th nearest neighbour (where k = min_samples − 1). Sort and plot. The curve is mostly flat then bends upward — the bend is your eps. This is the closest thing to an "objective" choice DBSCAN allows.
+
+Default rule of thumb for min_samples: 2 × dimensionality. For 2D data, min_samples = 4 is a sensible start; for 10D, 20.
+
+The catch: a single eps can't fit clusters with very different densities. A tight cluster and a sparse one need different eps. This is exactly what HDBSCAN solves.
+
+## HDBSCAN: the modern default
+
+HDBSCAN (Campello et al., 2013) runs DBSCAN at all eps levels simultaneously and extracts the most _stable_ clusters — those that persist across a wide range of eps. The result:
+
+- One main hyperparameter: `min_cluster_size`.
+- Handles varying density.
+- Returns probabilistic cluster membership.
+
+For clustering text embeddings (BERTopic, top2vec workflows), image embeddings (medical imaging cohorts), or anything where you don't want to babysit eps, **HDBSCAN is the default to reach for**. The Python library `hdbscan` is standard; sklearn 1.3+ ships it as `HDBSCAN`.
+
+## Hierarchical clustering and dendrograms
+
+Hierarchical agglomerative clustering starts with every point as its own cluster, then repeatedly merges the two closest clusters. The merge order forms a **dendrogram**:
+
+- Bottom: each leaf is a point.
+- Going up: clusters merge at heights proportional to their distance.
+- Top: everything is one cluster.
+
+To get k clusters, cut the dendrogram at a height that crosses exactly k branches.
+
+| Linkage  | Cluster distance =                  | When to use                                      |
+| -------- | ----------------------------------- | ------------------------------------------------ |
+| single   | min point-to-point distance         | Chained/elongated clusters; sensitive to bridges |
+| complete | max point-to-point distance         | Compact, spherical clusters                      |
+| average  | mean pairwise distance              | Balanced; good general default                   |
+| Ward     | increase in within-cluster variance | Most popular; produces k-means-like clusters     |
+
+Strength: the dendrogram is _diagnostic_. A clear gap before the final few merges means the data really does have natural clusters; a smooth dendrogram means it doesn't.
+
+Weakness: O(n²) memory, O(n²·log n) time at best. Impractical above ~10⁴–10⁵ points without approximations.
+
+<InlineQuiz
+  question="You're clustering 50,000 customer-engagement embeddings (512 dimensions each). Which pipeline is most realistic in 2026?"
+  options={[
+    { text: "Hierarchical clustering with Ward linkage directly on the 512-dim vectors." },
+    { text: "k-means with k=5 (a common default)." },
+    { text: "UMAP to 5–10 dimensions, then HDBSCAN with min_cluster_size=100.", correct: true },
+    { text: "Train an LLM to label each customer." },
+  ]}
+  explanation="UMAP + HDBSCAN is the dominant 2026 pattern for clustering embeddings. UMAP reduces noise and brings the points into a space where density-based clustering works; HDBSCAN handles irregular shapes and varying density and decides k itself. Hierarchical is O(n²) — too slow at this scale. k-means assumes spherical clusters and demands a pre-chosen k. LLM-labelling is overkill (and not clustering)."
+/>
+
+## Picking the algorithm — a cheat sheet
+
+| Situation                                        | Reach for                                    |
+| ------------------------------------------------ | -------------------------------------------- |
+| Need a fast first cut on tabular data            | k-means or mini-batch k-means                |
+| Clusters look like blobs and you have a target k | k-means                                      |
+| Clusters are weird shapes or you don't know k    | DBSCAN (single density) or HDBSCAN (varying) |
+| Want a tree of cluster structure                 | Hierarchical (Ward)                          |
+| Clustering high-dim embeddings                   | UMAP → HDBSCAN                               |
+| Vector database / billion-scale                  | Faiss IVF (k-means under the hood)           |
+
+The single biggest meta-rule: visualise your data first (2D projection with UMAP, t-SNE, or PCA — covered in A3.4 and A3.5). If the projection shows obvious blobs, k-means works. If it shows shapes or chains, switch.
+
+<InlineQuiz
+  question="DBSCAN labels 18% of your data as noise. Your stakeholder says 'every point should belong to a cluster.' What's the right response?"
+  options={[
+    { text: "Lower eps until every point is assigned." },
+    {
+      text: "DBSCAN's noise label is a feature, not a bug — those points genuinely don't belong to any dense region. Either accept it, assign noise points to the nearest cluster post-hoc, or use a different algorithm.",
+      correct: true,
+    },
+    { text: "Switch to k-means, which doesn't have a noise label." },
+    { text: "Re-run DBSCAN with much larger min_samples." },
+  ]}
+  explanation="DBSCAN is explicit about which points aren't dense enough to belong anywhere. Forcing assignment defeats the algorithm's purpose. If 'every point must belong' is a hard requirement, k-means or HDBSCAN with cluster_selection_method='leaf' is more appropriate — or you can post-hoc assign noise to the nearest cluster centroid. Don't tune eps to hide the structure."
+/>
+
+## In practice
+
+For most modern clustering work — especially anything involving embeddings — the pipeline is:
+
+1. Embed (with a learned model: sentence-transformers, CLIP, a domain-specific encoder).
+2. Reduce dimensions (UMAP to 5–10 dims).
+3. Cluster (HDBSCAN with a sensible min_cluster_size).
+4. Inspect each cluster (manually, or by passing samples to an LLM for labelling).
+
+The classical algorithms — k-means, DBSCAN, hierarchical — are building blocks. The intelligence in the modern pipeline lives in the embeddings, not the clustering algorithm.

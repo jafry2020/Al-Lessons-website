@@ -20,6 +20,9 @@ import { DecisionTreeSplit } from "../viz/DecisionTreeSplit";
 import { BaggingVariance } from "../viz/BaggingVariance";
 import { BoostingResiduals } from "../viz/BoostingResiduals";
 import { KnnRegions } from "../viz/KnnRegions";
+import { KMeansIterations } from "../viz/KMeansIterations";
+import { PCAProjection } from "../viz/PCAProjection";
+import { IsolationForestDemo } from "../viz/IsolationForestDemo";
 
 /**
  * Components available inside any .mdx lesson file.
@@ -54,6 +57,9 @@ export const mdxComponents: MDXComponents = {
   BaggingVariance,
   BoostingResiduals,
   KnnRegions,
+  KMeansIterations,
+  PCAProjection,
+  IsolationForestDemo,
 
   // Markdown overrides: align native MD output with the design system.
   h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,

@@ -1,0 +1,193 @@
+---
+title: "k-means clustering"
+description: "The simplest, fastest, most overused clustering algorithm. Master its assumptions and you'll know when it's the right default and when you're about to ship something embarrassing."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: k-means
+lessonCode: "A3.2"
+estMinutes: 13
+prereqs:
+  - "A3.1 The unsupervised problem"
+  - "A0.5 Linear algebra for machine learning"
+objectives:
+  - "Run the k-means iteration in your head — assign, update, repeat — and describe what each step optimises."
+  - "Identify the four assumptions k-means makes that often fail in real data."
+  - "Pick k with the elbow method or silhouette, knowing both are heuristics rather than answers."
+pitfalls:
+  - "Picking k by 'looks right.' Use the elbow plot or silhouette — and even those are heuristics."
+  - "Forgetting to scale features. k-means uses Euclidean distance; unscaled features dominate."
+  - "Using k-means on non-spherical clusters. The algorithm assumes blobs; on moons or rings it produces nonsense."
+  - "Initialising centroids randomly without k-means++. Random init produces wildly different results across runs."
+  - "Interpreting cluster IDs as meaningful labels. k-means assigns 0/1/2; humans have to interpret what each cluster represents."
+importantQuestions:
+  - question: "What is the k-means objective and what does the algorithm actually minimise?"
+    shortAnswer: "Inertia: the sum of squared distances from each point to its assigned cluster centroid. k-means alternates between assigning points to nearest centroid and recomputing centroids, monotonically decreasing inertia."
+    detailed: |
+      Formally: minimise Σᵢ ‖xᵢ − μ_c(i)‖² over both the assignment c(·) and the centroids μ_k. This is NP-hard in general; k-means (Lloyd's algorithm, 1957) uses a greedy coordinate-descent heuristic:
+
+      1. **Assign**: for each point, set c(i) = argmin_k ‖xᵢ − μ_k‖². Inertia goes down or stays the same.
+      2. **Update**: for each k, set μ_k = mean of points with c(i) = k. Inertia goes down or stays the same.
+      3. Repeat until assignments stop changing.
+
+      Both steps monotonically decrease inertia, so the algorithm converges. But to a local minimum — not necessarily the global one. Run multiple times with different inits and keep the best. `sklearn.cluster.KMeans(n_init=10)` does this by default.
+    pitfalls:
+      - "Inertia is monotonically decreasing in k. You can't pick k by minimising it; you'd pick k=n and assign each point its own cluster."
+  - question: "What are the four assumptions k-means makes that often fail?"
+    shortAnswer: |
+      Spherical clusters, equal cluster variance, equal cluster size, isotropic feature space (Euclidean distance is meaningful). Real data violates at least one of these almost always; the question is how badly.
+    detailed: |
+      **Spherical clusters.** k-means assigns by Euclidean distance to a centroid, which implicitly assumes clusters are round blobs. Crescent-shaped or elongated clusters get split or merged incorrectly. (Try moons or rings — k-means fails comically.)
+
+      **Equal variance.** Two clusters with very different spreads will be cut in a place that minimises inertia overall, not at the natural boundary. The compact cluster wins.
+
+      **Equal size.** k-means tends to balance cluster sizes because inertia is sensitive to point counts. A 1000-point cluster and a 50-point cluster often get fitted with the large cluster split in half.
+
+      **Isotropic features (Euclidean distance).** If features are on different scales or correlated, Euclidean distance is dominated by the largest-scale feature. Always standardise; consider Mahalanobis distance for correlated features.
+
+      When these fail badly, switch to DBSCAN (no spherical assumption), Gaussian mixture models (allows different variances), or do PCA / autoencoder embedding first and cluster the embedding.
+    pitfalls:
+      - "Forgetting to standardise is the single most common k-means bug."
+  - question: "How do you pick k?"
+    shortAnswer: "Three heuristics: elbow on the inertia curve, silhouette score, gap statistic. All are heuristics — they suggest, they don't decide. If you have a downstream metric, use it."
+    detailed: |
+      **Elbow method.** Plot inertia vs. k. Pick the k where the rate of decrease 'elbows.' Subjective, often ambiguous on real data.
+
+      **Silhouette score.** For each point, measure how similar it is to its own cluster vs. the nearest other cluster. Average across points. Higher is better; ranges from −1 to 1. More objective than the elbow but biased toward k that produces well-separated spherical clusters.
+
+      **Gap statistic.** Compare actual inertia to what you'd get from random data. Picks k where the gap (improvement over random) is largest. More principled, slower to compute.
+
+      **Downstream metric.** If you'll use the clustering for a supervised task (e.g., cluster ID as a feature), measure the supervised model's accuracy across different k. This is the most honest test.
+
+      For business segmentation, the right k is often dictated by the team that will act on it: 'we can run 5 different campaigns' → k=5.
+    pitfalls:
+      - "Don't trust the elbow method on small datasets — the curve is too noisy to see a clear elbow."
+  - question: "What's the difference between k-means and k-means++?"
+    shortAnswer: "k-means is the iteration (assign-update loop). k-means++ is a smarter initialisation that spreads initial centroids out, leading to better local minima and faster convergence. Always use k-means++."
+    detailed: |
+      Random initialisation can land two centroids next to each other or all in one cluster, leading to poor local optima. k-means++ (Arthur & Vassilvitskii, 2007) picks initial centroids probabilistically — each new centroid is chosen with probability proportional to squared distance from the nearest existing centroid. The result: centroids start spread out, the algorithm converges faster, and the final inertia is closer to the global minimum.
+
+      `sklearn.cluster.KMeans` uses `init='k-means++'` by default. Don't override it. The compute cost of init is negligible compared to the iterations.
+    pitfalls:
+      - "Even with k-means++, run multiple inits (n_init=10) and keep the best. Init is randomised; one bad seed can still ruin a run."
+  - question: "When does k-means actually deploy in 2026?"
+    shortAnswer: "As a fast preprocessing step (vector quantisation, feature bucketing) and as a baseline. Not as the final clustering for serious segmentation — use DBSCAN, HDBSCAN, or embedding-then-cluster."
+    detailed: |
+      Production uses where k-means still wins:
+
+      - **Vector quantisation** for nearest-neighbour indexes (IVF in Faiss is k-means on the database). Speeds up ANN search dramatically.
+      - **Bucketing high-cardinality categoricals** (assign each item to a cluster of items, use cluster as a feature).
+      - **Image colour palette extraction** (k-means in RGB space). A classical use that still works.
+      - **Initialising a more sophisticated method** — GMM, hierarchical, even some deep clustering methods bootstrap from k-means centroids.
+
+      For interpretable customer segmentation, the practical answer in 2026 is often: embed users with a learned model (or a simple aggregation), cluster the embedding with HDBSCAN or k-means, then have a human label each cluster. The clustering step is a small part of the pipeline; the embedding does the heavy lifting.
+    pitfalls:
+      - "Mini-batch k-means scales to millions of points. Use it for large datasets — full k-means becomes a memory bottleneck."
+---
+
+<TldrCallout>
+  k-means partitions n points into k clusters by alternating between assigning points to the nearest
+  centroid and recomputing centroids as the mean of their assigned points. Cheap, fast, ubiquitous —
+  and quietly assumes your clusters are spherical, equally sized, and equally spread. Master the
+  algorithm and its assumptions; reach for it as a baseline and a building block, not a final answer
+  for serious segmentation.
+</TldrCallout>
+
+## The algorithm in three lines
+
+1. Pick k initial centroids (k-means++ spreads them out).
+2. Assign each point to its nearest centroid.
+3. Move each centroid to the mean of its assigned points. Go to 2.
+
+Stop when assignments don't change. That's it. Lloyd's algorithm (1957) is one of the oldest still-relevant ML algorithms.
+
+The objective being minimised is **inertia**: Σᵢ ‖xᵢ − μ\_{c(i)}‖². Each step monotonically decreases inertia, so the algorithm converges — to a local minimum.
+
+## See it run
+
+The widget below clusters a 2D dataset of three blobs. Click "Step" to run one iteration; "Reset" to re-init. Watch the centroids move from their random starting positions to the cluster centres.
+
+<KMeansIterations />
+
+Notice:
+
+- Centroids drift toward the cluster centres in the first few iterations.
+- After convergence, no point switches cluster; the algorithm stops.
+- A bad initialisation can lock the algorithm into a poor local minimum — try a few resets.
+
+## The four assumptions
+
+k-means looks innocent. The assumptions are buried in the Euclidean distance:
+
+| Assumption                  | What breaks when violated                 |
+| --------------------------- | ----------------------------------------- |
+| Clusters are spherical      | Moons, rings, elongated shapes get split  |
+| Equal cluster variance      | Tight cluster captures most assignments   |
+| Equal cluster size          | Big clusters get split; small ones merged |
+| Isotropic (scaled) features | Largest-scale feature dominates distance  |
+
+The fix for the last is always: standardise features before k-means. The first three require a different algorithm (DBSCAN, hierarchical, or GMM — covered in A3.3 and A3.8) or a different feature space (cluster a PCA / autoencoder embedding instead of raw features).
+
+<AnalogyCallout>
+  k-means is a lawn sprinkler placement problem: you want k sprinklers positioned to minimise the
+  total distance from any patch of grass to its nearest sprinkler. Move each sprinkler to the centre
+  of the area it currently covers; reassign each patch to its nearest sprinkler; repeat. The
+  algorithm finds a sensible arrangement — but it can't help if your lawn is shaped like a long thin
+  strip.
+</AnalogyCallout>
+
+## Picking k
+
+The number of clusters is a hyperparameter, and it has no clean answer. Three heuristics:
+
+- **Elbow method.** Plot inertia vs k. Pick the k where additional clusters stop helping much. Subjective; the elbow is often unclear.
+- **Silhouette score.** For each point, ratio of within-cluster similarity to nearest-other-cluster similarity. Average across all points. Higher is better. Cleaner than the elbow but still a heuristic.
+- **Downstream metric.** If clustering feeds a supervised model, optimise k against the supervised model's accuracy. The most honest test.
+
+In business problems the "right" k often comes from outside the data: "we can run five campaigns" → k=5. The clustering then becomes the right grouping for _that_ k, not the underlying truth.
+
+<InlineQuiz
+  question="You apply k-means with k=2 to a dataset of two interlocking crescents (two moons). The result splits one moon in half and assigns the other moon and the missing half to a single cluster. What's the fix?"
+  options={[
+    { text: "Increase k to 4 to give the algorithm more flexibility." },
+    {
+      text: "Use DBSCAN or a kernel-based clustering method, which doesn't assume spherical clusters.",
+      correct: true,
+    },
+    { text: "Run k-means with more random initialisations." },
+    { text: "Standardise the features more aggressively." },
+  ]}
+  explanation="The problem is structural: k-means uses Euclidean distance to a single centroid, which can only carve the space into convex (effectively spherical) regions. No amount of re-running or scaling helps. DBSCAN clusters by density; spectral clustering works on a similarity graph. Both handle the moons correctly. This is the canonical example of where k-means fails."
+/>
+
+## k-means in real pipelines
+
+In 2026, the production places k-means actually lives:
+
+- **Vector quantisation in nearest-neighbour search.** Faiss's IVF index clusters the database into k Voronoi cells with k-means, then only searches the relevant cell at query time. Massive speedups for billion-scale vector search.
+- **Image palette extraction.** k-means in RGB space gives k "representative colours."
+- **Bucketing high-cardinality features.** Replace 100,000 user IDs with their cluster ID (1 of k) for a tabular model.
+- **Initialising fancier methods.** GMMs, hierarchical clustering, even some deep clustering bootstrap from k-means centroids.
+
+What it's _not_ great for: high-stakes customer segmentation, anomaly detection, anything where the data is non-blob-shaped. For those, the modern pipeline embeds the data first (via a supervised or self-supervised model) and clusters the embedding with HDBSCAN.
+
+<InlineQuiz
+  question="You run k-means with the same k on the same dataset three times in a row and get three different cluster assignments. What's the most likely cause?"
+  options={[
+    { text: "A bug in the implementation — k-means is deterministic." },
+    {
+      text: "Random initialisation leads to different local minima; running with n_init > 1 or fixing a random seed is standard practice.",
+      correct: true,
+    },
+    { text: "The dataset is too small for k-means." },
+    { text: "The features need to be re-standardised before each run." },
+  ]}
+  explanation="k-means converges to a LOCAL minimum that depends on initialisation. Different inits → different minima → different cluster assignments. Standard practice is n_init=10 (run 10 times, keep the lowest-inertia result) or fixing a random_state for reproducibility. This is also why k-means++ exists — it gives much more consistent starting points than purely random init."
+/>
+
+## Cost and scale
+
+For n points, k clusters, d dimensions, T iterations: O(n·k·d·T) per run. For large n, use **mini-batch k-means** — `sklearn.cluster.MiniBatchKMeans` — which approximates the iteration on small random batches. Sub-linear memory in n, slightly worse final inertia, scales to millions of points easily.
+
+For billion-scale (vector databases, recommendation systems), the implementations in Faiss and ScaNN are heavily engineered to use GPU and product quantisation. The textbook algorithm is the same; the production code is years of optimisation.

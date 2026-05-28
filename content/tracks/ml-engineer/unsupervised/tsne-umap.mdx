@@ -1,0 +1,231 @@
+---
+title: "t-SNE and UMAP for visualising embeddings"
+description: "The non-linear projections behind every 'look, the model learned semantic clusters' figure. How they work, how they mislead, and what to actually trust."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: tsne-umap
+lessonCode: "A3.5"
+estMinutes: 12
+prereqs:
+  - "A3.4 Principal Component Analysis (PCA)"
+objectives:
+  - "Explain in plain language how t-SNE and UMAP preserve local neighbourhood structure but distort global distances."
+  - "Read a t-SNE / UMAP plot critically: identify what it claims and what it doesn't."
+  - "Pick the right tool — PCA vs t-SNE vs UMAP — for visualisation, exploration, or downstream modelling."
+pitfalls:
+  - "Reading cluster sizes or inter-cluster distances as meaningful. Both algorithms warp them; only local neighbourhoods are trustworthy."
+  - "Using t-SNE as input to a downstream model. The projection is non-parametric and non-extrapolative."
+  - "Forgetting that perplexity (t-SNE) and n_neighbours (UMAP) change the plot dramatically. Always sweep them."
+  - "Believing the appearance of clusters means there are clusters. Random high-dim data can produce 'clusters' in t-SNE."
+importantQuestions:
+  - question: "What is t-SNE actually optimising?"
+    shortAnswer: |
+      It places points in 2D such that the *neighbourhood probabilities* in the low-dim space match those in high-dim space. Points that are nearby in high-dim end up nearby in 2D; points that are far apart can end up anywhere.
+    detailed: |
+      t-SNE (van der Maaten & Hinton, 2008) defines, for each high-dim point xᵢ, a probability distribution Pⱼ|ᵢ over the other points: the probability of picking xⱼ as a neighbour, with closer points having higher probability (Gaussian kernel). It does the same in 2D for points yᵢ (Student-t kernel — that's the 't' in t-SNE).
+
+      The objective is to make the low-dim distributions Q match the high-dim distributions P, minimising KL(P || Q). Optimisation is gradient descent, initialised randomly.
+
+      The Student-t kernel in low-dim is the trick that lets t-SNE separate clusters cleanly: it has heavy tails, so distant points in 2D don't repel close points strongly. Without it, the algorithm collapses everything to a blob.
+
+      Crucial limitation: only neighbourhood structure is preserved. Inter-cluster distances and cluster sizes in the plot are essentially meaningless.
+    pitfalls:
+      - "t-SNE plots are non-deterministic without a fixed random_state. Two runs produce different (rotated/mirrored) plots."
+  - question: "How does UMAP differ from t-SNE?"
+    shortAnswer: |
+      UMAP optimises a different objective (cross-entropy on a fuzzy graph instead of KL divergence) but produces similar-looking plots. It's faster, scales better, and preserves more global structure. In 2026 it's the default.
+    detailed: |
+      UMAP (McInnes, Healy, Melville, 2018) builds a weighted nearest-neighbour graph in high-dim, then finds a low-dim embedding where a similar graph exists. The optimisation is cross-entropy between fuzzy simplicial sets.
+
+      Practical differences:
+      - **Speed.** UMAP is much faster on large datasets — minutes vs hours on 100k+ points.
+      - **Global structure.** UMAP retains more global geometry than t-SNE; relative cluster positions are a bit more trustworthy (but still not fully).
+      - **Out-of-sample.** UMAP can project new points without re-fitting (parametric mode); t-SNE cannot.
+      - **Density-preservation modes.** UMAP has settings that retain density information; t-SNE generally normalises it away.
+
+      Default reasons to pick: UMAP for almost everything; t-SNE only if you want to compare against published t-SNE plots or use a tool that requires it.
+    pitfalls:
+      - "UMAP's 'global structure' claim is overstated. Don't read inter-cluster distance as meaningful even in UMAP."
+  - question: "What hyperparameters change the plot, and how?"
+    shortAnswer: |
+      t-SNE's `perplexity` and UMAP's `n_neighbours` (both roughly "how local is local?") shift the plot from many small clusters to a few big ones. UMAP's `min_dist` controls how tightly points pack within a cluster.
+    detailed: |
+      **Perplexity (t-SNE).** Roughly the effective number of neighbours each point sees. Low (5–10): many small, tight clusters. High (50–100): fewer, larger, smoother clusters. Default is 30. Sweep across runs.
+
+      **n_neighbours (UMAP).** Similar role. Default 15. Low (5): emphasises micro-structure. High (50+): emphasises macro-structure.
+
+      **min_dist (UMAP).** Minimum distance between embedded points. Low (0.0): points pack tightly within clusters. High (0.5): clusters look more spread out and uniform. Default 0.1.
+
+      Standard advice: never trust a single plot. Run with 2-3 perplexity / n_neighbours values; if the cluster structure is the same across them, it's real; if it changes wildly, it's an artefact.
+    pitfalls:
+      - "There is no 'best' hyperparameter setting. Different settings reveal different aspects of the data."
+  - question: "Can you use t-SNE or UMAP output as features for a downstream model?"
+    shortAnswer: |
+      UMAP yes (with caveats); t-SNE no. UMAP supports projecting new points; t-SNE projection of new points requires re-fitting on the combined data, which is impractical.
+    detailed: |
+      t-SNE is non-parametric: there's no learned function from high-dim to low-dim. To project a new point you'd need to re-run the entire optimisation, which is slow and gives a different embedding from before. Use it only for visualisation.
+
+      UMAP has a `transform` method that approximately projects new points using the learned graph structure. It works reasonably well but is slower and less faithful than the original `fit_transform`. For downstream models with stable data, this is acceptable.
+
+      For non-linear compression that you'll feed to a downstream model, **autoencoders** are the better choice — they're parametric, fast to evaluate, and trainable end-to-end with the downstream model.
+    pitfalls:
+      - "UMAP's transform on out-of-distribution points can produce unstable embeddings. Refit periodically."
+  - question: "What does it mean when two clusters in a t-SNE plot are close to each other?"
+    shortAnswer: |
+      Probably nothing. Inter-cluster distances in t-SNE (and to a lesser extent UMAP) are not meaningful. Only the fact that points within a cluster are similar can be trusted.
+    detailed: |
+      t-SNE's heavy-tailed kernel pushes clusters apart regardless of their actual high-dim distance. Two clusters might be touching in the plot but very different in high-dim, or far apart in the plot but conceptually neighbouring.
+
+      What you can trust:
+      - Points within an apparent cluster are similar in high-dim.
+      - The presence of distinct apparent clusters (across multiple perplexity values) suggests real structure.
+
+      What you cannot trust:
+      - Distances between clusters.
+      - Relative cluster sizes (t-SNE actively normalises these away).
+      - Linear structure (gradients across the plot).
+      - Exact positions or orientations.
+
+      Use t-SNE / UMAP to spot structure, then verify with quantitative methods (silhouette, downstream tasks).
+    pitfalls:
+      - "Random high-dim data sometimes produces 'cluster-like' artefacts in t-SNE. Always cross-check with a sanity baseline."
+  - question: "Where do t-SNE and UMAP appear in 2026 production work?"
+    shortAnswer: |
+      Almost exclusively for visualisation: embedding sanity checks, model debugging, presenting results. As a step in a clustering pipeline (UMAP → HDBSCAN). Not as input to supervised models.
+    detailed: |
+      Real production uses in 2026:
+
+      - **Visualising learned embeddings** to confirm a model is learning what you expect. Every embedding-model paper has a t-SNE or UMAP plot.
+      - **Pre-clustering step.** UMAP to ~5-10 dims, then HDBSCAN. Standard pattern in topic modelling (BERTopic), customer segmentation, anomaly cohort discovery.
+      - **Exploratory data analysis** of high-dim datasets in notebooks.
+      - **Model debugging.** Plotting prediction errors in embedding space to find data slices the model fails on.
+
+      Where they don't appear: as compression for downstream supervised models (use PCA or autoencoders), as production features (non-parametric or unstable under distribution shift).
+    pitfalls:
+      - "When showing a t-SNE plot in a paper or presentation, always state the perplexity and that you ran multiple seeds. It's the field's worst-kept secret that single t-SNE plots can be misleading."
+---
+
+<TldrCallout>
+  t-SNE and UMAP project high-dim data into 2-3D for visualisation. They preserve local
+  neighbourhood structure (nearby points stay nearby) but distort global distances. UMAP is faster,
+  scales better, supports projecting new points; t-SNE is older and still common in papers. Use them
+  to see structure; don't trust cluster sizes, inter-cluster distances, or absolute positions.
+</TldrCallout>
+
+## The job they do
+
+You have data in 100 to 10,000 dimensions — embeddings, gene expression, customer feature vectors. You want a 2D picture that shows the structure. PCA gives a linear projection; t-SNE and UMAP give non-linear ones that preserve neighbourhood structure much better.
+
+The trade-off: PCA's projection is interpretable (each axis is a linear combination of features) but limited to linear structure. t-SNE / UMAP capture non-linear structure beautifully but the resulting axes are meaningless.
+
+## How they work (just enough)
+
+**t-SNE** defines, for each high-dim point, a probability distribution over its neighbours (closer = higher probability, Gaussian kernel). It does the same in 2D (Student-t kernel — the 't' in t-SNE). Then it optimises the 2D positions to make the 2D distribution match the high-dim one (minimising KL divergence). Initialised randomly; gradient-descent optimisation.
+
+**UMAP** builds a weighted nearest-neighbour graph in high-dim, then finds a 2D embedding where a similar graph exists. Optimisation is cross-entropy between fuzzy simplicial sets (fancy way to say "weighted graph similarity").
+
+Practically, both produce similar-looking plots. UMAP is faster, scales better, and can project new points.
+
+<AnalogyCallout>
+  Think of the high-dim data as a map of cities. PCA flattens it onto a plane like a Mercator
+  projection — straight lines stay straight, but distances near the poles get badly distorted. t-SNE
+  and UMAP are more like subway maps: nearby stations stay nearby, but the total geography is
+  warped. You can find your station; you can't navigate by ruler.
+</AnalogyCallout>
+
+## What you can and can't read from a plot
+
+| Claim                                                | Trustworthy?                                                     |
+| ---------------------------------------------------- | ---------------------------------------------------------------- |
+| Points in this dense cluster are similar in high-dim | Yes                                                              |
+| There are roughly 5 distinct groups                  | Yes if it holds across multiple perplexity / n_neighbours values |
+| Cluster A is closer to cluster B than to cluster C   | No                                                               |
+| Cluster A is larger than cluster B                   | No                                                               |
+| Points along this gradient form a continuum          | Maybe — verify with PCA or other methods                         |
+| The exact position or rotation has meaning           | No                                                               |
+
+The single most important habit: run t-SNE / UMAP with **multiple hyperparameter values** (perplexity 5, 30, 100; n_neighbours 5, 15, 50). Structure that persists is real; structure that changes is artefact.
+
+## Hyperparameters that matter
+
+**Perplexity (t-SNE)** ≈ effective number of neighbours each point considers. Default 30.
+
+- Low (5-10): many small tight clusters, micro-structure dominant.
+- High (50-100): few large smooth clusters, macro-structure dominant.
+
+**n_neighbours (UMAP)** — same idea. Default 15.
+
+**min_dist (UMAP)** — minimum distance between embedded points. Low (0.0): tight packing within clusters. High (0.5): spread out.
+
+**Random seed.** Both algorithms are non-deterministic. Set `random_state` for reproducibility; vary it to check robustness.
+
+## Why UMAP usually wins in 2026
+
+| Dimension                                  | t-SNE               | UMAP                |
+| ------------------------------------------ | ------------------- | ------------------- |
+| Speed                                      | Slow on >10k points | Fast even at 100k   |
+| Global structure                           | Mostly lost         | Partially preserved |
+| Out-of-sample projection                   | No (must refit)     | Yes (`transform`)   |
+| Hyperparameter sensitivity                 | High                | Moderate            |
+| Default in modern tools (BERTopic, scanpy) | No                  | Yes                 |
+
+t-SNE remains common in older papers and biological literature (gene expression visualisation). UMAP is the modern default for embedding visualisation, topic modelling pipelines (BERTopic, top2vec), and any clustering of high-dim data.
+
+<InlineQuiz
+  question="You run UMAP on 50k document embeddings and produce a beautiful plot with 8 clear clusters. Your manager asks 'are clusters A and B related — they're so close in the plot.' What's the most honest answer?"
+  options={[
+    { text: "Yes — close in UMAP means similar in high-dim." },
+    {
+      text: "I can't tell from the plot alone — UMAP distorts inter-cluster distances. Let me check with quantitative metrics (silhouette, centroid distance in original embedding space).",
+      correct: true,
+    },
+    { text: "No — UMAP only preserves clusters, never relationships." },
+    { text: "Yes, but only if we used the right perplexity." },
+  ]}
+  explanation="UMAP and t-SNE both warp inter-cluster distances. Apparent proximity in the plot is not reliable evidence of similarity in the original space. The correct response is to verify in the original embedding space: compute centroid distances, or sample points from each cluster and compute cosine similarities. The plot tells you clusters exist; the original embedding tells you how related they are."
+/>
+
+## The standard pipeline for embedding clustering
+
+```
+embedding_model.encode(texts)        # 1536-dim sentence embeddings
+        ↓
+UMAP(n_neighbours=15, min_dist=0.1, n_components=5)  # to 5D
+        ↓
+HDBSCAN(min_cluster_size=50)
+        ↓
+For each cluster: sample 10 items, label manually or with an LLM
+```
+
+This is the modern unsupervised pipeline: a learned encoder does the heavy lifting; UMAP makes the encoded space density-cluster-able; HDBSCAN clusters without requiring k; labels come from inspection.
+
+For _visualisation only_, drop the n_components=5 step and project to 2D directly.
+
+<InlineQuiz
+  question="A t-SNE plot shows your data spread roughly uniformly with no clear clusters. Three colleagues interpret this differently. Whose interpretation is most defensible?"
+  options={[
+    { text: "Alice: 'There are no clusters in our data.'" },
+    { text: "Bob: 'We need to try more perplexity values — there might be hidden clusters.'" },
+    {
+      text: "Carol: 'Either there's no clean cluster structure, or our embedding doesn't capture it. We should verify with at least one other method (silhouette, multiple perplexities, an alternative embedding) before concluding.'",
+      correct: true,
+    },
+    { text: "Dan: 'Switch to UMAP — t-SNE doesn't show this kind of structure well.'" },
+  ]}
+  explanation="Carol is most defensible: she acknowledges both possibilities (no clusters vs. wrong embedding for the task) and proposes verification. Alice takes the plot at face value. Bob assumes clusters exist. Dan's switch may help but doesn't address the underlying uncertainty. A single dimensionality-reduction plot is rarely decisive — triangulate."
+/>
+
+## A bottom-line cheat sheet
+
+| Goal                                      | Tool                                      |
+| ----------------------------------------- | ----------------------------------------- |
+| Compress for downstream linear/tree model | PCA                                       |
+| Compress for downstream deep model        | Use the deep model's own representation   |
+| Visualise embedding structure             | UMAP (default), t-SNE (legacy)            |
+| Cluster high-dim data                     | UMAP → HDBSCAN                            |
+| Project new data points                   | UMAP transform, autoencoder               |
+| Need theoretical compression guarantees   | Random projection (Johnson-Lindenstrauss) |
+
+In the rest of this module, autoencoders (A3.6) cover the learnable non-linear case, anomaly detection (A3.7) leans on density and reconstruction error, and GMMs (A3.8) close the density-modelling thread.

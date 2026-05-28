@@ -1,0 +1,156 @@
+---
+title: "The unsupervised problem"
+description: "What learning without labels actually means, why evaluation is the hard part, and where unsupervised methods earn their place in 2026 ML pipelines."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: unsupervised-problem
+lessonCode: "A3.1"
+estMinutes: 10
+prereqs:
+  - "A0.3 Datasets, features, labels"
+  - "A0.7 Bias, variance, and overfitting"
+objectives:
+  - "State what unsupervised learning is trying to do, in terms a stakeholder would understand."
+  - "Identify the three families — clustering, dimensionality reduction, density / anomaly — and one production use of each."
+  - "Explain why unsupervised evaluation is hard and what proxies engineers actually use."
+pitfalls:
+  - "Claiming 'the clusters are right' without a downstream metric. Without labels, 'right' is a moving target."
+  - "Treating dimensionality reduction as 'compression of features.' Information is lost; the question is whether what's kept matters for your task."
+  - "Confusing unsupervised pretraining (modern, central) with classical unsupervised clustering (niche). Both are unsupervised; only the first is everywhere in 2026."
+  - "Reaching for clustering when you actually want classification. If you have labels, use them."
+importantQuestions:
+  - question: "What's the precise difference between supervised and unsupervised?"
+    shortAnswer: "Supervised learning has labels y for each x and minimises a loss that depends on y. Unsupervised learning has only x and tries to discover structure — groups, latent dimensions, density — without a target."
+    detailed: |
+      Supervised is the well-defined problem: given (x, y) pairs, learn f such that f(x) ≈ y. The loss is computable, generalisation is testable, success is operational.
+
+      Unsupervised is fuzzier. Given only x, the algorithm proposes structure — clusters, principal directions, anomaly scores — and you have to decide whether that structure is useful. There's no loss function that matches what you actually care about, which is why evaluation is the hard part of the field.
+
+      In 2026 the most consequential 'unsupervised' work is pretraining: language models trained on raw text predict the next token (technically self-supervised — labels are inside the data itself). The classical unsupervised techniques in this module — k-means, PCA, clustering — solve narrower problems but still appear constantly in production ML pipelines.
+    pitfalls:
+      - "Self-supervised learning (next-token prediction, contrastive learning) is technically unsupervised but uses a label derived from the data. It's where modern foundation models come from."
+  - question: "Why is unsupervised evaluation so hard?"
+    shortAnswer: "Without labels, there's no ground truth to compare against. Internal metrics (silhouette, inertia) measure something, but not necessarily what matters for your downstream use case."
+    detailed: |
+      For supervised problems you compute accuracy or RMSE on a held-out set. For unsupervised problems the closest analogs are:
+
+      - **Internal metrics** (silhouette score, Davies-Bouldin index, inertia for k-means): measure structural properties of the clustering / projection itself. They reward 'nice-looking' results without telling you whether the result is useful.
+      - **External metrics** (when labels exist): adjusted Rand index, normalized mutual information. Useful when you happen to have labels but chose not to use them.
+      - **Downstream evaluation**: treat the unsupervised output as a feature for a supervised model and measure the supervised model's performance. The honest test in practice.
+
+      The pragmatic position: don't trust unsupervised results in isolation. Plug them into a downstream pipeline and measure what you actually care about.
+    pitfalls:
+      - "A clustering that looks pretty in t-SNE may not be useful for any downstream task. Visual appeal ≠ utility."
+  - question: "What are the three families of unsupervised methods, and one production use of each?"
+    shortAnswer: |
+      Clustering (group similar items: customer segmentation, deduplication). Dimensionality reduction (compress to fewer dimensions: feature engineering, visualisation). Density / anomaly (detect rare events: fraud, monitoring).
+    detailed: |
+      **Clustering.** k-means, DBSCAN, hierarchical. Group items by similarity. Production uses: customer segmentation for marketing, image deduplication, finding modes in user behaviour, clustering log lines for incident triage.
+
+      **Dimensionality reduction.** PCA, t-SNE, UMAP, autoencoders. Compress high-dim data into a few dimensions. Production uses: PCA as a denoising step before downstream models, UMAP/t-SNE for visualising embeddings (every embedding-trained-model paper has these plots), autoencoders for anomaly detection.
+
+      **Density / anomaly.** Isolation Forest, Local Outlier Factor, one-class SVM, embedding distance. Detect rare or unusual examples. Production uses: fraud detection baselines, manufacturing defect detection, monitoring distribution shift in deployed models.
+
+      These aren't water-tight categories — anomaly detection often relies on a density model; clustering and dimensionality reduction interact. But they're a useful mental partition.
+    pitfalls:
+      - "Many modern systems use unsupervised methods on top of supervised embeddings. The combination beats either alone."
+  - question: "Where do unsupervised methods earn their place in 2026?"
+    shortAnswer: "Three niches: visualising embeddings, finding structure for exploratory analysis, and as building blocks in pipelines where labels are expensive or impossible to get."
+    detailed: |
+      In 2026, the centre of ML is supervised (with labels) and self-supervised (foundation model pretraining). Classical unsupervised methods stay important in specific places:
+
+      - **Visualisation of high-dim spaces.** Every paper showing 'the model learned semantic clusters' uses UMAP or t-SNE. This is the single most common appearance of unsupervised methods in modern ML.
+      - **Exploratory data analysis.** Before building a supervised model, cluster the inputs to find data slices, label sparseness, outliers.
+      - **Anomaly detection with limited labels.** Fraud, intrusion detection, and equipment failure are dominated by rare positive examples; unsupervised baselines (Isolation Forest, autoencoder reconstruction error) are competitive and don't need labels.
+      - **Feature compression in regulated industries.** When you can't ship a deep network, PCA + logistic regression is interpretable and audit-friendly.
+
+      What unsupervised methods have lost: the ambition of 'discovering structure that's universally useful.' We now expect labels or a strong inductive bias for that.
+    pitfalls:
+      - "If your problem has labels, even a small held-out set, prefer supervised methods or use the labels for evaluation."
+---
+
+<TldrCallout>
+  Unsupervised learning is what's left when you take labels away. Three families cover most uses:
+  clustering (group similar things), dimensionality reduction (compress while keeping structure),
+  and density / anomaly detection (find rare things). The unsolved part of the field is evaluation —
+  without labels, "correct" isn't well-defined, and engineers compensate by evaluating downstream
+  impact instead.
+</TldrCallout>
+
+## The setup
+
+You have data X = (x₁, x₂, ..., x_n) and no labels. No target. No loss function that lines up with what you want. The algorithm has to find something — groups, axes of variation, scores — and you have to decide whether that something is useful.
+
+This is harder than supervised learning, in a specific way: there is no ground truth to measure against. Two clusterings can both look reasonable while disagreeing entirely on which points go together.
+
+## Three families
+
+| Family                   | What it does                            | Canonical methods              | One production use     |
+| ------------------------ | --------------------------------------- | ------------------------------ | ---------------------- |
+| Clustering               | Group similar items                     | k-means, DBSCAN, hierarchical  | Customer segmentation  |
+| Dimensionality reduction | Compress to fewer dimensions            | PCA, t-SNE, UMAP, autoencoders | Visualising embeddings |
+| Density / anomaly        | Score how typical or rare each point is | Isolation Forest, LOF, GMMs    | Fraud detection        |
+
+These families overlap in practice — anomaly detection often uses density estimation, clustering sometimes reduces to a partition of a low-dim embedding — but as a mental partition it works.
+
+## Why evaluation is the hard part
+
+Three options, none entirely satisfactory:
+
+- **Internal metrics.** Silhouette score for clustering, reconstruction error for PCA, etc. They measure structural properties of the algorithm's output, not its usefulness. A clustering with high silhouette can be useless for your downstream task.
+- **External metrics.** When you happen to have labels, you can compute adjusted Rand index (clustering similarity to labels) or normalized mutual information. But if you have labels, why aren't you using them in the model?
+- **Downstream evaluation.** Treat the unsupervised output as a feature for a supervised model; measure the supervised model's performance. The honest test — and what serious teams do in production.
+
+<AnalogyCallout>
+  Supervised learning is like writing essays for a teacher who grades them. Unsupervised learning is
+  like organising your bookshelf — there's no objectively correct arrangement, but some arrangements
+  help you find books faster than others. The right test is "can I find what I need?", not "does it
+  look neat?"
+</AnalogyCallout>
+
+## What unsupervised lost, what it kept
+
+Lost: the ambition of "discovering universal structure." In the 1990s and 2000s, unsupervised clustering and dimensionality reduction were proposed as general-purpose preprocessing — find the latent structure first, then do supervised learning on the cleaned representation. The 2010s showed that deep supervised learning (and later self-supervised pretraining) found better representations directly.
+
+Kept: niche but durable production uses.
+
+- **Visualising embeddings.** Every paper showing "the model learned semantic clusters" uses UMAP or t-SNE.
+- **Pre-supervised exploration.** Cluster the inputs before modelling to find label sparsity, data slices, outliers.
+- **Anomaly detection with no labels.** Fraud, intrusion, manufacturing defects — labels are scarce, unsupervised baselines are competitive.
+- **Interpretable feature compression.** When deep models are off the table (regulators, compute), PCA + linear is auditable.
+
+## A note on terminology in 2026
+
+"Unsupervised learning" used to mean classical clustering / PCA / GMMs. Today, "self-supervised learning" — where the labels come from the data itself (next-token prediction, masked image modelling, contrastive learning) — is technically unsupervised in the no-external-labels sense but works very differently.
+
+This module covers classical unsupervised methods. The self-supervised pretraining that drives modern foundation models is its own subject and shows up in Track B (GenAI Builder).
+
+<InlineQuiz
+  question="You're given 1 million unlabeled user-event log lines. The product team wants 'a sense of what users are doing.' What's the most realistic plan?"
+  options={[
+    { text: "Train k-means with k=10, present the clusters to the team as the answer." },
+    {
+      text: "Cluster the events, inspect a sample from each cluster manually, and use the clusters as a hypothesis-generation step — not a final answer.",
+      correct: true,
+    },
+    { text: "Use an LLM to summarise each line." },
+    { text: "Build a labelled training set first; refuse to do anything until labels exist." },
+  ]}
+  explanation="Clustering as hypothesis generation is the realistic use of unsupervised methods. The team gets candidate groups; humans inspect them and decide which are meaningful. Presenting clusters as 'the answer' without inspection is how unsupervised methods get a bad reputation — silhouette score doesn't tell you whether the clusters mean anything. Refusing to start without labels is dogmatic; LLM-summarising each line is unnecessary for hypothesis-generation."
+/>
+
+## What this module covers
+
+| Lesson | Topic                       | Why it's here                                                                      |
+| ------ | --------------------------- | ---------------------------------------------------------------------------------- |
+| A3.2   | k-means clustering          | The canonical clustering algorithm; appears in nearly every preprocessing pipeline |
+| A3.3   | DBSCAN and hierarchical     | When k-means breaks (non-spherical clusters, unknown k)                            |
+| A3.4   | PCA                         | The dimensionality-reduction workhorse — still ubiquitous                          |
+| A3.5   | t-SNE and UMAP              | How modern ML actually visualises high-dim spaces                                  |
+| A3.6   | Autoencoders                | Bridge to deep learning; foundation for some anomaly detection                     |
+| A3.7   | Anomaly detection           | Real production use case; honestly evaluated                                       |
+| A3.8   | GMMs and density estimation | Lighter coverage; useful conceptual closure                                        |
+
+Read in order or jump to what you need. The widget budget is concentrated on the methods you'll actually use: k-means iterations, PCA projection, Isolation Forest.

@@ -1,0 +1,208 @@
+---
+title: "Autoencoders"
+description: "Compression learned by a neural network: encoder squeezes high-dim input into a bottleneck, decoder reconstructs it. The bridge from classical unsupervised learning to modern self-supervised representation learning."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: unsupervised
+moduleLabel: "Module 3 · Unsupervised Learning"
+lesson: autoencoders
+lessonCode: "A3.6"
+estMinutes: 12
+prereqs:
+  - "A3.4 Principal Component Analysis (PCA)"
+  - "A2.1 Linear regression from scratch"
+objectives:
+  - "Describe an autoencoder as a neural network trained to reconstruct its input through a low-dim bottleneck."
+  - "Distinguish vanilla, denoising, sparse, and variational autoencoders by what they regularise."
+  - "Identify when an autoencoder beats PCA — and when it's the wrong tool entirely."
+pitfalls:
+  - "Treating the bottleneck as 'the latent space' without questioning what structure it captures. Reconstruction quality ≠ semantic quality."
+  - "Building deep autoencoders with no regularisation and no denoising. They learn the identity function and the latent space is useless."
+  - "Using an autoencoder for tasks better served by self-supervised contrastive learning (modern image and text representation)."
+  - "Forgetting that the encoder is what you usually want — discard the decoder after training."
+importantQuestions:
+  - question: "What is an autoencoder, formally?"
+    shortAnswer: "Two neural networks: an encoder f mapping input x to a low-dim code z = f(x), and a decoder g mapping z back to a reconstruction x̂ = g(z). Trained to minimise ‖x − x̂‖² over the dataset."
+    detailed: |
+      Architecture: encoder is a feedforward net that maps x ∈ ℝᵈ to z ∈ ℝᵏ with k < d (the bottleneck). Decoder mirrors the encoder, mapping z back to ℝᵈ. Loss is reconstruction error, typically MSE for continuous data or cross-entropy for binary.
+
+      Training: standard supervised learning, but the "label" is the input itself. No external supervision; the algorithm has to compress and reconstruct. The bottleneck forces the network to keep only what matters for reconstruction.
+
+      Key insight: a linear autoencoder with one hidden layer and MSE loss reduces exactly to PCA. The non-linearity (ReLU, sigmoid) is what makes autoencoders go beyond linear projections.
+    pitfalls:
+      - "Without the bottleneck (or another constraint), an autoencoder learns the identity function. The latent representation must be forced to be compact, sparse, or noisy."
+  - question: "Why is an autoencoder a non-linear PCA?"
+    shortAnswer: |
+      With a linear encoder, linear decoder, and MSE loss, an autoencoder converges to the same low-dim subspace PCA finds. Adding non-linearities (e.g., ReLU between layers) lets it find curved manifolds PCA can't.
+    detailed: |
+      Without non-linearities, the optimal encoder maps to the principal subspace; the optimal decoder maps back via the inverse projection. The reconstruction error is the same as PCA's.
+
+      Add non-linearities and the encoder can wrap the data around a curved manifold — the swiss-roll classic example. PCA's best 2D projection of a swiss roll is bad; a sigmoid-or-ReLU autoencoder's best 2D projection unfolds the roll.
+
+      In production this matters less than you'd think. For tabular data, PCA is usually enough. For image / text data, you wouldn't train an autoencoder from scratch — you'd use a pretrained encoder from a self-supervised model (CLIP, MAE, etc.). Autoencoders themselves are a stepping stone toward those modern methods.
+    pitfalls:
+      - "The latent space of an autoencoder is not naturally smooth or interpretable. VAEs (below) address this; vanilla autoencoders don't."
+  - question: "What variants exist and what do they regularise?"
+    shortAnswer: |
+      Denoising AE (input noise), Sparse AE (L1 on activations), Contractive AE (Jacobian penalty), Variational AE (KL to prior). Each adds a constraint that makes the latent space more useful for downstream tasks.
+    detailed: |
+      **Denoising autoencoder.** Input is corrupted (added noise, masked features); the target is the clean input. Forces the encoder to learn robust features rather than copy noise. Vincent et al., 2008.
+
+      **Sparse autoencoder.** L1 penalty on the bottleneck activations encourages most latent dims to be zero for any given input. Each latent dim ends up specialised. Used historically in feature learning; today, related ideas appear in mechanistic interpretability ("dictionary learning on transformer activations").
+
+      **Contractive autoencoder.** Penalises the Jacobian of the encoder, encouraging the encoding to be locally constant — small input changes don't change the code much. Useful for robustness.
+
+      **Variational autoencoder (VAE).** The encoder outputs a distribution (mean + log-variance) instead of a point; sampling provides the code. Loss is reconstruction + KL divergence to a Gaussian prior. The latent space is smooth and you can generate new samples by decoding random points. Kingma & Welling, 2013.
+
+      VAEs were a generative-model star in 2015-2018; diffusion has largely replaced them for image generation. The VAE framework is still important for ELBO-style training objectives.
+    pitfalls:
+      - "VAEs produce blurry samples (consequence of the Gaussian likelihood). Diffusion models, autoregressive models, and GANs all produce sharper images."
+  - question: "When does an autoencoder beat PCA?"
+    shortAnswer: |
+      When the data manifold is non-linear (image patches, audio spectra, text embeddings) AND you have enough data to train a neural network without overfitting. For most tabular data PCA is competitive and simpler.
+    detailed: |
+      The non-linearity matters when:
+      - The data lies on a curved manifold (image, audio, text, sensor signals).
+      - You have a lot of unlabeled examples.
+      - You want a learned encoder that generalises to new data (as opposed to a per-dataset fit).
+
+      The non-linearity does *not* help when:
+      - Data is small (< 10⁴ examples). The neural net overfits.
+      - Data is genuinely linear or close to it.
+      - PCA's interpretability matters (regulated industries).
+      - You're going to use a pretrained encoder anyway (CLIP, etc.) — that's already a learned representation, no need to train your own autoencoder.
+
+      In 2026 practice, the strong-side use cases are anomaly detection (reconstruction error as anomaly score), pretrained encoder embeddings for downstream models, and as a stepping stone for learning the modern self-supervised landscape.
+    pitfalls:
+      - "PCA + an autoencoder over the PCA-reduced data is a common compromise: get fast linear compression first, learn non-linear refinement second."
+  - question: "How does the autoencoder relate to self-supervised learning?"
+    shortAnswer: |
+      Autoencoders pioneered the idea of learning representations from the data itself, no labels. Modern self-supervised methods (contrastive learning, masked reconstruction) generalise this idea and produce much better representations for downstream tasks.
+    detailed: |
+      The autoencoder's core idea — "use the data to label itself" — is the precursor to modern self-supervised learning (SSL). Where autoencoders use reconstruction as the pretext task, SSL uses:
+
+      - **Contrastive learning** (SimCLR, MoCo, CLIP): same image under different augmentations should produce similar embeddings; different images should produce different embeddings.
+      - **Masked modelling** (BERT, MAE): hide part of the input, train to predict it. This is what powers modern language models and increasingly vision models too.
+      - **Bootstrapped methods** (BYOL, DINO): no negative pairs, no labels, still produce strong representations.
+
+      These methods produce representations that transfer better to downstream tasks than autoencoder bottlenecks do. The reason: reconstruction forces the model to keep low-level details (pixel values), which crowds out semantic features. Modern SSL is designed to keep semantics and discard low-level noise.
+
+      Autoencoders survive in 2026 mostly in anomaly detection, scientific applications (compressing simulation data, denoising), and as a teaching stepping-stone.
+    pitfalls:
+      - "Don't train an autoencoder for representation learning in 2026 unless you have a specific reason. Use a pretrained SSL encoder."
+---
+
+<TldrCallout>
+  An autoencoder is two neural networks: an encoder that compresses input to a low-dim code, and a
+  decoder that reconstructs the input from the code. Train end-to-end on reconstruction loss. With
+  non-linearities, it goes beyond PCA's linear subspaces and can handle curved manifolds. In 2026 it
+  lives mainly in anomaly detection and as the conceptual precursor to modern self-supervised
+  methods (CLIP, BERT, MAE).
+</TldrCallout>
+
+## The architecture
+
+```
+x ∈ ℝᵈ ──── encoder ────▶ z ∈ ℝᵏ ──── decoder ────▶ x̂ ∈ ℝᵈ
+
+loss = ‖x − x̂‖²    (or cross-entropy for binary x)
+```
+
+Both encoder and decoder are feedforward neural networks. The bottleneck dimension k < d forces the network to compress; the reconstruction loss forces it to keep what matters for reproducing the input.
+
+There is no external supervision. The label is the input. This makes autoencoders "unsupervised" in the no-external-labels sense, though we now call this _self-supervised_ — labels come from the data structure itself.
+
+## Linear autoencoder = PCA
+
+A linear encoder (one hidden layer, no activation), linear decoder, MSE loss — the optimal solution is exactly PCA. The k-dim subspace that minimises reconstruction error is the principal subspace.
+
+The interesting case is non-linear autoencoders, which can wrap the data around a curved manifold. A 2D autoencoder can unroll the swiss roll; 2D PCA cannot.
+
+<AnalogyCallout>
+  PCA finds the best flat sheet to project your data onto. An autoencoder finds the best curved
+  surface. For data that genuinely lies on a curved manifold (images, audio, text embeddings), the
+  curved surface fits much better — at the cost of training a neural network.
+</AnalogyCallout>
+
+## The variants you should know
+
+| Variant               | What it adds                         | What problem it solves            |
+| --------------------- | ------------------------------------ | --------------------------------- |
+| **Vanilla**           | Just bottleneck                      | Compression                       |
+| **Denoising**         | Noise added to input                 | Forces robust features            |
+| **Sparse**            | L1 penalty on bottleneck activations | Specialises each latent dim       |
+| **Contractive**       | Penalty on encoder Jacobian          | Robustness to small input changes |
+| **Variational (VAE)** | KL penalty to a Gaussian prior       | Smooth, generative latent space   |
+
+The big ones in practice are denoising (still useful) and variational (the framework that produced ELBO, important for modern generative model theory even though VAEs themselves have been outpaced by diffusion).
+
+## Anomaly detection: the durable production use
+
+Train an autoencoder on normal data only. At inference, run new data through it. If the reconstruction error is high, the input is unlike anything seen during training — flag as anomaly.
+
+This works well for:
+
+- **Industrial sensor data.** Train on normal machine operation; flag readings the AE can't reconstruct.
+- **Network traffic monitoring.** Train on typical traffic; flag novel patterns.
+- **Medical imaging.** Train on healthy scans; flag images with abnormal regions.
+- **Fraud detection (rare positive case).** Train on legitimate transactions; flag novel ones.
+
+Compared to Isolation Forest (A3.7), autoencoders work better when the input is high-dim and naturally suited to a neural net (images, time series). For tabular data, Isolation Forest often wins on speed and ease.
+
+<InlineQuiz
+  question="You train an autoencoder with bottleneck size equal to the input dimension and no regularisation. What does the model learn?"
+  options={[
+    { text: "A meaningful low-dim representation of the data." },
+    {
+      text: "The identity function — the encoder copies input to bottleneck, decoder copies bottleneck to output. The latent code is useless.",
+      correct: true,
+    },
+    { text: "An overfit reconstruction that doesn't generalise." },
+    { text: "A degenerate solution where all inputs map to zero." },
+  ]}
+  explanation="With no bottleneck and no other constraint, the optimal solution is the identity — perfect reconstruction with no compression and no useful representation. This is the most common autoencoder failure mode. Force the model to compress: smaller bottleneck, denoising, sparsity, or regularisation. Without it, you've trained nothing."
+/>
+
+## Where autoencoders fit in 2026
+
+| Use case                                       | Use an autoencoder? | Better choice                              |
+| ---------------------------------------------- | ------------------- | ------------------------------------------ |
+| Compress tabular data for linear / tree model  | Maybe               | PCA usually wins                           |
+| Compress images for downstream model           | No                  | Pretrained encoder (CLIP, MAE)             |
+| Compress text for downstream model             | No                  | Pretrained encoder (sentence-transformers) |
+| Anomaly detection (high-dim, you have normals) | Yes                 | Or Isolation Forest for tabular            |
+| Generative modelling                           | No                  | Diffusion (image), autoregressive (text)   |
+| Scientific data compression / denoising        | Yes                 | Domain-specific autoencoders shine here    |
+
+The non-niche use cases that pop up regularly:
+
+- **Anomaly detection** on high-dim signals (industrial, biomedical).
+- **Scientific data compression** (climate model outputs, simulation snapshots).
+- **Variational frameworks** for modern generative models (the math is similar even when the model isn't a VAE).
+- **Teaching example** for representation learning — the stepping stone before contrastive / masked methods.
+
+<InlineQuiz
+  question="In a vision pipeline for product classification, would you train an autoencoder on your unlabeled product images to learn a representation?"
+  options={[
+    { text: "Yes — autoencoder pretraining is the standard for vision representation learning." },
+    {
+      text: "No — use a pretrained encoder (CLIP, DINOv2, or similar). Self-supervised methods produce far better representations than autoencoders for downstream tasks.",
+      correct: true,
+    },
+    { text: "Yes, but only if the autoencoder has more than 50 layers." },
+    { text: "No — vision tasks require labelled supervised pretraining." },
+  ]}
+  explanation="Autoencoders' reconstruction objective forces them to keep low-level pixel detail, which doesn't transfer well to semantic tasks. Modern self-supervised methods (CLIP for image-text alignment, DINOv2 for self-distillation, MAE for masked autoencoding with vision transformers) learn semantic features and transfer much better. For 2026 vision work, start from a pretrained encoder; consider training an autoencoder only if you have a specific reason (e.g., anomaly detection on a domain pretrained models don't cover)."
+/>
+
+## The intellectual bridge
+
+Autoencoders pioneered the idea: use the data as its own label. Modern self-supervised methods generalise this. Instead of reconstructing pixels, they:
+
+- Predict masked patches (MAE in vision, BERT in NLP).
+- Contrast augmentations (SimCLR, CLIP).
+- Distil from a teacher network (BYOL, DINO).
+
+These produce representations that _transfer_ — fine-tune them on a downstream task with limited labels and you outperform models trained from scratch on the labelled data alone. This is the engine behind every modern foundation model.
+
+In Track B (GenAI Builder), self-supervised pretraining gets full treatment. For Track A, the autoencoder is the conceptual gateway: same idea, simpler architecture, fewer downstream tricks.
