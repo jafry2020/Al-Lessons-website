@@ -1,0 +1,276 @@
+---
+title: "What is AI, machine learning, and deep learning?"
+description: "Cut through the jargon. AI, ML, DL, and GenAI are nested ideas, not synonyms — this lesson draws the lines and shows where each one lives."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: what-is-ai
+lessonCode: "A0.1"
+estMinutes: 18
+prereqs: []
+objectives:
+  - "Define AI, machine learning, deep learning, and generative AI — and explain how they nest inside one another."
+  - "Distinguish the two big historical eras of AI (symbolic and connectionist) and explain why the second one is winning."
+  - "Tell the difference between narrow AI and artificial general intelligence, and place every system you read about into one bucket."
+pitfalls:
+  - "Treating AI and ML as synonyms — they aren't. AI is the goal, ML is one strategy for reaching it."
+  - "Calling every model 'deep learning' because it has neural networks. Logistic regression is technically a single-layer neural net; nobody calls it deep."
+  - "Assuming GenAI is a separate technology. It isn't — it's deep learning applied to producing new content rather than classifying existing content."
+  - "Reading 'AI' in the news and silently translating it to 'AGI'. Almost every shipped 'AI' system is narrow AI by a wide margin."
+  - "Believing the symbolic era is dead. Rule-based systems still run things like tax software and compiler optimizers — they just aren't sexy."
+importantQuestions:
+  - question: "In one sentence each, distinguish AI, machine learning, deep learning, and generative AI."
+    shortAnswer: "AI is the goal of building systems that act intelligently. ML is a strategy for AI where the system learns from data instead of being programmed. DL is a kind of ML that uses deep neural networks. GenAI is DL aimed at producing new content — text, images, audio — rather than classifying existing content."
+    detailed: |
+      Think of them as nested circles. AI is the outermost — any system that exhibits behavior we'd call intelligent, regardless of how it does it. ML lives inside AI: it's the family of techniques where the system's behavior is shaped by data, not by hand-written rules. DL is a subset of ML defined by using neural networks with many layers — that depth is what unlocks performance on perceptual tasks like vision and language. GenAI is the most recent subset: deep learning models trained to generate rather than classify or predict a label. A GenAI system is a DL system is an ML system is an AI system.
+    pitfalls:
+      - "These terms are nested, not adjacent. You can't be 'either AI or ML' — ML is AI."
+      - "GenAI is a use case, not a separate model family. The underlying architecture (transformers, diffusion) is plain old deep learning."
+  - question: "What's the historical difference between symbolic AI and connectionist AI?"
+    shortAnswer: "Symbolic AI encodes intelligence as hand-written rules over discrete symbols. Connectionist AI learns numerical patterns from data via networks of simple units. The first dominated from the 1950s–1980s; the second has dominated since roughly 2012."
+    detailed: |
+      Symbolic AI — sometimes called 'GOFAI', good old-fashioned AI — assumed that intelligence is about manipulating symbols according to rules. Expert systems, chess programs of the 1980s, and rule-based natural-language parsers belong here. It works beautifully when the rules are knowable and the domain is closed. It struggles when the rules can't be written down — like 'is this a picture of a cat?'.
+
+      Connectionist AI — neural networks — assumed instead that intelligence emerges from many simple units passing signals to each other, with the connection weights learned from data. The idea is from the 1940s but it took until the 2010s for compute, data, and architecture (GPUs, ImageNet, ReLU activations) to converge. The 2012 ImageNet result is the conventional turning point: a deep neural net cut the error rate so dramatically that within five years, virtually every perception task migrated to deep learning.
+
+      The eras are not really at war anymore. Modern systems often combine learned components with symbolic ones — a programmatic agent might use an LLM (connectionist) to plan and a calculator (symbolic) to compute.
+    pitfalls:
+      - "Symbolic AI isn't dead. Theorem provers, type checkers, and rule-based fraud-detection systems are quietly everywhere."
+      - "Don't credit one person or paper for 'starting' deep learning — it's an accumulation: backprop (1986), GPUs (2000s), AlexNet (2012), transformers (2017)."
+  - question: "What is the difference between narrow AI and artificial general intelligence (AGI)?"
+    shortAnswer: "Narrow AI is good at one or a few specific tasks it was trained for. AGI would match or exceed humans across most cognitive tasks — flexible, transferable, no retraining needed. Every deployed 'AI' system today is narrow AI."
+    detailed: |
+      A chess engine that beats the world champion is narrow AI: take it out of chess and it can't make breakfast. A large language model is broader than a chess engine but is still narrow — it doesn't reliably plan over long horizons, doesn't have persistent goals, doesn't learn continually from its own experience. We call it 'general-purpose' because it handles many text tasks, but it isn't AGI in the technical sense.
+
+      AGI is a research goal, not a product category. Definitions vary, but most converge on something like: a system that can autonomously learn and apply skills across the full breadth of human cognitive domains, at human level or beyond. We do not have one. Predictions about when we will range from 'within a decade' to 'maybe never'. Be skeptical of any source that uses 'AI' and 'AGI' interchangeably.
+    pitfalls:
+      - "Capability ≠ generality. A system can be superhuman at one thing and helpless at adjacent tasks."
+      - "'General-purpose' (a feature of modern LLMs) is not the same as 'general intelligence' (a much higher bar)."
+  - question: "Is every neural network a 'deep learning' model?"
+    shortAnswer: "No. 'Deep' implies multiple hidden layers — typically more than two or three. A single-hidden-layer net is technically a neural network but isn't what people mean by deep learning."
+    detailed: |
+      The threshold is fuzzy. Strictly, 'deep' is just a count of layers; in practice the line is drawn around models that benefit from representational hierarchy — early layers extract simple features, deeper layers compose them into abstract ones. A two-layer net usually doesn't do that. Modern deep networks routinely have tens to hundreds of layers (ResNet-50 has 50; GPT-scale models have hundreds at minimum).
+    pitfalls:
+      - "Counting layers naively misleads — what matters is the architectural pattern, not the absolute number."
+      - "Logistic regression *is* a single-layer neural network mathematically, but no one calls it deep learning."
+  - question: "Why did deep learning take off in the 2010s and not the 1990s?"
+    shortAnswer: "Three things converged: enough labeled data (ImageNet), enough compute (consumer GPUs), and architectural tricks that fixed long-standing training problems (ReLU, dropout, better initialization). None of them alone was enough."
+    detailed: |
+      In the 1990s, you could write down a deep network on paper but you couldn't train it. Gradients vanished as they propagated through many layers; activation functions saturated; there wasn't enough labeled data to support millions of parameters without overfitting; and a single experiment took weeks on the best hardware available.
+
+      Through the late 2000s and early 2010s each bottleneck cracked: ReLU activations made deep gradients well-behaved; ImageNet provided 1.4 million labeled images; commodity GPUs gave a 10–100× speedup over CPUs; better initialization (Glorot, He) let very deep networks train at all. The AlexNet result on ImageNet in 2012 was the moment all four ingredients shipped together — and the field never went back.
+    pitfalls:
+      - "Don't credit just compute or just data — both matter, and so do the often-overlooked algorithmic tricks."
+      - "The history isn't linear. Backpropagation existed since 1986 and was independently discovered earlier; it just took 25 years for the rest of the stack to catch up."
+  - question: "Where does machine learning sit relative to statistics?"
+    shortAnswer: "Heavily overlapping. Statistics emphasizes interpretable inference about a population; classical ML emphasizes predictive accuracy on new samples. Modern ML borrows freely from both."
+    detailed: |
+      A statistician fitting a linear regression and a machine-learning engineer fitting a linear regression are doing nearly the same math. The framing differs: the statistician usually cares about the *coefficient* (what does it mean? is it significant?); the ML engineer usually cares about the *prediction* (does this generalize to new data?). That difference of focus drives different evaluation methods: confidence intervals and p-values versus cross-validation and held-out test sets.
+
+      At the deep-learning end of ML, the divergence is bigger — deep nets have millions of unintepretable parameters, so the 'what does it mean' question doesn't have a clean answer. Even so, much of what works in ML (regularization, Bayesian priors, hypothesis testing for A/B-ing models) is rebranded statistics.
+    pitfalls:
+      - "Modern ML papers sometimes reinvent statistical concepts under new names — keep an eye out."
+      - "'Black box' is a property of how we use a model, not an inherent law of nature. Interpretability research keeps eating into the black box."
+  - question: "What's the relationship between AI and automation?"
+    shortAnswer: "Automation is any system that replaces human effort, including dumb mechanical ones. AI is a subset of automation that requires the system to behave in a way that would seem intelligent — but plenty of impactful automation isn't AI."
+    detailed: |
+      A factory robot welding car frames is automation, not AI: its motion is preprogrammed. A spreadsheet macro is automation, not AI. A spam filter is AI: it learned a behavior from data. A medical-diagnosis assistant that suggests likely conditions from a chart is AI. The distinction matters because debates about 'AI replacing jobs' often conflate the two — a lot of historical job displacement came from non-AI automation, and a lot of current AI usage augments rather than replaces.
+    pitfalls:
+      - "Not every productivity gain attributed to AI is actually from AI — sometimes it's the simpler automation that wraps the AI."
+  - question: "Why are 'training' and 'inference' worth distinguishing as separate phases?"
+    shortAnswer: "Training is when the model learns from data — expensive, batched, infrequent. Inference is when the trained model produces an output for a new input — cheap per call, real-time, frequent. The two have very different compute, latency, and cost profiles."
+    detailed: |
+      Training a modern LLM costs millions of dollars and takes weeks across thousands of GPUs. Inference for the same model is milliseconds per token on a single GPU. The economics of an AI product are almost entirely about the inference phase — that's what serves user traffic. Engineers spend most of their time on the training pipeline (data, evaluation, hyperparameters) and most of their cost on the inference pipeline (serving, autoscaling, caching). Different roles, different tooling.
+    pitfalls:
+      - "Latency numbers in papers are often training step time, which is irrelevant to production users. Always ask which phase a number refers to."
+      - "Inference cost is not always less than training cost in aggregate — a popular product can rack up more compute on inference over a year than the original training run."
+  - question: "If symbolic AI 'lost', why is it still in textbooks?"
+    shortAnswer: "Because it didn't lose in every domain. Compilers, theorem provers, type systems, and rule-based business logic still use symbolic methods. And recent hybrid systems are bringing symbolic ideas back inside ML pipelines."
+    detailed: |
+      Symbolic AI lost the perception race — vision, speech, language — because handwriting rules for 'what a face looks like' is hopeless. But it never lost the rules-game-where-rules-are-knowable race. SAT solvers, SMT solvers, Datalog engines, and even spreadsheet recalculation are descendants of symbolic AI techniques. More recently, 'neurosymbolic' systems pair neural perception with symbolic reasoning — for example, an LLM that calls a calculator instead of guessing arithmetic. That hybrid is increasingly common.
+    pitfalls:
+      - "If a problem has a clean formal specification, symbolic methods are still often the right answer — don't reach for ML by default."
+  - question: "Practitioner's quick gut-check: how do you decide whether a problem 'needs ML'?"
+    shortAnswer: "Ask whether the rules are knowable. If you can write down a procedure that maps input → output, do that. If the procedure requires recognizing patterns that no one can fully spell out, that's where ML earns its keep."
+    detailed: |
+      Concretely:
+      - 'Convert dollars to euros given today's rate.' → not ML. A formula.
+      - 'Flag fraudulent transactions.' → ML, because fraud patterns are too varied and shifting to enumerate.
+      - 'Sort emails by sender.' → not ML. A field comparison.
+      - 'Decide which email is most likely a phishing attempt.' → ML, because phishing keeps mutating.
+
+      A useful follow-up question: even if ML can solve it, is it the *cheapest* solution? ML adds data infrastructure, monitoring, drift detection, and a permanently confusing failure mode (the model is silently wrong). Always check whether a rule-based or heuristic solution is good enough first.
+    pitfalls:
+      - "Reaching for ML when a `if/else` would have worked is the most common engineering mistake in applied AI."
+      - "ML doesn't make problems go away — it converts them into different problems (data quality, evaluation, drift). Make sure you'd rather have those problems."
+---
+
+<TldrCallout>
+  *Artificial intelligence* is the umbrella goal of building systems that act intelligently.
+  *Machine learning* is one strategy for getting there — the system learns from data instead of
+  being programmed by hand. *Deep learning* is a specific kind of machine learning that uses
+  many-layered neural networks and dominates perception tasks. *Generative AI* is deep learning
+  aimed at producing new content. They are nested, not parallel.
+</TldrCallout>
+
+## Why this lesson exists
+
+If you read three random AI articles today, you'll see "AI", "ML", "DL", and
+"GenAI" used as if they were interchangeable. They're not. Getting the
+relationships right makes every later lesson make sense — and it makes you
+much harder to mislead by hype.
+
+This isn't a history lesson, though we'll touch the history. It's a map of
+what the words actually mean, where each technique fits, and how to place any
+new system you read about into the right bucket.
+
+## The four words, defined
+
+<GlossaryTerm
+  term="Artificial Intelligence"
+  definition="The broad goal of building systems that exhibit behavior we'd call intelligent — perception, reasoning, decision-making, language. AI is a target, not a single technique. Any system that achieves intelligent behavior, however it does it, is AI."
+>
+  Artificial intelligence
+</GlossaryTerm>
+is the umbrella term. It's the *goal*, not a method. The goal has been around since the 1950s, and
+the field has tried many strategies to reach it. Some of those strategies worked great for narrow
+problems and ran out of steam on harder ones. The strategy that's currently winning is machine
+learning.
+
+<GlossaryTerm
+  term="Machine Learning"
+  definition="A family of techniques where a system's behavior is shaped by data rather than written by hand. Instead of a programmer specifying rules, the programmer specifies a learning procedure and lets the system discover the rules from examples."
+>
+  Machine learning
+</GlossaryTerm>
+is the family of techniques where, instead of writing the rules by hand, you give the computer a lot
+of examples and an algorithm that extracts the rules from them. The rules then live inside the
+model's parameters — typically as numbers, not as human-readable code.
+
+<GlossaryTerm
+  term="Deep Learning"
+  definition="Machine learning using neural networks with many layers (usually more than 2 or 3). Depth lets each layer build on features extracted by the previous one, which is what makes deep learning so effective on perception tasks like vision and language."
+>
+  Deep learning
+</GlossaryTerm>
+is a specific kind of machine learning. It uses neural networks with *many* layers, and those layers
+progressively build more abstract representations of the input. Early layers in a vision network
+detect edges, later ones detect shapes, deeper ones recognize objects. Deep learning is what made
+the post-2012 perception revolution possible — vision, speech, translation, and language.
+
+<GlossaryTerm
+  term="Generative AI"
+  definition="A use of deep learning aimed at producing new content (text, images, audio, code) rather than classifying or predicting a label. The same underlying neural architectures power discriminative AI; what makes them 'generative' is the training objective and how they're used."
+>
+  Generative AI
+</GlossaryTerm>
+is the newest term in this list. It's deep learning that produces new content — a sentence, an
+image, a piece of music — rather than classifying something that already exists. The architecture
+isn't new (most GenAI runs on transformers or diffusion models, both deep-learning ideas), but the
+*use* is what makes it "generative".
+
+<AnalogyCallout>
+  Think of four nested Russian dolls. The biggest doll, AI, is the *goal*. Open it and you find ML,
+  one of several strategies humans have tried for reaching that goal. Open ML and you find DL — a
+  specific way of doing ML that uses deep neural networks. Open DL and you find GenAI — a specific
+  way of using DL to make new things. You can't be "either AI or ML"; ML is AI, and every system
+  that is GenAI is automatically all four.
+</AnalogyCallout>
+
+## A short history, just enough to make sense of the news
+
+AI started in the 1950s with the hope that intelligence was, at heart,
+symbol manipulation. The _symbolic AI_ tradition — sometimes called _good
+old-fashioned AI_ or GOFAI — assumes you can encode intelligence as rules
+over discrete symbols. An expert system for diagnosing infections is a stack
+of `if-then` rules. A chess engine of the 1980s evaluated positions with
+hand-tuned heuristics. This worked beautifully when the rules were knowable
+and the domain was closed.
+
+It failed when the rules couldn't be written down. _What does a face look
+like?_ No human can specify it. _Translate this sentence faithfully._ Hard to
+encode in rules. Through the 1980s and 1990s, symbolic AI piled up
+successes in domains with clean structure (logic, planning, theorem proving)
+and stalled on anything perceptual.
+
+The _connectionist_ tradition — neural networks — was older than people
+remember (Rosenblatt's perceptron is from 1958), but kept hitting walls. The
+math wasn't quite right; the data wasn't there; the compute wasn't there. A
+1986 paper made _backpropagation_ practical, and through the 1990s neural
+networks worked great on tiny problems and badly on large ones.
+
+The thing nobody saw coming is that, around 2012, several bottlenecks broke
+at once:
+
+<WorkedExample title="Why 2012 was the turning point">
+
+GPU compute hit a level where training a large network in a week (instead of
+a year) became routine. ImageNet provided a million labeled images, more
+than any neural net had ever seen. ReLU activation functions and better weight
+initialization stopped gradients from vanishing in deep networks. And
+researchers at the University of Toronto entered the _AlexNet_ model into the
+ImageNet competition — and won by a margin so embarrassing for the previous
+state-of-the-art that the field reorganized within twelve months.
+
+The compounding effect is the part worth remembering: bigger models needed
+more data needed more compute needed better optimizers, and once all four
+moved at the same time, the curve bent. Almost every perception task in
+production today migrated to deep learning between 2012 and 2017. Transformers
+arrived in 2017 and language joined the migration. ChatGPT in late 2022 was
+the moment the general public realized the migration had finished.
+
+</WorkedExample>
+
+The symbolic tradition didn't die — theorem provers, SAT solvers, type
+checkers, and compiler optimizers all still descend from it. But the
+unsolved-by-rules problems all went to connectionism.
+
+## Narrow AI vs. AGI
+
+One more distinction worth getting right, because the news muddles it
+constantly.
+
+_Narrow AI_ is good at one or a small handful of tasks it was specifically
+trained for. A chess engine that crushes grandmasters is narrow AI: take it
+out of chess and it can't do anything else. A spam filter is narrow AI. A
+self-driving car is narrow AI. A large language model is _broader_ than a
+chess engine — it can handle many text tasks — but it is still narrow in the
+technical sense: it doesn't autonomously learn new skills, doesn't pursue
+long-term goals, doesn't have a persistent self that improves with experience.
+
+_Artificial general intelligence_, or _AGI_, would. Definitions vary, but
+they converge on the idea of a system that matches or exceeds humans across
+the full breadth of cognitive tasks — flexibly, without retraining for each
+domain. Every deployed AI system today, including the ones the news calls
+"powerful AI", is narrow AI. AGI is a research aspiration; whether it's a
+decade away or never is genuinely contested. Be skeptical of anyone who uses
+the two interchangeably.
+
+## A practitioner's gut-check
+
+When someone hands you a problem and asks if it needs ML, the question to
+ask first is: _can the rules be written down?_
+
+- "Compute the sales tax for this order." Rules can be written. Don't use ML.
+- "Detect whether this credit-card transaction is fraudulent." Rules cannot
+  be fully written, because fraud keeps mutating. ML earns its keep.
+- "Sort emails by sender." Rules can be written. Don't use ML.
+- "Decide whether this email is a phishing attempt." Rules cannot be fully
+  written, and adversaries adapt. ML earns its keep.
+
+Even when ML can solve a problem, ask whether a heuristic could solve it
+_well enough_. ML adds data pipelines, monitoring, drift, and a class of
+failure where the system is silently wrong. Sometimes those are worth it.
+Sometimes a regex is the right answer for ten years.
+
+<InlineQuiz
+  question="Which of the following is a *generative AI* system?"
+  options={[
+    { text: "A spam filter that flags incoming email." },
+    { text: "An image classifier that labels photos as 'cat' or 'dog'." },
+    { text: "A model that writes a short story when given a prompt.", correct: true },
+    { text: "A rule-based tax-preparation program." },
+  ]}
+  explanation="The spam filter and image classifier are discriminative ML — they predict a label for existing input. The tax program is rule-based, so it isn't even ML. The model that produces a new short story is generative AI: it's producing new content, not classifying existing content. Its underlying architecture is almost certainly a transformer (deep learning), which makes it DL, ML, and AI all at once."
+/>
