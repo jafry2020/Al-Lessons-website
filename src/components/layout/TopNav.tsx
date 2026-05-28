@@ -8,10 +8,10 @@ import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/cn";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Tracks" },
+  { href: "/tracks", label: "Tracks" },
   { href: "/", label: "Visualizations" },
   { href: "/", label: "Q&A" },
-  { href: "/", label: "Glossary" },
+  { href: "/glossary", label: "Glossary" },
 ];
 
 interface Props {

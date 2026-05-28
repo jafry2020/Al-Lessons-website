@@ -8,6 +8,13 @@ interface Props {
   children?: React.ReactNode;
 }
 
+function termSlug(term: string): string {
+  return term
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 export function GlossaryTerm({ term, definition, children }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
@@ -41,7 +48,10 @@ export function GlossaryTerm({ term, definition, children }: Props) {
             {definition}
           </span>
           <span className="mt-3 block border-t border-border-subtle pt-3">
-            <a href="#" className="text-body-sm text-accent-500 hover:underline">
+            <a
+              href={`/glossary#${termSlug(term)}`}
+              className="text-body-sm text-accent-500 hover:underline"
+            >
               Open in glossary →
             </a>
           </span>
