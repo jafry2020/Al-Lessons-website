@@ -1,0 +1,270 @@
+---
+title: "Linear algebra for machine learning"
+description: "Vectors as data, matrices as transformations, dot products as similarity. Just enough linear algebra to make every model in this course click — no proofs."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: linear-algebra-for-ml
+lessonCode: "A0.5"
+estMinutes: 20
+prereqs:
+  - "A0.3 Datasets, features, and labels"
+objectives:
+  - "Read a vector as a point in space and as a list of features for one sample."
+  - "Compute and interpret a dot product as a measure of similarity."
+  - "Describe what a matrix does to a vector — geometrically, as a transformation."
+pitfalls:
+  - "Treating dimension as just a count. In ML, dimensions almost always have meanings (features), and they're not interchangeable."
+  - "Assuming high-dimensional intuition matches 2D intuition. It usually doesn't — the 'curse of dimensionality' is the catch-all term for when it doesn't."
+  - "Confusing the dot product with element-wise multiplication. They produce different things (a scalar vs a vector) and are used for different purposes."
+  - "Forgetting that matrix multiplication isn't commutative: AB ≠ BA in general."
+importantQuestions:
+  - question: "What is a vector, in ML terms?"
+    shortAnswer: "An ordered list of numbers. In ML, a vector typically represents either one sample (each number is a feature value) or one feature across samples. The same vector can be thought of as a point in space or as a direction."
+    detailed: |
+      A vector with 3 components like (1.5, 3, 2010) can stand for one row of data — say, a house's (sqft-in-thousands, bedrooms, year-built). It's also a point in three-dimensional space, three steps along each axis. The same triple can be thought of as a *direction* from the origin to that point. ML uses all three interpretations interchangeably depending on context.
+
+      Modern deep learning routinely uses vectors with thousands of components. A word embedding might be a 768-dimensional vector — a point in 768-dimensional space. We can't visualize that directly; we use 2D analogies and trust the math.
+    pitfalls:
+      - "Vectors in ML always have a basis — each component means something specific. A vector of features isn't interchangeable with a vector of pixel intensities even if they're both 'just vectors'."
+  - question: "What is a dot product, and why is it the most-used operation in all of ML?"
+    shortAnswer: "Multiply corresponding elements of two vectors, then sum. It measures alignment: high when the vectors point in similar directions, zero when perpendicular, negative when opposed. It's the building block of nearly every model — linear regression, neural networks, attention."
+    detailed: |
+      For vectors `a = (a1, a2, a3)` and `b = (b1, b2, b3)`, the dot product is `a·b = a1·b1 + a2·b2 + a3·b3`. Geometrically, `a·b = |a|·|b|·cos(θ)`, where θ is the angle between them.
+
+      That second form is the key to its meaning. When two vectors point in the same direction, cos(θ) = 1 and the dot product is maximized. When they're perpendicular, cos(θ) = 0. When they point opposite, cos(θ) = -1.
+
+      ML uses this to measure similarity: how similar are two word embeddings, two user-preference vectors, two image features. Nearly every score, similarity, and attention-weight in modern ML is a dot product (often normalized).
+    pitfalls:
+      - "Dot product doesn't normalize for magnitude — a high dot product can mean alignment OR just very long vectors. Cosine similarity = dot product divided by magnitudes — fixes this."
+  - question: "What does a matrix do to a vector?"
+    shortAnswer: "It transforms the vector — rotates it, scales it, projects it, or some combination. Geometrically, multiplying a matrix by a vector says 'apply this transformation to that point'."
+    detailed: |
+      Matrix-vector multiplication `Mv` produces a new vector that's `v` reshaped by the transformation `M`. A diagonal matrix scales along each axis (stretches some, shrinks others). A rotation matrix rotates `v` around the origin. A projection matrix flattens `v` onto a lower-dimensional subspace.
+
+      In a neural network, each layer is a matrix multiplication (plus a bias and a non-linearity). The matrix encodes 'how does this layer transform its input'. Training updates the matrix.
+    pitfalls:
+      - "Matrix multiplication is not commutative: `Mv` makes sense, `vM` requires `v` to be a row vector with compatible shape. Confusing the two is a common bug for people coming from a math background expecting commutativity."
+  - question: "Why do dimensions of `M` and `v` have to match?"
+    shortAnswer: "Each row of M is dotted with v to produce one element of the output. So the number of columns of M must equal the number of components of v. Otherwise the dot products don't make sense."
+    detailed: |
+      If M is a 4×3 matrix and v is a 3-component vector, the result Mv is a 4-component vector. Each of the 4 output components comes from dotting one row of M (3 numbers) with v (3 numbers).
+
+      If you try to multiply a 4×3 matrix by a 5-component vector, the dot products are undefined — too many components. Shape mismatches are the most common runtime error in deep learning code; tensor libraries make this visible by failing loudly.
+    pitfalls:
+      - "Shape errors in NumPy/PyTorch are not subtle bugs — they raise. Read the error and check your shapes; don't try to outsmart the library."
+  - question: "What is a matrix multiplication geometrically?"
+    shortAnswer: "Composition of two transformations. `(M·N)v` is 'first apply N to v, then apply M to the result'. The product matrix `M·N` encodes the combined effect."
+    detailed: |
+      If N rotates by 30 degrees and M scales by 2, then M·N is the matrix that 'rotates by 30 then scales by 2'. The order matters: N·M scales first, then rotates — a different transformation in general.
+
+      In a neural network, stacking layers is matrix composition. Layer 2's matrix times layer 1's matrix gives the composite transformation from input to layer-2 output. (Plus non-linearities, which prevent the stack from collapsing into a single matrix — that's the whole point of activation functions.)
+    pitfalls:
+      - "Matrix product order matters: AB ≠ BA in general."
+      - "Stacking purely linear layers without non-linearities is mathematically equivalent to one linear layer. Activation functions are what give deep networks their expressive power (A4.3 covers this)."
+  - question: "What's a high-dimensional space, and why does intuition break there?"
+    shortAnswer: "A space with many independent directions — modern ML uses spaces with hundreds or thousands. 2D and 3D intuition often misleads here. Random points are typically far from each other and roughly equidistant — the 'curse of dimensionality'."
+    detailed: |
+      In 2D, a random pair of points has variable distance — some are close, some far. In 1000-dimensional space, all randomly-sampled pairs end up with approximately the same distance from each other. Nearest-neighbor methods get less useful as dimensions grow because 'nearest' loses its meaning.
+
+      Other counter-intuitive facts about high-dimensional space: most of the volume of a high-d ball sits near its surface; random vectors are almost-always almost-perpendicular; the difference between the closest point and the farthest point shrinks relative to their distances.
+
+      Models like deep neural nets work *despite* these facts because they don't treat the high-dimensional space as a flat geometry — they learn to project onto useful lower-dimensional subspaces.
+    pitfalls:
+      - "Don't picture 1000-dimensional space; it'll lie to you. Trust the math."
+      - "The curse of dimensionality is exactly why dimensionality-reduction methods (PCA, UMAP, t-SNE — covered in module A3) exist."
+  - question: "When ML papers talk about an 'embedding', what does that mean in linear-algebra terms?"
+    shortAnswer: "A learned vector representation. An embedding maps a discrete object (a word, a user, an image) into a fixed-dimensional vector space so similar objects land near each other. The vector *is* the embedding."
+    detailed: |
+      Take the word 'king'. To do math on it, you need a numerical representation. An embedding model maps 'king' to a vector like (0.12, -0.34, 0.88, ...) in, say, 768-dimensional space. The mapping is learned: words used in similar contexts end up with similar vectors. The famous toy example: vector(king) - vector(man) + vector(woman) ≈ vector(queen). That works because the embedding has captured something about gender as a direction in the space.
+
+      All of modern NLP, recommender systems, and search are built on embeddings.
+    pitfalls:
+      - "Embedding dimensions don't have human-interpretable names. The 5th dimension isn't 'gender' — gender lives somewhere in a learned linear combination of many dimensions."
+---
+
+<TldrCallout>
+  A *vector* is a list of numbers. In ML, one vector per sample (each number is a feature value), or
+  one vector per feature (across samples). A *dot product* is the multiply-then-sum operation
+  between two vectors; it measures how aligned they are and is the building block of nearly every
+  model. A *matrix* is a stack of vectors; multiplying a matrix by a vector transforms it — rotates,
+  scales, projects. That's the whole story we'll need for the rest of this course.
+</TldrCallout>
+
+## Vectors
+
+<GlossaryTerm
+  term="Vector"
+  definition="An ordered list of numbers. In ML, a vector typically represents one sample (each number is a feature value) or one feature across samples. The same vector can be thought of as a point in space or as a direction from the origin."
+>
+  A vector
+</GlossaryTerm>
+is just a list of numbers, but it has two interpretations that you'll switch between constantly.
+
+**As a point in space.** A 2D vector `(3, 4)` is the point three units right
+and four units up. A 3D vector `(3, 4, 5)` adds a third axis. In ML, a 100-
+dimensional vector is a point in 100-dimensional space — we can't picture
+it, but the math is the same.
+
+**As a direction.** The same `(3, 4)` is also a _direction_ — pointing from
+the origin to that point. Length of that direction is `√(3² + 4²) = 5`. This
+view is useful when we're measuring angles between vectors.
+
+In ML, a vector usually represents one sample. For our house dataset, the
+sample `(1450, 3, 02139, 1972)` is a 4-vector — one point in 4-dimensional
+"house-feature space". A trained model is essentially a procedure for
+slicing that space into regions and assigning a prediction to each region.
+
+## The dot product
+
+This is the single most important operation in the lesson.
+
+<GlossaryTerm
+  term="Dot Product"
+  definition="An operation between two vectors that multiplies corresponding elements and sums them. Produces a scalar (a single number). Geometrically, it equals |a|·|b|·cos(θ), so it measures how aligned the two vectors are. The building block of nearly every operation in modern ML."
+>
+  The dot product
+</GlossaryTerm>
+of `a = (a₁, a₂, a₃)` and `b = (b₁, b₂, b₃)` is:
+
+```
+a · b = a₁·b₁ + a₂·b₂ + a₃·b₃
+```
+
+Multiply corresponding entries; sum. The result is a single number (a
+scalar), not a vector.
+
+Geometrically: `a · b = |a| · |b| · cos(θ)`, where `θ` is the angle between
+the two vectors and `|a|, |b|` are their lengths.
+
+That equation contains the soul of why dot products matter: **cos(θ)
+measures how aligned the vectors are**. When they point the same way,
+cos(0) = 1 and the dot product is maximized for the given lengths. When
+they're perpendicular, cos(90°) = 0 and the dot product is zero. When they
+point opposite, cos(180°) = -1 and the dot product is negative.
+
+<WorkedExample title="A dot product, by hand">
+
+Two house feature vectors, in `(sqft, bedrooms)`:
+
+`a = (1500, 3)` (a 3-bedroom 1500 sqft house)
+`b = (1450, 3)` (a 3-bedroom 1450 sqft house)
+`c = (500, 1)` (a 1-bedroom 500 sqft house)
+
+`a · b = 1500·1450 + 3·3 = 2,175,009` — large, because `a` and `b` are very
+similar.
+
+`a · c = 1500·500 + 3·1 = 750,003` — smaller, because `a` and `c` point
+in similar-ish directions but `c` is much shorter.
+
+To strip out the magnitude effect, divide by the lengths:
+
+```
+cos(θ_ab) = a·b / (|a|·|b|) ≈ 1.0  (essentially identical direction)
+cos(θ_ac) = a·c / (|a|·|c|) ≈ 1.0  (also very aligned!)
+```
+
+Both pairs point in nearly the same direction in feature space, despite very
+different magnitudes. This is _cosine similarity_ — the normalized dot
+product. It's what every modern search and recommendation system uses to
+measure "is item A like item B".
+
+</WorkedExample>
+
+A _linear regression_ model is literally a dot product:
+
+```
+prediction = w · x + b
+```
+
+where `w` is a vector of weights (parameters) and `x` is a vector of feature
+values. The model computes the dot product of features with weights, adds a
+bias, and that's the prediction. Most of the rest of ML stacks this idea —
+many dot products in parallel, then a non-linearity, then more dot
+products.
+
+<AnalogyCallout>
+  Imagine two arrows pointing out of the same spot. Their *dot product* measures how parallel they
+  are, scaled by their lengths. Two arrows in the same direction: big positive dot product. Two
+  perpendicular arrows: zero. Two opposite arrows: big negative. It's a single number that
+  summarizes "how aligned are these two things?"
+</AnalogyCallout>
+
+## Matrices
+
+A{" "}
+
+<GlossaryTerm
+  term="Matrix"
+  definition="A two-dimensional array of numbers — rows and columns. Can be thought of as a stack of row vectors (each row is one sample) or a stack of column vectors (each column is one feature across samples). Multiplying a matrix by a vector transforms the vector geometrically."
+>
+  matrix
+</GlossaryTerm>
+is a rectangle of numbers — rows and columns. You can think of it as a stack of vectors. In ML, a
+dataset of `N` samples each with `D` features is naturally a matrix with shape `N × D`: N rows, D
+columns.
+
+When you multiply a matrix by a vector, you get a new vector. Geometrically,
+the matrix is _transforming_ the vector — rotating it, scaling it,
+projecting it, or some combination.
+
+A neural-network layer is, mathematically, a matrix multiplication followed
+by adding a bias and applying a non-linearity. The matrix is the layer's
+learnable weights; multiplying by it transforms the input vector into an
+output vector that the next layer consumes.
+
+```
+output_layer1 = ReLU(W₁ · input + b₁)
+output_layer2 = ReLU(W₂ · output_layer1 + b₂)
+...
+prediction = W_n · output_layer_{n-1} + b_n
+```
+
+That's the entire forward pass of a vanilla feedforward network, in two
+lines of pseudo-math. Every layer: matrix multiplication, bias, non-
+linearity. The non-linearity (ReLU, GELU, etc.) is what prevents the stack
+of matrix multiplications from collapsing back into a single matrix — it's
+the source of the network's expressive power.
+
+## A note on high-dimensional spaces
+
+ML routinely lives in spaces with hundreds or thousands of dimensions. Your
+2D and 3D geometric intuition is going to lie to you there. Specifically:
+
+- In 1000-dimensional space, two random vectors are _almost always almost
+  perpendicular_. There is just a lot of room for them to differ.
+- Distances between random points in high-dimensional space are almost all
+  the same. The 'nearest' point and the 'farthest' point are barely
+  distinguishable in relative terms.
+- Most of the volume of a high-dimensional ball is concentrated near its
+  surface, not its interior.
+
+This is collectively known as the _curse of dimensionality_. It's why
+nearest-neighbor methods degrade in high dimensions, and why we need
+techniques like PCA, UMAP, and t-SNE (Module A3) to project down to spaces
+we can reason about. Modern deep learning sidesteps the curse by learning
+its own low-dimensional representations — embeddings — inside the high-
+dimensional space.
+
+<InlineQuiz
+  question="A linear-regression model is `prediction = w · x + b`, where `w` and `x` are vectors and `b` is a number. What is the dot product `w · x` doing, conceptually?"
+  options={[
+    { text: "Counting the number of features." },
+    {
+      text: "Measuring how aligned the feature vector x is with the learned weight vector w, scaled by their magnitudes.",
+      correct: true,
+    },
+    { text: "Computing the angle between the prediction and the true label." },
+    { text: "Just adding the feature values together." },
+  ]}
+  explanation="The dot product `w · x` measures alignment. The weight vector `w` is what the model learned during training — it's a direction in feature space that points toward higher predicted values. A new sample's feature vector `x` gets dot-producted with `w`: the more aligned `x` is with `w`, the higher the prediction. Adding the bias `b` shifts the whole thing. This is literally how every linear model, every layer of a neural network, and every attention head in a transformer works."
+/>
+
+## Where this lesson re-appears
+
+Almost everywhere. A0.6 (gradients) uses vectors of partial derivatives.
+A2.1 (linear regression) is a direct extension of the dot-product idea. A4
+(neural networks) stacks dot products. B0.5 (embeddings) lives entirely in
+vector space. If you make this lesson solid now, the rest of the course
+will be much easier.

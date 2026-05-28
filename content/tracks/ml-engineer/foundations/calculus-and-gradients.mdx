@@ -1,0 +1,297 @@
+---
+title: "Calculus and gradients"
+description: "Slopes, derivatives, and gradients — the math that makes a model 'know' which direction to nudge its parameters. No proofs; just the intuition you'll use every day."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: calculus-and-gradients
+lessonCode: "A0.6"
+estMinutes: 22
+prereqs:
+  - "A0.2 How machines learn from data"
+  - "A0.5 Linear algebra for ML"
+objectives:
+  - "Read a derivative as the slope of a function at a point."
+  - "Read a gradient as a vector of partial derivatives — a multi-dimensional slope."
+  - "Explain why we step in the *negative* gradient direction to minimize loss."
+pitfalls:
+  - "Mistaking the gradient for the loss. The gradient is the *slope* of the loss, not its value. A flat region has a small gradient regardless of how high the loss is."
+  - "Setting the learning rate too high. The update overshoots and the loss oscillates or explodes. Too low and it crawls. There's no formula; you tune."
+  - "Forgetting that gradient descent finds *local* minima. It doesn't guarantee finding the global minimum, only one of possibly many valleys."
+  - "Conflating partial derivatives with full derivatives. For a multi-variable function, the gradient is the *vector* of partial derivatives — not a single number."
+importantQuestions:
+  - question: "What is a derivative, intuitively?"
+    shortAnswer: "The slope of a function at a single point. If the function is at height f(x), the derivative f'(x) tells you how fast f is rising or falling right there. A horizontal slope is zero; a steep upward slope is large and positive."
+    detailed: |
+      Imagine you're walking along the graph of a function. At every point, the ground under you has some slope: maybe you're going up, maybe down, maybe momentarily flat. The derivative is just that slope, point by point.
+
+      For f(x) = x², the derivative is f'(x) = 2x. At x = 0 the slope is 0 (the bottom of the parabola). At x = 3 the slope is 6 — rising steeply. At x = -2 the slope is -4 — falling.
+
+      In ML we don't usually need to compute derivatives by hand — autodiff libraries (PyTorch, TensorFlow) do it for us. But understanding what they represent is what makes training intelligible.
+    pitfalls:
+      - "Derivatives are local. They tell you about behavior at a point — not about the function's overall shape."
+  - question: "What is a gradient, and how is it different from a derivative?"
+    shortAnswer: "A gradient is the multi-dimensional version of a derivative. For a function of many variables, the gradient is the vector of partial derivatives — one slope per input direction. It points 'uphill' (toward steepest ascent)."
+    detailed: |
+      Imagine standing on a hillside. The slope you feel under your feet depends on which direction you face. If you face uphill, the slope is steepest. If you face along the contour line, the slope is zero.
+
+      A gradient says 'face this direction to feel the steepest uphill slope, and here's how steep it is'. Mathematically, for `L(w₁, w₂)`, the gradient is `(∂L/∂w₁, ∂L/∂w₂)` — a vector where each component is the slope along one input direction.
+
+      The reason training subtracts the gradient (rather than adding it) is straightforward: the gradient points *uphill*, but we want loss to go *down*. Step in the opposite direction.
+    pitfalls:
+      - "Each component of the gradient is a partial derivative — slope *with respect to one input* while the others are held constant."
+      - "The gradient is a vector; the loss it relates to is a scalar. Don't mix them up in your head."
+  - question: "What is gradient descent?"
+    shortAnswer: "The algorithm that trains nearly every modern ML model. Compute the gradient of the loss with respect to each parameter, take a small step in the negative gradient direction, repeat. The step size is the learning rate."
+    detailed: |
+      The update rule is one line:
+
+      ```
+      w_new = w_old - lr · ∇L(w_old)
+      ```
+
+      Where `∇L` is the gradient of the loss and `lr` is the learning rate (a positive number you set, typically small).
+
+      You start with random parameter values. You compute the gradient on a batch of training data. You subtract `lr · gradient` from each parameter. You repeat thousands or millions of times. As long as the gradient is non-zero, you're moving downhill on the loss surface. When the gradient becomes nearly zero, you've reached a local minimum — flat, no slope to descend.
+
+      It's astonishingly general. Almost every modern ML training procedure is some flavor of gradient descent.
+    pitfalls:
+      - "Gradient descent does not guarantee the global minimum — it finds a local one. For neural networks, local minima are usually 'good enough'."
+      - "If your learning rate is too high, the algorithm overshoots and may diverge. If too low, it converges slowly. There is no formula for the right value."
+  - question: "Why subtract the gradient instead of add?"
+    shortAnswer: "The gradient points in the direction of *steepest ascent*. We want to minimize loss, so we step opposite — the steepest descent direction."
+    detailed: |
+      Think of the loss surface as a landscape and the parameters as your location on it. The gradient at your current location is an arrow pointing uphill. To go downhill, walk in the exact opposite direction. The minus sign in the update rule is just 'walk downhill'.
+
+      It would be equally valid to define the gradient as 'descent direction' and use a plus sign — that's a notational choice. The convention is ascent + subtract.
+    pitfalls:
+      - "If you accidentally add the gradient (forget the minus sign), your loss *climbs* and the model gets worse fast. It's a real bug class — easy to spot from a rising loss curve."
+  - question: "What is the learning rate, and how do you pick one?"
+    shortAnswer: "A small positive number multiplied by the gradient at every step — it controls how far each step moves. Typical values are 0.001 to 0.1. You pick it by trial: try a few, plot the loss, keep what works."
+    detailed: |
+      Too high: the algorithm leaps past the minimum and bounces around (or diverges). Loss curve looks chaotic or explodes. Too low: each step is tiny; training takes forever and may stall.
+
+      The right value depends on the model, the data, and the optimizer. A common workflow: start with a moderate value (e.g., 0.01 for SGD, 0.001 for Adam), watch the loss curve, halve it if it explodes, double it if it crawls. Modern training pipelines also use *learning-rate schedules* (A4.5) that change the value over training.
+    pitfalls:
+      - "The 'best' learning rate is not unique to the model — it depends on batch size, optimizer, and which parameters you're updating."
+  - question: "If gradient descent only finds local minima, why does it work for neural networks at all?"
+    shortAnswer: "Empirically, the loss surfaces of large neural networks have many local minima that are nearly as good as the global one. We don't need the global minimum — we need a minimum that generalizes, and local-but-good is usually enough."
+    detailed: |
+      It was long feared that local minima would doom neural network training. The 2010s revealed something more nuanced: for very high-dimensional networks, true local minima are rare; saddle points (flat-ish regions with curvature going up in some directions and down in others) are much more common. And the local minima that exist tend to have similar loss values to each other.
+
+      Even more important: the goal isn't to memorize the training set perfectly (which a global minimum on training loss would do). The goal is to *generalize*. Many local minima generalize better than the global one because they correspond to simpler solutions. So 'good local minimum that generalizes well' is the actual target.
+    pitfalls:
+      - "The classical worry about local minima was overblown for deep nets; the modern worry is saddle points and plateaus, which slow convergence."
+  - question: "What is a stochastic gradient (vs. a 'true' gradient)?"
+    shortAnswer: "A noisy estimate of the gradient computed from a small batch of data instead of the whole dataset. Cheaper, faster, and the noise actually helps escape bad local minima — but each step is less precise."
+    detailed: |
+      The 'true' gradient of the average loss over the entire training set is what gradient descent would technically use. For modern datasets, computing it once is prohibitively expensive. Instead, we compute the gradient on a small mini-batch (32–8192 samples typically) and treat that as a noisy estimate.
+
+      The noise turns out to be feature, not bug: it helps the algorithm bounce out of shallow local minima and saddle points. The whole field of 'mini-batch stochastic gradient descent' (which is what every deep-learning training run actually does) is built on this trade.
+    pitfalls:
+      - "Larger batches give more accurate gradient estimates but require linearly more compute per step. The optimal batch size is a hyperparameter — bigger isn't always better."
+---
+
+<TldrCallout>
+  A *derivative* is the slope of a function at a point. A *gradient* is the multi-dimensional
+  version — a vector of partial derivatives, one per input. Gradients point uphill. *Gradient
+  descent* is the algorithm that trains almost every modern ML model: compute the gradient of the
+  loss, take a small step in the opposite (downhill) direction, repeat.
+</TldrCallout>
+
+## Why this lesson exists
+
+Every time a model "learns", what's happening underneath is gradient
+descent. You don't need to do derivatives by hand — modern libraries
+(PyTorch, TensorFlow) compute them for you with _autodiff_. But you do need
+to understand what they mean, because otherwise the entire training loop
+is opaque magic.
+
+We're going to keep this concrete: slope, multi-dimensional slope, step
+downhill. No proofs, no limits, no epsilons.
+
+## Slope, formally called the derivative
+
+<GlossaryTerm
+  term="Derivative"
+  definition="The slope of a function at a single point. For f(x), the derivative f'(x) tells you how fast f is changing as x changes. A horizontal section has zero derivative; a steeply rising section has a large positive derivative."
+>
+  A derivative
+</GlossaryTerm>
+is just a slope. For a function `f(x)`, its derivative `f'(x)` is the slope of the curve at the
+point `x`.
+
+Concretely. Take `f(x) = x²`. The derivative is `f'(x) = 2x`. So:
+
+- At `x = 0`, slope is 0 (we're at the bottom of the U).
+- At `x = 1`, slope is 2 (going up moderately).
+- At `x = 3`, slope is 6 (going up steeply).
+- At `x = -2`, slope is -4 (going down — moving left means going up, moving
+  right means going down).
+
+You don't need to derive any of these by hand. You need to read them: _at
+this point, the function is changing this fast_.
+
+## Multi-dimensional slope: the gradient
+
+Real ML models have not one parameter but many — sometimes billions. The
+loss is then a function of many parameters: `L(w₁, w₂, w₃, …)`. Each
+parameter has its own slope (its _partial derivative_), and the collection
+of all partial derivatives is the{" "}
+
+<GlossaryTerm
+  term="Gradient"
+  definition="A vector of partial derivatives. For a function L(w₁, w₂, …, wₙ), the gradient is the n-dimensional vector (∂L/∂w₁, ∂L/∂w₂, …, ∂L/∂wₙ). Each component is the slope of L with respect to one parameter, holding the others fixed. Geometrically, the gradient points in the direction of steepest ascent."
+>
+  gradient
+</GlossaryTerm>
+:
+
+```
+∇L = (∂L/∂w₁, ∂L/∂w₂, …, ∂L/∂wₙ)
+```
+
+A{" "}
+
+<GlossaryTerm
+  term="Partial Derivative"
+  definition="The slope of a multi-variable function with respect to one variable, with the other variables held constant. ∂L/∂w₁ asks: 'if I nudge w₁ a tiny bit and keep everything else fixed, how does L change?'"
+>
+  partial derivative
+</GlossaryTerm>
+`∂L/∂w₁` answers: "if I nudge `w₁` a tiny bit and keep all the other parameters fixed, how does `L`
+change?". One number per parameter.
+
+Geometrically, the gradient vector points in the direction of _steepest
+ascent_ on the loss surface. If you face along it, you're walking uphill
+the fastest. The opposite direction is steepest descent.
+
+<AnalogyCallout>
+  Imagine you're a hiker standing on a hillside, and it's foggy — you can't see the valley. But you
+  can feel the ground under your feet. The *gradient* is a compass that always points exactly
+  uphill, with a needle whose length tells you how steep that uphill is. To descend the mountain,
+  follow the compass backwards.
+</AnalogyCallout>
+
+## Gradient descent: the universal recipe
+
+The recipe for training virtually every modern ML model:
+
+```
+w_new = w_old - lr · ∇L(w_old)
+```
+
+That's it. The full training loop is repeating this update millions of
+times. We have a name for the small positive number `lr` —
+
+<GlossaryTerm
+  term="Learning Rate"
+  definition="The scalar that controls how big each gradient-descent step is. Too high and the update overshoots; too low and training is too slow. Typical values: 0.001–0.1, but the right value depends on the optimizer, model, and data."
+>
+  the learning rate.
+</GlossaryTerm>
+
+In plain language, the loop is:
+
+1. Predict on a batch of training data with the current parameters.
+2. Compute the loss (how wrong the predictions are).
+3. Compute the gradient of the loss with respect to each parameter — the
+   autodiff library does this for you.
+4. Subtract `learning rate × gradient` from each parameter.
+5. Repeat.
+
+## See it move
+
+The live visualization below shows gradient descent on a simple
+bowl-shaped loss surface. The dot starts somewhere and walks downhill, each
+step using the negative gradient at its current location. Watch how the
+steps are largest where the slope is steepest, and small near the minimum
+where the slope flattens out.
+
+<GradientDescentHero />
+
+<WorkedExample title="Three gradient descent steps, by hand">
+
+Take the 1D loss `L(w) = (w − 3)²`. We want to find the value of `w` that
+minimizes `L`. (The answer, obviously, is `w = 3`. We'll let the algorithm
+find it.)
+
+The derivative is `L'(w) = 2(w − 3)`. Let's start at `w = 0` with learning
+rate `lr = 0.1`.
+
+**Step 1.** At `w = 0`: `L'(0) = 2·(0 − 3) = -6`. Update: `w ← 0 − 0.1·(-6)
+= 0.6`.
+
+**Step 2.** At `w = 0.6`: `L'(0.6) = 2·(0.6 − 3) = -4.8`. Update: `w ← 0.6 −
+0.1·(-4.8) = 1.08`.
+
+**Step 3.** At `w = 1.08`: `L'(1.08) = -3.84`. Update: `w ← 1.08 −
+0.1·(-3.84) = 1.464`.
+
+We're moving toward 3, and the step sizes shrink as we approach it (because
+the slope is getting flatter). After about 30 steps, `w` will be within
+0.001 of the true minimum. That's gradient descent.
+
+</WorkedExample>
+
+## The two ways gradient descent fails (and how to spot them)
+
+**Learning rate too high.** Each step overshoots; the loss bounces, spikes,
+or explodes to infinity (NaN). Diagnostic: plot the loss over training
+steps. If it isn't monotonically decreasing (or close to it), `lr` is too
+big.
+
+**Learning rate too low.** The loss decreases, but excruciatingly slowly.
+You waste training time. Diagnostic: same plot. If the loss curve looks
+like a gentle slope and you've used your compute budget, you needed a
+bigger learning rate.
+
+There's no formula for the right learning rate. You try a few. Modern
+optimizers (Adam, RMSprop — see A4.5 for the gory details) adapt the
+effective learning rate per parameter automatically, which is why they're
+the default for neural networks.
+
+## What about local minima?
+
+A real loss surface for a neural network isn't a simple bowl. It has many
+valleys, ridges, saddle points. Gradient descent finds a _local_ minimum —
+one valley — not necessarily the deepest one (the _global_ minimum).
+
+For decades this was the central worry about training neural networks. The
+2010s revealed two things that made the worry less serious than expected:
+
+1. For very high-dimensional networks (millions of parameters), true local
+   minima are rare; saddle points and flat plateaus are much more common.
+   And saddle points are escapable with the stochastic noise of mini-batch
+   updates.
+2. The local minima that exist tend to be roughly equivalent in loss
+   value. They aren't great, they aren't terrible — they're all "pretty
+   good". And remarkably, deep-network minima often generalize better than
+   the global minimum would, because the global minimum tends to memorize
+   training noise.
+
+The net effect: gradient descent works for neural networks despite not
+guaranteeing the global minimum. We don't need the deepest valley — we need
+a deep-enough valley that generalizes well, and we get one.
+
+<InlineQuiz
+  question="During training, the loss curve initially decreases nicely, then suddenly explodes to NaN. Which is the most likely cause?"
+  options={[
+    { text: "The training data is too small." },
+    { text: "The model has too few parameters." },
+    {
+      text: "The learning rate is too high — a gradient step overshot and the parameters diverged.",
+      correct: true,
+    },
+    { text: "The loss function is incorrect." },
+  ]}
+  explanation="A loss curve that decreases and then suddenly explodes is the classic signature of a learning rate that's too high. A single large gradient step pushes the parameters into a region where the loss is enormous, the next gradient is also enormous, and the parameters fly to infinity (which numerically becomes NaN). Halving the learning rate is the standard first fix."
+/>
+
+## What you now have
+
+You have the language to read every later lesson in this track. _Loss_,
+_gradient_, _learning rate_, _gradient descent_ — these four words show up
+in every paper, every framework, and every job interview. The math
+underneath is now demystified.

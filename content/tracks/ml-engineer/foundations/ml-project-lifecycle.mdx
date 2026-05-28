@@ -1,0 +1,333 @@
+---
+title: "The ML project lifecycle"
+description: "Seven phases from a vague business question to a model that survives in production. The one map you'll keep coming back to."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: ml-project-lifecycle
+lessonCode: "A0.9"
+estMinutes: 18
+prereqs:
+  - "A0.3 Datasets, features, and labels"
+  - "A0.8 Evaluation metrics"
+objectives:
+  - "Name the seven phases of a typical ML project and what each one produces."
+  - "Identify the most common failure mode at each phase before it kills the project."
+  - "Explain why 'launch the model' is the middle of the story, not the end."
+pitfalls:
+  - "Jumping straight to modeling. Most projects die in problem-framing or data, not in model choice."
+  - "Treating deployment as the finish line. Production drift kills models that worked perfectly at launch."
+  - "Working linearly. Real projects loop back constantly — discovering during evaluation that you needed different features means returning to phase 2."
+  - "Optimizing for the wrong metric. Picking the metric is a phase 1 decision; making it match what the business actually wants is the hardest part."
+importantQuestions:
+  - question: "What are the seven phases of an ML project?"
+    shortAnswer: "Frame the problem → assemble the data → engineer features → train the model → evaluate → deploy → monitor. Each phase has its own deliverables and its own failure modes. Real projects loop back constantly."
+    detailed: |
+      Phase 1 (Frame): turn a vague business question into a precise ML problem with a specific input, output, and metric. 'Reduce customer churn' becomes 'predict the probability that a customer cancels within 30 days, optimized for PR-AUC, with the deployment use case of triggering retention emails when probability exceeds 0.6'.
+
+      Phase 2 (Data): assemble training data. Cleaning, labeling, splitting, validating. Usually 60-80% of the total project time.
+
+      Phase 3 (Features): transform raw data into model-ready features. Encoding categories, scaling numerics, building interactions, creating embeddings.
+
+      Phase 4 (Model): pick an architecture, train it. Try a few baselines. Usually less time than people expect.
+
+      Phase 5 (Evaluate): measure on validation/test data using the metrics chosen in phase 1. Investigate failures.
+
+      Phase 6 (Deploy): wrap the trained model in a service, expose an API, integrate with the product. Watch latency, throughput, fallbacks.
+
+      Phase 7 (Monitor): once live, watch for drift, label feedback, retraining triggers. The model is now a system, not an artifact.
+    pitfalls:
+      - "People underestimate phase 2 and overestimate phase 4. Real projects are flipped."
+  - question: "What does 'framing' the problem mean, and why is it the most important phase?"
+    shortAnswer: "Framing translates a business goal into a specific ML question: what's the input, what's the output, what metric measures success, what does production use of the model look like. Most projects that fail, fail here — they build a perfect solution to the wrong problem."
+    detailed: |
+      Bad framing example: 'predict customer satisfaction'. What's the input — every interaction? Last quarter's data? What's the output — a 1-5 score, a probability of churn, a sentiment label? What metric — accuracy, F1, ROC-AUC? How is the output used — to trigger a survey, to prioritize agent attention, to set pricing?
+
+      Good framing example: 'predict the probability that a customer will rate a support interaction as ≤2 stars, using only data available before the agent responds, optimized for PR-AUC at threshold 0.4, used to route high-risk interactions to senior agents'. Now every later phase has a clear target.
+
+      Most teams skim framing because it feels like 'just talking'. It's not. It's the most leveraged phase — the cost of bad framing compounds through everything that follows.
+    pitfalls:
+      - "If you can't write down 'a positive prediction means X happens in the product' in one sentence, you're under-framed."
+  - question: "Why does data usually consume the majority of project time?"
+    shortAnswer: "Because data in the wild is messy, partial, inconsistent, and often mislabeled. Cleaning, labeling, deduplicating, splitting — and discovering all the problems you didn't anticipate — takes longer than people expect. Every senior ML engineer has stories."
+    detailed: |
+      Common data problems: missing values, inconsistent units, encoding mistakes, duplicate samples, wrong labels, label drift over time, sampling bias, samples that aren't independent, time leakage between rows.
+
+      Industry estimates put data work at 60–80% of total ML project effort. New tools (data validation, automated labeling, synthetic data) shave this somewhat, but it remains the biggest time sink.
+
+      A rough rule: if you're spending less than half your project on data, you probably haven't found all the data problems yet.
+    pitfalls:
+      - "Cleaner data almost always beats a better model. Spending two weeks improving features and labels beats two weeks tuning hyperparameters."
+  - question: "What is feature engineering, and is it dead?"
+    shortAnswer: "Feature engineering is hand-crafting input columns that make a model's job easier — e.g., turning a timestamp into 'hour of day' and 'day of week'. It's mostly dead in deep learning but still very alive in tabular ML, recommender systems, and time-series."
+    detailed: |
+      For images, text, and audio, deep learning learns its own features from raw inputs. Hand-engineering 'edge detectors' for vision is a historical artifact. But for tabular data — the kind you find in spreadsheets — humans still write better features than models can learn.
+
+      Examples of useful tabular features: ratios (price/sqft), differences (today's price - yesterday's price), embeddings of categorical variables, target encodings, time-since-event. The art is creating features that make patterns easier to spot.
+    pitfalls:
+      - "Don't engineer features that leak the answer. (See A0.3 — Data Leakage.)"
+      - "Reproducing your feature pipeline at inference time is non-trivial. The bug class 'training-serving skew' is huge in production."
+  - question: "Why do real projects loop back instead of going linearly?"
+    shortAnswer: "Because each phase produces information that changes earlier decisions. Discovering during evaluation that the model can't distinguish two classes might mean returning to feature engineering or data collection. Linear plans almost never survive contact."
+    detailed: |
+      Concrete examples of loop-backs:
+      - Evaluation reveals high error on a sub-population. Loop back to data — was that sub-population under-represented?
+      - Production monitoring shows the model is drifting. Loop back to features — has the input distribution shifted?
+      - Stakeholders see the predictions and realize they care about a different metric. Loop back to framing.
+
+      The mental model isn't a pipeline; it's a feedback loop. The Gantt chart you'll draw at kickoff will be wrong. Plan for it.
+    pitfalls:
+      - "Project managers who insist on a linear plan with 'data done by week 3' usually deliver something rushed and wrong. Fight for iterative milestones."
+  - question: "What is model drift, and why does it matter?"
+    shortAnswer: "Drift is when the real-world data distribution slowly diverges from the training distribution, causing model performance to degrade after deployment. Fraud patterns evolve; user behavior shifts; products change. A model trained in March may be wrong by September."
+    detailed: |
+      Two distinct kinds.
+
+      *Data drift*: the input distribution changes. New customer demographics, new product mix, seasonal changes. The model is being asked questions it wasn't trained for.
+
+      *Concept drift*: the relationship between inputs and the right answer changes. The same input that meant 'fraud' a year ago means 'legitimate' now because fraudsters adapted.
+
+      Both degrade performance silently. Mitigation: monitor model outputs and feature distributions in production; set up alerts; retrain on a regular cadence (monthly, weekly) or when alerts fire. Some teams do continuous retraining.
+    pitfalls:
+      - "Without monitoring, drift is invisible until something downstream breaks. Always build monitoring before you ship."
+  - question: "What does 'deploying' a model actually involve, beyond saving the weights?"
+    shortAnswer: "Wrapping the model in a service that can take inference requests at production scale and latency. Plus all the surrounding plumbing: feature computation, input validation, fallback behavior, logging, monitoring, version control, gradual rollouts."
+    detailed: |
+      A trained model is a few hundred megabytes of weights. A *deployed model* is a service that:
+      - Computes features on-the-fly from whatever inputs the product has at that moment.
+      - Validates inputs and handles malformed ones gracefully.
+      - Serves predictions within the product's latency budget (often <100 ms).
+      - Logs every prediction for later analysis and retraining.
+      - Falls back to a default if the model is unavailable.
+      - Supports A/B testing against the previous version.
+      - Tracks which model version generated each prediction.
+
+      Deployment is more software engineering than ML. It's also where most MLOps tooling lives (MLflow, BentoML, Triton, custom internal platforms).
+    pitfalls:
+      - "Training-serving skew — the feature pipeline at inference time computing something slightly different than at training time — is the #1 silent killer of production models."
+  - question: "If everything works at launch, can the project be 'done'?"
+    shortAnswer: "Never. A deployed model is a system that needs maintenance forever. Monitoring catches drift, retraining catches it before it hurts, and ongoing evaluation against shifting business needs catches when the original framing has become obsolete."
+    detailed: |
+      The first deploy is the middle of the project, not the end. Ongoing responsibilities:
+      - Monitor input distributions for drift.
+      - Monitor output distributions and performance metrics.
+      - Re-evaluate against new labeled samples periodically.
+      - Retrain when drift is detected or on a regular cadence.
+      - Track downstream metrics (the business impact, not just the model's metric).
+      - Sunset the model when the business need it served goes away.
+
+      Teams that treat ship-day as done end up with models running for years that no one understands and that everyone is afraid to touch. That's the worst place to be.
+    pitfalls:
+      - "Underestimating maintenance cost in the original project proposal causes teams to be perpetually under-resourced. Budget for it upfront."
+---
+
+<TldrCallout>
+  An ML project has seven phases: *frame the problem*, *assemble the data*, *engineer features*,
+  *train the model*, *evaluate*, *deploy*, *monitor*. Most failures happen in framing and data, not
+  modeling. Real projects loop back across phases constantly. Deployment is the middle of the story,
+  not the end — monitoring is a permanent responsibility.
+</TldrCallout>
+
+## The map
+
+Here's the map every senior ML engineer carries in their head:
+
+```
+Frame  →  Data  →  Features  →  Model  →  Evaluate
+                                              ↓
+                                           Deploy
+                                              ↓
+                                           Monitor  → (loop back to any earlier phase)
+```
+
+It looks linear. It isn't. Every phase can — and usually does — send you
+back to an earlier one when it reveals something you didn't know. The map
+is a default direction of travel, not a schedule.
+
+## Phase 1 — Frame the problem
+
+You start with a vague business question. "How can we reduce churn?" "Are
+our recommendations any good?" "Can we automate this manual review step?"
+
+<GlossaryTerm
+  term="Problem Framing"
+  definition="The phase of an ML project that translates a vague business goal into a specific, testable ML problem: what's the input, what's the output, which metric measures success, and how is the prediction used in the product. The most leveraged phase of the project — bad framing wastes everything downstream."
+>
+  Framing
+</GlossaryTerm>
+is the work of turning that into a *specific* ML problem you can actually solve. By the end of
+framing you should be able to write down, in one paragraph:
+
+- The exact **input** to the model.
+- The exact **output** of the model.
+- The **metric** you'll measure success by (and the threshold for "good
+  enough").
+- **How the prediction is used** in the product.
+- **What it means** when the model is wrong.
+
+Most projects that fail, fail here. They build a perfect solution to the
+wrong problem.
+
+## Phase 2 — Assemble the data
+
+This is the long pole. Plan for 60-80% of your project time. You'll spend
+it on:
+
+- Pulling data from operational systems that weren't designed for ML.
+- Reconciling inconsistent schemas, units, time zones.
+- Discovering that the "label" column you assumed exists is filled in for
+  10% of samples.
+- Finding out the data has time leakage (A0.3) you didn't anticipate.
+- Splitting into train/validation/test correctly.
+- Maybe labeling more data, by humans or pseudo-labels.
+
+A useful mental shortcut: cleaner data almost always beats a better model.
+Two weeks improving data beats two weeks tuning hyperparameters, almost
+every time.
+
+## Phase 3 — Engineer features
+
+For tabular data, this is where you transform raw columns into model-ready
+features: encode categories, scale numbers, build ratios and differences,
+maybe compute embeddings.
+
+For images, text, audio — deep learning learns its own features from raw
+inputs and this phase is mostly skipped. (Though even there you'll usually
+do _some_ preprocessing: tokenization for text, resizing for images.)
+
+The key constraint, repeated from A0.3: **every feature used at training
+time must be reproducible at inference time, from information knowable
+before the label is known.** Otherwise you're leaking.
+
+## Phase 4 — Train the model
+
+Pick an architecture, pick a loss, pick an optimizer, run training. People
+expect this phase to be where the magic happens; in reality it's often the
+fastest phase.
+
+The standard play: start with a dumb baseline (a single linear model, a
+small tree). Beat it. Iterate. Don't reach for the fanciest architecture
+until you've established what "fancy" needs to beat.
+
+## Phase 5 — Evaluate
+
+Measure on the held-out test set using the metrics you chose during
+framing. Look at the confusion matrix. Inspect failures. Slice the data
+by relevant sub-populations and check whether the model fails on some
+groups more than others.
+
+If the model isn't good enough, this is where you loop back. Often back to
+data or features. Sometimes — but less often than you'd think — back to
+the model architecture.
+
+## Phase 6 — Deploy
+
+A trained model is a file. A _deployed model_ is a service that:
+
+- Computes features from whatever inputs the product has at request time.
+- Returns predictions within the product's latency budget.
+- Logs every prediction for later analysis and retraining.
+- Falls back gracefully when something goes wrong.
+- Supports A/B testing and gradual rollouts.
+
+Deployment is mostly software engineering. The model is a small piece of
+the system.
+
+<AnalogyCallout>
+  A trained model is a recipe. Deployment is the working restaurant — ovens, prep station, ticketing
+  system, replacement cooks. Restaurants with a great recipe still fail if the kitchen doesn't work.
+  Most ML failures in production are kitchen failures, not recipe failures.
+</AnalogyCallout>
+
+## Phase 7 — Monitor
+
+The first deploy is the middle of the story.{" "}
+
+<GlossaryTerm
+  term="Model Drift"
+  definition="The decline of a deployed model's performance over time as the real-world data distribution diverges from what the model was trained on. 'Data drift' refers to input changes; 'concept drift' refers to changes in the relationship between inputs and the correct label. Both require monitoring and periodic retraining."
+>
+  Model drift
+</GlossaryTerm>
+is what happens after launch:
+
+- _Data drift_: inputs change. New product categories, new user
+  demographics, seasonal shifts.
+- _Concept drift_: the right answer changes. Fraud patterns evolve; user
+  preferences shift; gaming the system invalidates yesterday's signal.
+
+Without monitoring, drift is silent. The model keeps producing predictions;
+they just keep getting worse. Months later someone notices a downstream
+metric has dropped and starts investigating.
+
+Monitor:
+
+- Input distributions (alert on shift).
+- Output distributions (alert on shift).
+- Performance against the slow trickle of newly-labeled data.
+- Downstream business metrics that depend on the model.
+
+Retrain on a regular cadence — monthly is common, weekly for high-volatility
+domains — or on alert.
+
+<WorkedExample title="Walking through a churn-prediction project">
+
+A subscription business wants to reduce churn. We're going to build a
+churn-prediction model.
+
+**Phase 1 (Frame).** Output: probability a user cancels within 30 days.
+Input: features known at the time of prediction (last login, tenure, plan
+type, support tickets, recent usage). Metric: PR-AUC (highly imbalanced —
+fewer than 5% of users churn per month). Use case: when probability > 0.4,
+trigger a retention email; > 0.7, route to a customer-success rep.
+
+**Phase 2 (Data).** Pull 18 months of user data. Discover: 'cancelled_at'
+is null for some users who actually cancelled (joined and immediately left
+within the same billing period). Spend a week cleaning. Split by _user_,
+not by _row_, so no user appears in both train and test.
+
+**Phase 3 (Features).** Engineer: days_since_last_login, tickets_per_month,
+trend_in_logins (last 30 vs prior 30), plan_age. Drop user_id (would leak).
+
+**Phase 4 (Model).** Baseline: logistic regression. PR-AUC: 0.34. Then
+XGBoost: PR-AUC 0.51. Then a deep tabular model: PR-AUC 0.53. We ship
+XGBoost — simpler, faster inference, nearly the same quality.
+
+**Phase 5 (Evaluate).** Sliced by plan type: model is much better on
+enterprise users than on free-tier users. Investigation reveals enterprise
+users have richer feature data. Loop back to phase 2: enrich free-tier
+features. Re-train. PR-AUC on free tier rises from 0.30 to 0.44.
+
+**Phase 6 (Deploy).** Wrap model in a prediction service. Build feature
+pipeline that runs the exact same transformations at inference as at
+training (this catches three subtle bugs in the first week). Connect to
+the email-trigger system. Roll out to 10% of users first.
+
+**Phase 7 (Monitor).** Watch model output distribution daily. Two months
+in, predictions start drifting: a recently-launched new plan tier
+introduces a category the model has never seen. Loop back to data, add the
+new category, retrain.
+
+</WorkedExample>
+
+<InlineQuiz
+  question="A team spends three weeks training and tuning a churn model, achieves great validation metrics, and ships it. Three months later, business metrics haven't moved. What is the most likely failure?"
+  options={[
+    { text: "The model architecture is wrong — should have used a transformer." },
+    {
+      text: "Bad framing — the model predicts something that isn't useful to the product, even though it predicts it accurately.",
+      correct: true,
+    },
+    { text: "Insufficient training data — three weeks wasn't enough compute." },
+    { text: "Bad evaluation metric — they used accuracy instead of F1." },
+  ]}
+  explanation="When a technically-good model has no business impact, the dominant cause is bad framing — the model is predicting something that doesn't translate to a decision the product can act on. Maybe it predicts 30-day churn but the retention team works on a 7-day cycle. Maybe it scores users on a scale that the email-trigger system doesn't consume. Reframing is where to start; the model rarely needs to be rebuilt."
+/>
+
+## The headline from this lesson
+
+Modeling is the fun part. It is not the part that determines whether your
+project succeeds. Framing, data, and monitoring — the bookends — are what
+make ML projects work in the real world. Get those right and an OK model
+ships. Get them wrong and a great model fails.

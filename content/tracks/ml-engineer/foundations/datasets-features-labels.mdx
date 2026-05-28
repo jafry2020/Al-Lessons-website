@@ -1,0 +1,273 @@
+---
+title: "Datasets, features, and labels"
+description: "The vocabulary every ML project runs on. Rows, columns, splits, and the one mistake — data leakage — that has killed more ML projects than any other."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: datasets-features-labels
+lessonCode: "A0.3"
+estMinutes: 20
+prereqs:
+  - "A0.2 How machines learn from data"
+objectives:
+  - "Identify samples, features, and labels in any tabular dataset."
+  - "Explain why we split data into training, validation, and test sets — and what each is used for."
+  - "Recognize and prevent data leakage, the most common silent killer of ML projects."
+pitfalls:
+  - "Calling the same data 'features' in one breath and 'inputs' in the next. They mean the same thing in this context — but be consistent for your future self."
+  - "Treating a validation set and a test set as interchangeable. The validation set is for tuning; the test set is for the *one* final, honest report."
+  - "Tuning hyperparameters against the test set. This silently leaks information and inflates your reported numbers — and you won't catch it until production embarrasses you."
+  - "Splitting time-series data randomly instead of chronologically. Random splits let the model see the future during training. Always split by time."
+  - "Believing more data is always better. It is — up to a point — but a few thousand high-quality, well-labeled examples often beat a million scraped ones."
+importantQuestions:
+  - question: "What are samples, features, and labels?"
+    shortAnswer: "A sample is one row of data. Features are the input columns (what the model sees). The label is the answer column (what the model is trying to predict). For unsupervised learning there are no labels."
+    detailed: |
+      In a spreadsheet of house listings, each row is a sample. Columns like square footage, bedrooms, ZIP code are features. The 'sale price' column is the label. A model is trained to predict the label from the features.
+
+      The terminology varies by community. Statisticians say 'observation' (sample), 'covariate' or 'predictor' (feature), 'response' or 'outcome' (label). ML engineers usually stick with sample / feature / label. Same concepts, different dialects.
+    pitfalls:
+      - "An ID column is not a feature you should give the model — IDs leak identity and overfit. Drop them or hash them first."
+  - question: "Why do we split data into training, validation, and test sets?"
+    shortAnswer: "Training data teaches the model. Validation data tunes the choices around the model (hyperparameters, architecture). Test data is the final, honest report — you touch it once. Mixing these roles inflates your reported performance."
+    detailed: |
+      Training set: the model sees this data and updates parameters from it.
+
+      Validation set: the model never sees this during training, but you peek at the validation loss to decide things like 'should I make the model bigger', 'should I add regularization', 'is it time to stop training'. Effectively, the validation set tunes hyperparameters.
+
+      Test set: locked in a drawer. Once you've made all your model and hyperparameter choices, you evaluate on the test set *one time* and report that number. The test set's job is to predict how the model will do in production. Re-using it for tuning destroys that estimate.
+
+      Typical splits: 70/15/15 or 80/10/10 for medium datasets, 98/1/1 for very large ones. There's no universal recipe; bigger datasets can afford smaller validation/test fractions.
+    pitfalls:
+      - "The test set is single-use. Every time you peek at it and adjust, you contaminate its estimate."
+      - "Cross-validation reuses data within the training set; it doesn't substitute for a held-out test set."
+  - question: "What is data leakage, and why is it so dangerous?"
+    shortAnswer: "Data leakage is when information from outside the training set sneaks into the model during training — usually accidentally. It causes training and validation scores to look great, then production performance to collapse."
+    detailed: |
+      The classic leakage pattern: a feature in your dataset is computed using future information. For example, predicting whether a loan will default, you include 'days since most recent payment'. That number is computed *after* the loan defaulted — the model is effectively being told the answer. In training, it looks brilliant. In production, the feature doesn't exist yet at decision time, and the model is useless.
+
+      Other leakage shapes: scaling features using statistics from the whole dataset (including the test set), de-duplicating in a way that puts near-duplicates in different splits, predicting customer churn using a 'last activity timestamp' that's only set after churn happens.
+
+      Leakage is the single most common silent failure mode in applied ML. The cure is paranoia: at every step, ask 'could this information have been known at the time the prediction is needed?' If no, it's leakage.
+    pitfalls:
+      - "Leakage often produces suspiciously good results. If your model is dramatically better than expected, look for leakage before celebrating."
+      - "Some leakage is technically legal — a feature that exists in production at inference time isn't leaking — but is still problematic if its value depends on the label."
+  - question: "How is splitting time-series data different from splitting tabular data?"
+    shortAnswer: "Time-series must be split chronologically: training set comes from earlier dates, test set from later. Random splits let the model see the future during training, which leaks information about the patterns you're trying to predict."
+    detailed: |
+      If you're predicting stock prices, and you randomly split rows into train/test, your training set will contain Mondays and Wednesdays while your test set has Tuesdays and Thursdays — but they're from the same weeks. The model can effectively interpolate between days it has seen, which is not the prediction task you'll face in production (you won't have next month's data while predicting today).
+
+      The right approach: pick a cutoff date. Train on data before; test on data after. For tuning, use a 'rolling' or 'expanding' window where the validation set is a slice of dates that come after the training set but before the test set. Many tabular ML pipelines treat this wrong and report scores that vaporize in production.
+    pitfalls:
+      - "K-fold cross-validation does not work for time-series unless you use a time-respecting variant (e.g., `TimeSeriesSplit` in scikit-learn)."
+  - question: "What's the difference between features and labels in unsupervised learning?"
+    shortAnswer: "There are no labels in unsupervised learning. The model only sees features and tries to discover structure on its own — clusters, dimensions, anomalies — without being told what's right or wrong."
+    detailed: |
+      In supervised learning, every training sample has an answer attached. The model learns from those answers. In unsupervised learning, you only have inputs, and the model finds patterns by itself. Clustering, dimensionality reduction, and anomaly detection are unsupervised.
+
+      Self-supervised learning sits in between: there are no human-provided labels, but the model invents labels from the data (e.g., 'predict the next word in this sentence'). Most modern LLM pretraining is self-supervised.
+    pitfalls:
+      - "Self-supervised is sometimes lumped with unsupervised, sometimes with supervised — the boundary is fuzzy. Define your terms when discussing."
+  - question: "When you say 'features', does that include things you computed from raw data?"
+    shortAnswer: "Yes. Features can be raw columns (e.g., age, ZIP) or derived from them (e.g., age-squared, ZIP-density, an embedding). Anything that ends up as a column the model reads at inference time is a feature."
+    detailed: |
+      Feature engineering — manually creating useful features from raw data — used to be the central skill of ML practice. Modern deep learning can often learn its own features from raw data (pixels, tokens, waveforms), reducing the need for hand-engineered ones. But in tabular ML, feature engineering still pays huge dividends — well-chosen features beat a bigger model on the same raw inputs.
+
+      Important constraint: any feature you use during training must be reproducible at inference time, on a single new sample, before you know the label. If you can't compute it then, you can't use it.
+    pitfalls:
+      - "Reproducing your feature pipeline correctly at inference is harder than people expect. The bug class 'training-serving skew' is huge in production ML."
+  - question: "Practical: how big should the training set be?"
+    shortAnswer: "As big as you can get, up to the point where adding more doesn't help. For simple models, hundreds to thousands of samples may suffice. Deep learning typically wants tens of thousands to millions."
+    detailed: |
+      The right size depends on the complexity of the function you're trying to fit. A model with 2 parameters can be solid on 200 samples. A model with 100 million parameters needs much, much more — both for statistical reasons (avoid overfitting) and because deep models need to see enough variety to generalize.
+
+      A useful heuristic: plot a 'learning curve' that shows performance versus training-set size. If the curve is still climbing as you add more data, you're data-limited. If it has plateaued, you're model-limited (or feature-limited) and more data won't help.
+    pitfalls:
+      - "Data quality matters more than quantity once you're past a baseline. A million scraped, mislabeled examples can hurt more than help."
+  - question: "Why do we shuffle the data?"
+    shortAnswer: "So the model doesn't accidentally learn the order of the data instead of the patterns. Most training procedures assume the data is independent and identically distributed; ordering breaks that assumption."
+    detailed: |
+      Imagine your dataset is sorted by date, by category, or by label. If you train a neural net on it in order without shuffling, the model spends the first half of training only seeing one category — its parameters drift in that direction — and then has to forget and re-learn when the next category appears. The end result is the same theoretically, but training is slower and noisier.
+
+      Shuffle once before splitting, then again before each training epoch. The standard.
+    pitfalls:
+      - "Never shuffle time-series. The order is the signal."
+---
+
+<TldrCallout>
+  A *dataset* is a table. Each row is a *sample*. Some columns are *features* (what the model sees)
+  and one is the *label* (what the model predicts — unless the task is unsupervised). Before
+  training, the dataset is split into *training*, *validation*, and *test* sets, each with a
+  distinct job. *Data leakage* — accidentally letting the model see the answer during training — is
+  the single most common silent failure mode, and the rest of this lesson is mostly about avoiding
+  it.
+</TldrCallout>
+
+## The shape of every ML dataset
+
+A dataset is a table. Each row is a _sample_ — one example of the thing you
+want the model to understand. Each column is either an input (a _feature_)
+or the answer (the _label_).
+
+For house-price prediction:
+
+| sqft | bedrooms | zip   | year_built | price     |
+| ---- | -------- | ----- | ---------- | --------- |
+| 1450 | 3        | 02139 | 1972       | 695,000   |
+| 950  | 1        | 02139 | 1985       | 410,000   |
+| 2200 | 4        | 02141 | 2003       | 1,120,000 |
+
+Each row is a sample. The first four columns (sqft, bedrooms, zip,
+year_built) are features. The last column (price) is the label. A model
+trained on this data learns to predict price from the four features.
+
+<GlossaryTerm
+  term="Feature"
+  definition="An input column. Anything the model reads to make a prediction. Features can be raw measurements or quantities derived from them. At inference time, every feature must be computable from information available before the label is known."
+>
+  Feature.
+</GlossaryTerm>
+An input column.
+<GlossaryTerm
+  term="Label"
+  definition="The answer column. What the model is trying to predict for a new sample. In supervised learning, every training sample has a label; in unsupervised learning, there are no labels."
+>
+  Label.
+</GlossaryTerm>
+The answer column.
+<GlossaryTerm
+  term="Sample"
+  definition="One row of data. One example the model can learn from (or predict on). Samples should be roughly independent — having near-duplicate samples in both training and test sets contaminates evaluation."
+>
+  Sample.
+</GlossaryTerm>
+One row.
+
+## The three splits
+
+You never train on all your data. You split it into three pieces, each with
+its own job.
+
+<GlossaryTerm
+  term="Training Set"
+  definition="The portion of the data the model sees during training and learns from. Parameters are updated based only on this split."
+>
+  The training set
+</GlossaryTerm>
+is what the model learns from. The model sees these samples, makes predictions, computes loss, and
+updates parameters.
+
+<GlossaryTerm
+  term="Validation Set"
+  definition="A held-out split used during development to tune hyperparameters and decide when to stop training. The model never trains on this data, but the engineer peeks at validation performance repeatedly."
+>
+  The validation set
+</GlossaryTerm>
+is for tuning. You don't train on it, but you watch how the model does on it as you try different
+architectures, learning rates, and regularization settings. If validation performance starts getting
+worse, you know you're overfitting.
+
+<GlossaryTerm
+  term="Test Set"
+  definition="A held-out split used for the final, honest evaluation of a model. The test set should be touched exactly once — repeatedly evaluating against it leaks information and inflates the reported score."
+>
+  The test set
+</GlossaryTerm>
+is your honesty check. Locked away. You touch it once, at the very end, to estimate how the model
+will do in production. If you peek at it during development and adjust based on what you see, you've
+broken the seal — the resulting score is no longer trustworthy.
+
+A typical split is 70/15/15 or 80/10/10 of the original data, randomly
+shuffled before splitting (unless it's time-series, in which case you split
+chronologically — see below).
+
+## The one mistake that kills more ML projects than any other
+
+<GlossaryTerm
+  term="Data Leakage"
+  definition="When information that won't be available at inference time accidentally appears in the training data. The model learns to use the leaked information, scores well in evaluation, then fails in production when the information is absent or different. The single most common silent failure mode in applied ML."
+>
+  Data leakage
+</GlossaryTerm>
+is when the model accidentally gets to see the answer during training. The training and validation
+numbers look incredible. Then the model goes into production and silently produces garbage.
+
+<WorkedExample title="A textbook leakage horror story">
+
+A team builds a model to predict whether a hospital patient will be
+readmitted within 30 days. Their features include vital signs, demographics,
+diagnoses, and — crucially — a column called `total_charges`. Training
+accuracy: 96%. Validation accuracy: 95%. Everyone celebrates.
+
+In production, the model is useless. Accuracy on live data: 53%, barely
+above random.
+
+The bug: `total_charges` is the final billing amount for the hospital stay.
+It is computed _after_ the patient leaves. Patients with longer stays —
+which correlate with readmissions — have higher charges. The model wasn't
+predicting readmission from clinical data; it was reading the discharge
+summary backwards. In production, the model has to make a prediction _at
+admission time_, when `total_charges` doesn't exist yet.
+
+The fix is to remove `total_charges` from the feature set. The fixed model's
+accuracy is 71% — much lower than the leaky version, but it's the real
+number.
+
+</WorkedExample>
+
+Leakage takes many shapes. Computing feature scaling statistics over the
+whole dataset (including the test set). De-duplicating data in a way that
+puts near-duplicates across different splits. Joining in a 'last
+activity' feature that's only populated after the event you're trying to
+predict. Splitting by row when you should have split by user, so the same
+user's data appears in both training and test.
+
+The defense is paranoia. For every feature, ask: _would this value have been
+knowable at the moment the prediction is needed?_ If you can't say yes with
+confidence, you have leakage.
+
+<AnalogyCallout>
+  Imagine studying for an exam by re-taking the same exam over and over with the answer key visible.
+  You'd score 100% on practice and look brilliant in rehearsal. In the actual exam — same questions,
+  no key — you'd score the same as someone who studied. Data leakage is that situation, transposed
+  into your training pipeline.
+</AnalogyCallout>
+
+## Time-series is its own thing
+
+If your data has a time dimension and you care about predicting the future,
+do not split randomly. Split chronologically: everything before some cutoff
+date goes into training, everything after goes into validation or test.
+
+Random splitting on time-series leaks future information into training. The
+model learns to interpolate between dates it has seen, which is not the
+problem you face in production — production never lets you peek at Tuesday
+while predicting Monday.
+
+<InlineQuiz
+  question="A team builds a model to predict employee attrition. They include 'date of last performance review' as a feature. Their validation accuracy is 92%, but in production the model is useless. What is most likely going on?"
+  options={[
+    { text: "The validation set is too small." },
+    { text: "Their model architecture is too simple." },
+    {
+      text: "The feature has data leakage — its value is influenced by whether the employee has left.",
+      correct: true,
+    },
+    { text: "The training and validation sets are from different time periods." },
+  ]}
+  explanation="Data leakage. Employees who left often had their last review near the date of departure; employees who stayed have more recent reviews. The model learned to use the date proximity as a proxy for the answer — which won't work in production, where you're predicting attrition before it happens. The fix is to remove the feature or transform it into something that's safely known at decision time."
+/>
+
+## Quality vs. quantity
+
+A quick gut-check for how much data is enough: more is better, until it
+isn't. Plot a learning curve — model performance versus training-set size.
+If the curve is still rising as you add more data, you're data-limited. If
+it has plateaued, more data won't help; you need a better model, better
+features, or both.
+
+A common mistake is assuming massive scraped datasets beat smaller curated
+ones. They often don't. A few thousand high-quality, well-labeled samples
+frequently outperform a million noisy ones — especially for narrow
+production problems.

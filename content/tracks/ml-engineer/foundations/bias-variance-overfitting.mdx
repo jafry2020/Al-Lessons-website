@@ -1,0 +1,274 @@
+---
+title: "Bias, variance, and overfitting"
+description: "Why a perfect score on training data is a warning sign, not a celebration. The bias–variance trade-off explained without textbook equations."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: bias-variance-overfitting
+lessonCode: "A0.7"
+estMinutes: 20
+prereqs:
+  - "A0.3 Datasets, features, and labels"
+objectives:
+  - "Distinguish underfitting (high bias) from overfitting (high variance) on sight, from training and validation loss curves."
+  - "Name three practical levers that reduce overfitting — and the cost of each."
+  - "Explain why a model achieving zero training loss is almost always a bad sign."
+pitfalls:
+  - "Treating low training loss as success. Without checking validation, low training loss might just mean the model memorized."
+  - "Adding regularization before confirming the model is actually overfitting. Regularization on an under-fit model just makes it worse."
+  - "Believing every model has a clean U-shape on validation loss. Real curves are noisy, and 'the bottom of the U' is often broad."
+  - "Treating bias and variance as fully separable in deep learning. Very large models can sometimes have low bias AND low variance — the classical theory has known exceptions."
+importantQuestions:
+  - question: "What is overfitting?"
+    shortAnswer: "When a model has fit the training data — including its noise — so closely that it does worse on new data. Training loss is low, validation loss is high, and the gap is the symptom."
+    detailed: |
+      A model that overfits has memorized peculiarities of the training set that don't generalize. Maybe the training set happens to have a few tall buildings that are also red, and the model encodes 'tall AND red'. New data has tall blue buildings, and the model is confused.
+
+      The classic plot: training loss keeps going down while validation loss starts going back up. The peak of model usefulness is at the bottom of the validation curve, not the bottom of the training curve. Stopping training there ('early stopping') is one of the simplest and most effective overfitting defenses.
+    pitfalls:
+      - "Overfitting on small datasets is dramatic and easy to spot. Overfitting on large datasets is subtler — train loss and val loss both go down, but val loss flattens earlier than expected."
+  - question: "What is underfitting?"
+    shortAnswer: "The opposite problem: the model is too simple to capture the patterns in the data. Training loss and validation loss are both high — there's nothing left in the data the model can use."
+    detailed: |
+      A linear model trying to fit a U-shaped pattern underfits — no matter how you set the parameters, a straight line can't curve. Training loss stays high; the model is at the ceiling of what its architecture can express. The fix is more model capacity: more parameters, more features, a different architecture.
+
+      Underfitting is easier to fix than overfitting. The diagnostic is also cleaner: if you can't get *training* loss to go down, you're under-capacity, not over-capacity.
+    pitfalls:
+      - "Throwing a bigger model at every problem is a bad habit — sometimes the model is fine and the features are bad."
+  - question: "What is the bias–variance trade-off?"
+    shortAnswer: "The classical idea that as you make a model more complex, its bias (systematic error) decreases and its variance (sensitivity to the specific training set) increases. The total error has a U-shape; the goal is to find the bottom."
+    detailed: |
+      Think of bias as 'how wrong this model class is no matter how it's trained' and variance as 'how much the model's predictions wobble if you retrain it on a different random sample of training data'.
+
+      A degree-1 polynomial fit to a curvy function has high bias (it's a line; it can't curve) and low variance (different training sets all yield similar lines). A degree-20 polynomial has low bias (it can fit anything) and high variance (different training samples wiggle wildly).
+
+      Somewhere in between is the sweet spot — enough flexibility to capture the truth, not so much that it chases noise. That's the classic U-curve story. In modern deep learning the picture is more complicated (search 'double descent' if you're curious), but the trade-off remains a useful default frame.
+    pitfalls:
+      - "Don't confuse statistical bias with social/algorithmic bias. The term overlaps; the meanings don't."
+  - question: "What is regularization?"
+    shortAnswer: "Anything that biases the training procedure toward simpler models. L1/L2 weight penalties, dropout, early stopping, data augmentation — all are regularization. The goal is to reduce variance at a small cost to bias."
+    detailed: |
+      Concretely: L2 regularization adds a penalty proportional to the sum of squared parameters. The optimizer is then minimizing 'loss + λ·(sum of squared weights)' instead of just loss. The penalty discourages very large weights, which corresponds to a simpler model.
+
+      Dropout randomly disables some neurons each training step, preventing co-adaptation. Data augmentation creates synthetic training samples (rotations of images, paraphrases of text) to make the model robust to variations that don't matter. All of these reduce overfitting.
+    pitfalls:
+      - "Regularization isn't free — it adds bias to reduce variance. The trick is to apply just enough."
+  - question: "What is early stopping, and why is it the simplest regularizer?"
+    shortAnswer: "Stop training when validation loss stops improving. It's free (no extra computation), works for any model, and you don't have to pick a regularization strength — the validation curve tells you when to stop."
+    detailed: |
+      Conceptually: train for too long and the model starts memorizing instead of generalizing. The validation loss reflects this — it's a leading indicator that the model is leaving the 'generalization sweet spot'.
+
+      Practical recipe: every N steps, evaluate on the validation set. Keep a running best validation loss. If validation loss hasn't improved in M evaluations, stop training and restore the parameters from the best evaluation. Tunable values: how often you evaluate, how patient you are.
+
+      Almost every modern training loop uses early stopping. It composes well with other regularizers.
+    pitfalls:
+      - "If the validation set is too small, the loss curve is noisy and you'll stop too early or too late. Calibrate patience accordingly."
+  - question: "Why does adding more training data reduce overfitting?"
+    shortAnswer: "More data makes the noise harder to memorize. The model has to find patterns that hold across more examples, which forces it toward generalizable structure."
+    detailed: |
+      A model with 1 million parameters trained on 1000 samples can essentially memorize every sample — there's enough capacity to fit each one individually. The same model trained on 10 million samples can't memorize them all; it has to find compact representations that explain many samples at once. Those compact representations tend to generalize.
+
+      The corollary: if a model is overfitting and you can get more data, do that before trying clever regularization tricks. More data usually beats more cleverness.
+    pitfalls:
+      - "More data only helps if it's drawn from the same distribution as your test data. More out-of-distribution data can hurt."
+  - question: "What's 'double descent', and why is it confusing?"
+    shortAnswer: "An observation that for very large modern neural networks, the classical U-curve of error-vs-model-size has a second descent past the apparent peak. The model can keep getting better as you keep making it bigger — sometimes way past the point classical theory predicts disaster."
+    detailed: |
+      In classical statistics: as model complexity grows, validation error first goes down (less bias), then goes back up (more variance) — the famous U. For modern deep learning, this is correct *up to a point*: validation error climbs, peaks somewhere around the parameter count equalling the dataset size, and then — surprisingly — descends again.
+
+      Why this happens is still being argued. One reading: with extreme overparameterization, gradient descent prefers smooth, simple interpolating functions (implicit regularization), which generalize even though the model technically has the capacity to memorize.
+
+      This is why you sometimes hear 'just make it bigger' as serious advice — for some architectures, on some data, more parameters keeps helping past where classical theory says they shouldn't.
+    pitfalls:
+      - "Double descent is real and observed, but it isn't a license to scale model size blindly. Compute, data, and inference cost still matter."
+---
+
+<TldrCallout>
+  *Overfitting* is when a model has fit the training data so closely it fails on new data.
+  *Underfitting* is when the model is too simple to fit the data at all. Between them is a sweet
+  spot called the *bias–variance trade-off*. Pushing a model toward that sweet spot is what
+  *regularization* does — penalizing complexity, dropping connections, stopping training early. The
+  single best diagnostic is the gap between training loss and validation loss.
+</TldrCallout>
+
+## The story in one sentence
+
+You can fit your training data perfectly. That is almost always bad news.
+
+## What overfitting looks like
+
+<GlossaryTerm
+  term="Overfitting"
+  definition="When a model has fit the training data so closely — including its noise and quirks — that it performs poorly on new data. Symptoms: low training loss, high validation loss, and a widening gap between the two as training continues."
+>
+  Overfitting
+</GlossaryTerm>
+is when a model has learned the training set so well it has learned its noise — and the noise
+doesn't generalize. New data has *different* noise, so the model's predictions don't transfer.
+
+The classic diagnostic plot:
+
+```
+Training loss:    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+Validation loss:  ↓↓↓↓↓↓↑↑↑↑↑↑↑↑↑
+                        ^
+                  best generalization is here
+```
+
+Training loss keeps going down (the model keeps memorizing). Validation
+loss bottoms out, then _rises_ — that rise is the model getting worse on
+new data even as it gets better on training data. The peak usefulness of
+the model is at the bottom of the validation curve, not the training
+curve. Stop training there.
+
+## What underfitting looks like
+
+The opposite problem.{" "}
+
+<GlossaryTerm
+  term="Underfitting"
+  definition="When a model is too simple (or too constrained) to fit the underlying pattern in the data. Symptoms: high training loss and high validation loss, both unable to come down."
+>
+  Underfitting
+</GlossaryTerm>
+is when the model is too simple to capture the patterns in the data. Training loss stays high;
+validation loss also stays high; neither is getting better.
+
+A straight line trying to fit a U-shape underfits — no matter where you set
+the slope and intercept, a line can't bend. The architecture is the
+ceiling. To fix underfitting: more capacity, more features, different
+architecture.
+
+Underfitting is easier to fix than overfitting. The diagnostic question is
+simple: can you reduce _training_ loss further by adding capacity? If yes,
+your model is under-capacity, not over-capacity.
+
+## The bias–variance trade-off
+
+The classical framing of the underfit–overfit spectrum is the{" "}
+
+<GlossaryTerm
+  term="Bias-Variance Trade-off"
+  definition="The classical statistical idea that model error decomposes into bias (systematic error from a too-simple model class) and variance (sensitivity to which specific training data the model saw). Making a model more complex reduces bias but increases variance, and total error has a U-shape with a sweet spot in the middle."
+>
+  bias–variance trade-off
+</GlossaryTerm>
+:
+
+- **Bias** is systematic error. A model class that is too simple to capture
+  the true pattern has high bias — no matter how you train it, it can't get
+  close. A line trying to fit a curve has high bias.
+- **Variance** is sensitivity to the specific training data. A flexible
+  model — say, a degree-20 polynomial — fits any wiggle in any training
+  set. Train it on two different random samples and you get very different
+  functions. That sensitivity is variance.
+
+As you increase model complexity, bias goes down and variance goes up. Total
+error (bias + variance + irreducible noise) has a U-shape; somewhere in the
+middle is the best balance. Finding that balance is the central craft of
+applied ML.
+
+<WorkedExample title="Polynomial fitting demonstrates the U-curve">
+
+Imagine the true relationship between `x` and `y` is `y = sin(x) +
+noise`. We don't know that; we just see 30 noisy points.
+
+Fit a degree-1 polynomial (a line). It can't curve, so it captures the
+overall trend but misses the sine wave. _Training loss is high, validation
+loss is high._ High bias, low variance. Underfit.
+
+Fit a degree-5 polynomial. It can capture one or two cycles of the sine
+wave. Training loss is moderate; validation loss is moderate but improved.
+Closer to balanced.
+
+Fit a degree-20 polynomial. With enough flexibility, it threads precisely
+through the training points — every single one. Training loss is nearly
+zero. But the wiggle between training points is wild, and the model
+predicts garbage on validation points. _Training loss tiny, validation
+loss huge._ Low bias, high variance. Overfit.
+
+Plot validation loss against polynomial degree: the U-curve. The bottom
+sits around degree 4–6 — enough flexibility to capture the sine wave, not
+enough to chase the noise.
+
+</WorkedExample>
+
+<AnalogyCallout>
+  Imagine studying for an exam. *Underfitting* is reading the textbook once, getting the gist,
+  missing details — you'll get the big questions right and the specific ones wrong. *Overfitting* is
+  memorizing every example problem verbatim — you'll ace anything identical to what you've seen and
+  fail anything new. The sweet spot is understanding the underlying principles deeply enough to
+  solve novel problems. That's what generalization means.
+</AnalogyCallout>
+
+## Regularization: nudging away from overfitting
+
+<GlossaryTerm
+  term="Regularization"
+  definition="Any modification to training that biases the model toward simpler solutions. Examples include L1/L2 weight penalties, dropout, data augmentation, and early stopping. The goal is to reduce variance at the cost of a small amount of bias — moving down the right side of the U-curve."
+>
+  Regularization
+</GlossaryTerm>
+is the family of techniques that bias the training procedure toward simpler models. Several flavors,
+all useful in practice:
+
+- **L2 (weight decay)** adds a penalty to the loss for large parameter
+  values. The optimizer trades a little training fit for smaller weights.
+  Cheap, ubiquitous, the default for most modern models.
+- **L1** penalizes the absolute value of weights instead of the square.
+  Same idea, but more aggressive at pushing weights to exactly zero — used
+  for feature selection.
+- **Dropout** randomly disables a fraction of neurons during each training
+  step. Forces the network to spread information across many units rather
+  than relying on a few. Specific to neural nets.
+- **Data augmentation** synthesizes new training examples (rotations of
+  images, paraphrases of sentences). More data is the single best
+  regularizer; augmentation is how you fake having more.
+- **Early stopping** simply quits when validation loss stops improving.
+  Free; always available; works for any model.
+
+The right amount of regularization depends on the model and data. Too
+little: still overfits. Too much: under-fits. Tune on the validation set
+(never the test set).
+
+## Why zero training loss is suspicious
+
+If a model achieves zero training loss, one of three things is true:
+
+1. The dataset is trivially easy (every input has a unique unambiguous
+   answer that the model can copy).
+2. The model is enormously over-capacity for the dataset and has memorized
+   everything.
+3. There's a bug — possibly data leakage (A0.3) — that lets the model see
+   the answer.
+
+For real-world problems with real-world noise, the truth is rarely
+deterministic. Some labels are wrong, some inputs are ambiguous. A model
+that achieves zero training loss has fit through the noise as well as the
+signal, which means part of what it learned is wrong. Validation loss will
+expose this.
+
+<InlineQuiz
+  question="A model achieves 0.02 training loss and 0.40 validation loss. Both have been steady for many epochs. Which is the most likely diagnosis?"
+  options={[
+    { text: "Underfitting — the model needs more capacity." },
+    {
+      text: "Overfitting — the model has memorized training data and isn't generalizing.",
+      correct: true,
+    },
+    { text: "Data leakage — the training labels are correlated with the validation labels." },
+    { text: "The model is correctly trained; the gap is unavoidable." },
+  ]}
+  explanation="A huge gap between training loss (low) and validation loss (high) is the textbook signature of overfitting. The model fits training data well but not new data. Fixes to try: regularization (L2, dropout), early stopping, more training data, or a smaller model. Underfitting would show high training *and* validation loss. Data leakage would make the validation loss *deceptively low*, not high."
+/>
+
+## A note on modern deep learning
+
+The classical bias–variance trade-off was developed before deep learning,
+and modern deep networks sometimes violate the textbook story. Models with
+hundreds of billions of parameters trained on enormous datasets can have
+low bias _and_ low variance simultaneously — a phenomenon related to
+'double descent'. The classical U-curve is still a useful frame for the
+small- to medium-data regime that most engineers actually work in. Just
+know it isn't a law of physics.

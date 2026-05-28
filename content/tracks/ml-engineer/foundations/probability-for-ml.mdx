@@ -1,0 +1,273 @@
+---
+title: "Probability for machine learning"
+description: "Just enough probability to read any ML paper without flinching. Random variables, distributions, Bayes' rule — taught with a spam classifier instead of dice and coins."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: probability-for-ml
+lessonCode: "A0.4"
+estMinutes: 22
+prereqs:
+  - "A0.2 How machines learn from data"
+objectives:
+  - "Read a probability distribution and explain what it claims about the world."
+  - "Compute a conditional probability and a Bayes-rule update on a small example."
+  - "Recognize when a model is outputting probabilities and what those numbers actually mean."
+pitfalls:
+  - "Confusing probability with confidence. A model saying 0.9 means it would be wrong about 10% of the time if calibrated — most models aren't perfectly calibrated."
+  - "Forgetting that probabilities have to sum to 1 over the sample space. If they don't, the math will produce nonsense silently."
+  - "Treating P(A|B) and P(B|A) as the same. This is exactly the trap Bayes' rule exists to unstick."
+  - "Assuming events are independent because they 'feel' unrelated. Real-world data has correlations everywhere; assume dependence until proven otherwise."
+importantQuestions:
+  - question: "What is a random variable?"
+    shortAnswer: "A quantity whose value depends on the outcome of some random process. Roll of a die, height of a person picked from a crowd, whether an email is spam. In ML, almost everything observed is a random variable."
+    detailed: |
+      A random variable is a function that assigns a number (or category) to the outcome of a random experiment. 'Will it rain tomorrow' is a random variable with values {yes, no}; 'tomorrow's high temperature' is a random variable with values in real numbers.
+
+      ML treats data points, predictions, and even model parameters as random variables. The training set is a sample of random variables; the model's predictions are random variables; the model's loss is a random variable that depends on which data points it sees. Embracing this framing — that everything is a sample from a distribution — is the doorway into modern ML theory.
+    pitfalls:
+      - "Random doesn't mean uniform. A 'random' variable can have any distribution — heavily skewed, multi-modal, anything."
+      - "The 'variable' part of the name is misleading; in math it's a function, not a variable."
+  - question: "What is a probability distribution?"
+    shortAnswer: "A description of how a random variable's values are spread out — which values are likely, which are rare. For discrete variables it's a table of probabilities; for continuous variables it's a probability density function."
+    detailed: |
+      For a coin, the distribution is simple: P(heads) = 0.5, P(tails) = 0.5. For a die: each face has P = 1/6. These are *discrete* distributions — probabilities for each possible value.
+
+      For continuous quantities like 'height of an adult', there are infinitely many possible values, so we describe the *density* instead. The Gaussian (or 'normal') distribution is the famous bell curve — it's the most common density in nature and in ML.
+
+      The defining property of any distribution: probabilities sum (or integrate) to exactly 1 over all possible outcomes. If they don't, you don't have a distribution.
+    pitfalls:
+      - "A density value can be greater than 1 — densities aren't probabilities. They become probabilities only when integrated over an interval."
+      - "Real-world data rarely follows a textbook distribution exactly. Models that assume Gaussian-ness can fail badly on long-tailed data."
+  - question: "What is conditional probability?"
+    shortAnswer: "The probability of one event given that another event happened. Written P(A|B), read as 'probability of A given B'. P(A) is unconditional; P(A|B) is conditional on B being true."
+    detailed: |
+      Suppose 1% of emails are spam — P(spam) = 0.01. But 60% of emails containing the word 'lottery' are spam — P(spam | 'lottery') = 0.6. The presence of 'lottery' is a strong conditioning event; it dramatically raises our probability estimate.
+
+      Conditional probability is the language ML uses to express predictions. A classifier doesn't just say 'spam' — internally it computes P(spam | features of this email). Most modern classifiers output exactly this kind of conditional probability.
+    pitfalls:
+      - "P(A|B) is generally not equal to P(B|A). Conflating these is the most common probability error in everyday reasoning — and the reason Bayes' rule exists."
+  - question: "What is Bayes' rule, and why does ML love it?"
+    shortAnswer: "Bayes' rule connects P(A|B) and P(B|A): P(A|B) = P(B|A) · P(A) / P(B). It's the formula for updating a belief P(A) in light of new evidence B. Almost every probabilistic ML model can be framed as Bayesian inference."
+    detailed: |
+      The rule is exact, not a heuristic. Here's why it matters:
+
+      You have a prior belief about something — P(A), how likely A is before you see evidence. You observe some evidence B. Bayes' rule tells you the posterior probability P(A|B) — how likely A is *now*, given B. The update involves two ingredients: how likely B was under A (the likelihood), and how likely A was to begin with (the prior).
+
+      In ML: A is 'the model parameters take some value', B is 'the data you observed'. Training is the process of updating beliefs about A from B. Modern deep learning doesn't compute exact Bayesian updates — it does something cruder but related — but the framing illuminates what's happening.
+    pitfalls:
+      - "Bayes' rule does not say 'always update your belief' — it says 'here's how to do it correctly when you do'. Bad priors and bad likelihoods give bad posteriors."
+      - "P(B) in the denominator is often hard to compute exactly, which is why approximate Bayesian methods (variational inference, MCMC) are an entire subfield."
+  - question: "What does it mean for two events to be independent?"
+    shortAnswer: "Knowing one doesn't change the probability of the other. Formally: P(A|B) = P(A), or equivalently P(A and B) = P(A) · P(B). Independence is a strong assumption and is often violated in practice."
+    detailed: |
+      Two coin flips are independent: the second is 50/50 regardless of what the first was. Whether two emails are spam is *not* independent: spam tends to come in bursts from the same sender. Whether two pixels in an image are bright is not independent: nearby pixels are correlated.
+
+      Many ML algorithms assume independence to keep the math tractable — naive Bayes is named after this assumption. The assumption is often wrong, and naive Bayes still works surprisingly well in practice, which is a humbling fact about the field.
+    pitfalls:
+      - "'Naive Bayes' is naive because it pretends features are independent given the label. Despite the obvious wrongness, it's a competitive baseline for text classification."
+  - question: "What's the difference between a likelihood and a probability?"
+    shortAnswer: "A probability is P(data | parameters): how likely the data is, given some fixed parameter values. A likelihood is the same formula viewed as a function of the parameters with data fixed. Same math, different perspective — but the terminology is strict."
+    detailed: |
+      Imagine you flip a coin 10 times and see 7 heads. If the coin is fair (P(heads) = 0.5), the probability of seeing 7 heads is some number. If the coin has P(heads) = 0.7, the probability is some other number. As you vary the assumed parameter, you get a curve. *That curve is the likelihood function.*
+
+      Training a model often means finding parameters that maximize the likelihood — this is *maximum likelihood estimation* (MLE), one of the most-used ideas in classical statistics and a foundation of how neural networks are trained.
+    pitfalls:
+      - "Don't write 'the likelihood is 0.42' as if it were a probability. Likelihoods can exceed 1 (for continuous data) and only carry information by ratio."
+  - question: "If two diseases have base rates of 1% and 0.1%, and a test has 99% sensitivity and 99% specificity for both, can the same positive test result mean very different things?"
+    shortAnswer: "Yes. The rarer the disease, the lower the probability that a positive test is correct, even with the same test accuracy. This is the most-cited misuse of medical statistics and a perfect Bayes-rule example."
+    detailed: |
+      Let's compute. For the 1% base rate disease: out of 10,000 people, 100 have the disease, 9,900 don't. The test catches 99 of the 100 sick (sensitivity 99%). Of the 9,900 healthy, it falsely flags 99 (specificity 99% → 1% false positive). So 99 + 99 = 198 positives, of which 99 are real. P(disease | positive) = 99/198 = 50%.
+
+      For the 0.1% base rate disease: out of 10,000, 10 have it, 9,990 don't. Test catches 9.9 of 10. False positives: ~99.9. So ~110 positives, ~10 real. P(disease | positive) ≈ 9%.
+
+      Same test, same accuracy, very different meaning of a positive result. ML systems get this wrong constantly — a fraud classifier with 99% accuracy can be wildly useless if fraud is 0.1% of traffic.
+    pitfalls:
+      - "Class imbalance is the version of this problem ML practitioners hit most. We'll come back to it in A0.8 (evaluation metrics)."
+  - question: "When a classifier outputs '0.92', what does that number mean?"
+    shortAnswer: "Ideally, it's the model's estimate of P(label = positive | features). If well-calibrated, 0.92 means 'if I made many predictions like this, about 92% of them would be positive'. Most models are not perfectly calibrated."
+    detailed: |
+      Calibration is a separate question from accuracy. A model can be 90% accurate while being badly calibrated — e.g., outputting 0.99 confidence on examples that are actually right only 70% of the time. Neural networks trained with cross-entropy tend to be overconfident.
+
+      Calibration is fixed post-hoc with techniques like temperature scaling or Platt scaling — applied after training, before deployment, on the validation set. For decisions where probability matters (e.g., 'should I send this user to a human reviewer?'), calibration matters as much as accuracy.
+    pitfalls:
+      - "Softmax outputs look like probabilities and are sometimes used like probabilities — but raw, uncalibrated softmax outputs are not reliable probability estimates."
+---
+
+<TldrCallout>
+  A *random variable* is a quantity whose value depends on chance. A *probability distribution*
+  describes how likely each value is. *Conditional probability* `P(A|B)` is the probability of A
+  given that B is true. *Bayes' rule* is the equation that flips a conditional probability around —
+  and it's the foundation under most probabilistic ML. None of this requires you to like dice or
+  playing cards; we'll use spam.
+</TldrCallout>
+
+## Probability is a language for talking about uncertainty
+
+Machine learning models almost never produce a definite "this is X". They
+produce a _probability_ — a number between 0 and 1 expressing how confident
+the model is. To read those numbers (and to debug them when they're wrong),
+you need a small amount of probability vocabulary. We're going to keep it
+small.
+
+## Random variables and distributions
+
+<GlossaryTerm
+  term="Random Variable"
+  definition="A quantity whose value depends on the outcome of a random process. Coin flips, dice rolls, heights of strangers, whether a customer will churn — all are random variables. In ML, observations, predictions, and even parameters are typically modeled as random variables."
+>
+  A random variable
+</GlossaryTerm>
+is something whose value depends on chance. The outcome of a coin flip is a random variable with two
+possible values. The number on a die is a random variable with six. The cost of a stranger's monthly
+rent is a random variable that can take many values.
+
+<GlossaryTerm
+  term="Probability Distribution"
+  definition="A description of how a random variable's values are spread out — which are likely, which are rare. For discrete variables, a table of probabilities per value. For continuous variables, a density function. Either way, the probabilities sum or integrate to exactly 1 over all possible outcomes."
+>
+  The distribution
+</GlossaryTerm>{" "}of a random variable tells you which values are likely.
+For a fair coin, the distribution is `{heads: 0.5, tails: 0.5}`. For a fair
+die, each of the six faces has probability `1/6`. For continuous quantities
+like rent, you can't list probabilities for every possible value (there are
+infinitely many) — so you describe a *density function* instead. The famous
+bell curve is a particular kind of density: the *Gaussian*.
+
+The defining property of any probability distribution: the probabilities sum
+to exactly 1 across all possible outcomes. If they don't, it isn't a
+distribution.
+
+<AnalogyCallout>
+  Think of probability like budgeting your beliefs. You have a fixed budget of 1.0 worth of belief,
+  and you have to distribute it among the possible outcomes. Spend more on the ones you think are
+  likely, less on the ones you think are rare. Whatever your beliefs, the budget always totals 1.
+</AnalogyCallout>
+
+## Conditional probability
+
+Now we get to the most useful idea in this lesson.
+
+<GlossaryTerm
+  term="Conditional Probability"
+  definition="The probability of one event given that another event has occurred. Written P(A|B), read 'probability of A given B'. Often very different from P(A) — observing B can dramatically change how likely A becomes."
+>
+  Conditional probability,
+</GlossaryTerm>
+written `P(A | B)` and read "probability of A given B", is the probability of A *given that B
+happened*. It's how you express "updates to beliefs after seeing evidence".
+
+Example. Suppose 1% of emails in your inbox are spam. Just sitting there,
+`P(spam) = 0.01`. But suppose you know an email contains the word "lottery".
+Of all emails with "lottery", maybe 60% are spam. So `P(spam | 'lottery') =
+0.6`. The unconditional probability is 1%; the conditional probability,
+given the word "lottery" is present, is 60%.
+
+Every classifier you'll ever build is, at heart, computing conditional
+probabilities of the form `P(label | features)`.
+
+## Bayes' rule
+
+The most important formula in this lesson — and arguably in ML — is{" "}
+
+<GlossaryTerm
+  term="Bayes' Rule"
+  definition="The formula P(A|B) = P(B|A) · P(A) / P(B). It connects the two directions of conditional probability and is the principled way to update a belief P(A) after observing evidence B. Underlies essentially all probabilistic ML, from naive Bayes to modern Bayesian deep learning."
+>
+  Bayes' rule
+</GlossaryTerm>
+:
+
+```
+P(A | B) = P(B | A) · P(A) / P(B)
+```
+
+It says: the probability of A given B equals the probability of B given A,
+times the prior probability of A, divided by the probability of B. In
+words: if you know how often B happens when A is true (the _likelihood_),
+and how often A happens at all (the _prior_), you can compute how often A
+is true when you see B (the _posterior_).
+
+<WorkedExample title="Bayes' rule applied to a spam filter">
+
+We're building a spam filter. Suppose we know three things from our data:
+
+- `P(spam) = 0.20`. 20% of all incoming email is spam.
+- `P('lottery' | spam) = 0.30`. 30% of spam contains the word "lottery".
+- `P('lottery' | not spam) = 0.001`. Only 0.1% of legitimate email mentions
+  lottery.
+
+An email arrives containing "lottery". What's the probability it's spam?
+
+Apply Bayes' rule. The numerator is `P('lottery' | spam) · P(spam) = 0.30 ·
+0.20 = 0.06`.
+
+The denominator `P('lottery')` we have to compute by summing over both
+possibilities:
+
+```
+P('lottery') = P('lottery'|spam)·P(spam) + P('lottery'|not spam)·P(not spam)
+             = 0.30 · 0.20 + 0.001 · 0.80
+             = 0.06 + 0.0008
+             = 0.0608
+```
+
+Posterior:
+
+```
+P(spam | 'lottery') = 0.06 / 0.0608 ≈ 0.987
+```
+
+The word "lottery" pushed our belief from 20% (the prior) to about 99% (the
+posterior). That's Bayes' rule doing its job: combining the evidence
+(likelihood ratio of "lottery") with the base rate.
+
+</WorkedExample>
+
+This is exactly the calculation a _naive Bayes_ spam classifier performs,
+just with many words instead of one. It's a one-paragraph algorithm that
+formed the backbone of email spam filtering for two decades.
+
+## Why this matters in practice
+
+Three places probability shows up daily for ML engineers:
+
+1. **Calibrated outputs.** When a classifier outputs `0.92`, that should
+   mean "92% probability". For a well-calibrated model, of all predictions
+   labelled 0.92, about 92% are correct. Neural networks are often
+   miscalibrated out of the box — they tend to be overconfident — and need
+   post-hoc calibration before they're trustworthy for downstream decisions.
+
+2. **The base-rate trap.** A classifier that's 99% accurate sounds great
+   until you remember that if the positive class is 1% of traffic, predicting
+   "negative" always gets you 99% accuracy and zero usefulness. The same
+   trap shows up in medical tests, fraud detection, and rare-event
+   prediction. Bayes' rule is the way out.
+
+3. **Loss functions are likelihoods.** Cross-entropy — the loss function
+   used to train almost every modern classifier — is literally the negative
+   log of a likelihood. Training a network with cross-entropy is _maximum
+   likelihood estimation_ in disguise. Once you see this, large chunks of
+   ML stop being mysterious.
+
+<InlineQuiz
+  question="A medical test for a disease that affects 1% of the population has 99% sensitivity and 99% specificity. A patient tests positive. What is the approximate probability they have the disease?"
+  options={[
+    { text: "About 99% — the test is very accurate." },
+    { text: "About 90% — slightly less than the accuracy because of test error." },
+    { text: "About 50% — the rarity of the disease pulls the posterior way down.", correct: true },
+    { text: "About 1% — the same as the base rate." },
+  ]}
+  explanation="Bayes' rule. In 10,000 people: 100 have the disease (99 test positive); 9,900 don't (99 falsely test positive). Of the 198 total positives, only 99 are real — about 50%. The test's accuracy doesn't tell you the answer; the prior P(disease) does. This is the most-cited misuse of medical statistics, and it's exactly the kind of trap ML systems built on imbalanced data fall into."
+/>
+
+## A note on what we're skipping
+
+There's a lot of beautiful probability theory we're not going to cover.
+Cumulative distribution functions, joint and marginal distributions,
+expectations, variances, covariance, the central limit theorem. None of it
+is wasted knowledge — but you can do good applied ML work for years without
+needing any of it explicitly. If you want the deeper treatment, A1.4
+(Information theory primer) and A1.1 (Distributions in the wild) extend
+this lesson.

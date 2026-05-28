@@ -1,0 +1,311 @@
+---
+title: "Evaluation metrics"
+description: "Accuracy lies. Precision and recall are a trade-off. F1 averages them. ROC-AUC summarizes. Confusion matrices reveal. Pick the right one for the right job."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: foundations
+moduleLabel: "Module 0 · Foundations for ML"
+lesson: evaluation-metrics
+lessonCode: "A0.8"
+estMinutes: 22
+prereqs:
+  - "A0.4 Probability for ML"
+objectives:
+  - "Build and read a confusion matrix for a binary classifier."
+  - "Distinguish accuracy, precision, recall, and F1 — and explain when each one lies."
+  - "Pick the right metric for class-imbalanced problems (fraud, disease, anomaly detection)."
+pitfalls:
+  - "Reporting only accuracy. With class imbalance, accuracy is the most-misleading metric in ML."
+  - "Optimizing recall to 100% by predicting positive for everyone. Always check precision when you push recall up."
+  - "Comparing ROC-AUC across very imbalanced classes. AUC is somewhat insensitive to class balance — for highly imbalanced data, PR-AUC is often more honest."
+  - "Forgetting to fix a single threshold before measuring precision/recall. They move with the threshold; the same model can look completely different at threshold 0.5 vs 0.3."
+importantQuestions:
+  - question: "What is accuracy, and when does it lie?"
+    shortAnswer: "Accuracy is the fraction of predictions that are correct. It lies whenever the classes are imbalanced — a model that always predicts the majority class can score 99% accuracy and be useless."
+    detailed: |
+      For a dataset where 1% of samples are fraud, a model that says 'not fraud' to everything scores 99% accuracy. It catches zero fraud and is worse than a coin flip in the only way that matters. Yet reported accuracy makes it look like a winning model.
+
+      Use accuracy only when the classes are roughly balanced and false positives and false negatives are roughly equally bad. For everything else — fraud, disease screening, anomaly detection, content moderation, churn prediction — accuracy is the wrong default.
+    pitfalls:
+      - "If someone reports 'high accuracy' without telling you the class balance, ask for the class balance before believing the number."
+  - question: "What is precision?"
+    shortAnswer: "Of the predictions the model labeled positive, what fraction are actually positive? Precision = true positives / (true positives + false positives). High precision means 'when the model says yes, it's right'."
+    detailed: |
+      Precision is about the *quality* of positive predictions. A spam filter with 95% precision means: of all the emails it flagged as spam, 95% really are spam (only 5% are legitimate emails wrongly flagged).
+
+      When does precision matter most? When false positives are expensive. Examples: a fraud-detection system that freezes accounts (false positive = upset customer), a medical screening system whose positives go to expensive follow-up tests, a spam filter where filed legitimate emails are intolerable.
+    pitfalls:
+      - "100% precision can be trivially achieved by predicting positive only when the model is 99.9% confident — which means almost never. Always pair precision with recall."
+  - question: "What is recall?"
+    shortAnswer: "Of all actual positive samples, what fraction did the model find? Recall = true positives / (true positives + false negatives). High recall means 'the model catches most of the real positives'."
+    detailed: |
+      Recall is about the *coverage* of positive predictions. A disease screening test with 95% recall catches 95% of actual sick patients. The 5% it misses are false negatives — diseases that went undetected.
+
+      When does recall matter most? When false negatives are expensive. Examples: cancer screening (missing a real case is catastrophic), security threat detection, search relevance (missing the right result is bad), search-and-rescue. In all of these, you'd rather get a few false alarms than miss a real positive.
+    pitfalls:
+      - "100% recall can be trivially achieved by predicting positive for everything. Always pair recall with precision."
+  - question: "Why do precision and recall trade off?"
+    shortAnswer: "Most classifiers output a probability and convert to a yes/no decision via a threshold. Lowering the threshold flags more samples as positive — recall goes up, precision goes down. Raising it does the opposite. You can pick a point on this curve; you can't have both maximized."
+    detailed: |
+      Imagine a fraud classifier that outputs a fraud probability between 0 and 1. The default threshold is 0.5: predict 'fraud' if probability ≥ 0.5. With threshold 0.3, the model labels more transactions as fraud — it catches more real fraud (higher recall) but also flags more legitimate transactions (lower precision). With threshold 0.7, the opposite.
+
+      The whole *precision-recall curve* sweeps every possible threshold. The right operating point depends on the cost asymmetry: if false positives are cheaper than false negatives, set a low threshold; if the reverse, set a high one.
+    pitfalls:
+      - "Defaulting to threshold 0.5 because the math 'looks like the middle' is a habit, not a justified choice. Pick the threshold based on the business cost matrix."
+  - question: "What is F1, and when do you use it?"
+    shortAnswer: "The harmonic mean of precision and recall. F1 = 2 · P · R / (P + R). It's a single number that punishes models with very unbalanced precision and recall. Useful when you want one metric to summarize, but you should still look at P and R separately."
+    detailed: |
+      Why harmonic mean instead of arithmetic? Because harmonic mean is pulled down by the smaller of the two. A model with precision 1.0 and recall 0.0 has an arithmetic mean of 0.5 (sounds OK) but an F1 of 0 (correctly terrible). F1 only rewards models that are good at *both*.
+
+      F1 is widely used in NLP benchmarks, anomaly detection, and information retrieval. It's a fine summary number but it loses information that precision-recall curves preserve.
+    pitfalls:
+      - "F1 weighs precision and recall equally. If you actually care more about one than the other, use the more general F-beta score (beta > 1 weighs recall higher, beta < 1 weighs precision)."
+  - question: "What is a ROC curve, and what does its AUC mean?"
+    shortAnswer: "The ROC curve plots true-positive rate against false-positive rate as you sweep the threshold. AUC (area under the curve) summarizes overall ranking quality — between 0.5 (random) and 1.0 (perfect). Higher = better."
+    detailed: |
+      True positive rate (= recall) is on the y-axis; false positive rate (FP / actual negatives) is on the x-axis. As you lower the threshold, you move up and right. A perfect classifier hugs the top-left corner; a random classifier traces the diagonal.
+
+      AUC interpretation: 'if you randomly pick one positive and one negative sample, what's the probability the model ranks the positive higher?' AUC of 0.8 means 80% of such pairs are ranked correctly. AUC is threshold-independent — it measures the model's overall ranking quality, not its performance at any specific threshold.
+    pitfalls:
+      - "For highly imbalanced datasets, ROC-AUC can look great while the model is practically useless. Use Precision-Recall AUC (PR-AUC) for imbalanced problems."
+  - question: "What's the difference between ROC-AUC and PR-AUC?"
+    shortAnswer: "ROC-AUC plots TPR vs FPR — both normalized. It's relatively stable across class imbalance. PR-AUC plots Precision vs Recall — Precision depends on class balance, so PR-AUC is more revealing for imbalanced problems."
+    detailed: |
+      On a 99/1 imbalanced dataset, even a poor model gets a respectable ROC-AUC because FPR has a giant denominator (lots of negatives) that washes out errors. PR-AUC, by contrast, exposes the model's failures sharply — when the positive class is rare, precision is dominated by false positives even if FPR looks fine.
+
+      Rule of thumb: balanced data → ROC-AUC is fine. Imbalanced data (rarer than 10% positive) → use PR-AUC and report it alongside.
+    pitfalls:
+      - "Don't compare ROC-AUC scores across datasets with different class balances — they aren't on the same scale."
+  - question: "What is a confusion matrix?"
+    shortAnswer: "A 2×2 table for binary classifiers showing the four possible outcomes: true positives, false positives, true negatives, false negatives. Every other metric is a one-or-two-number summary of this table."
+    detailed: |
+      ```
+                          Actual Positive      Actual Negative
+      Predicted Positive  True Positive (TP)   False Positive (FP)
+      Predicted Negative  False Negative (FN)  True Negative (TN)
+      ```
+
+      Once you have these four numbers, every metric is just a ratio:
+      - Accuracy = (TP + TN) / total
+      - Precision = TP / (TP + FP)
+      - Recall = TP / (TP + FN)
+      - F1 = 2 · P · R / (P + R)
+
+      The confusion matrix is the ground truth — always look at it before relying on any summary metric. It often reveals failure modes that summary numbers hide.
+    pitfalls:
+      - "For multi-class problems, the confusion matrix is N×N — it shows not just whether you got it wrong but *what* you got it wrong as. Very informative for debugging."
+---
+
+<TldrCallout>
+  *Accuracy* is the fraction of correct predictions — useful only when classes are balanced.
+  *Precision* and *recall* are a trade-off: precision is the quality of positive predictions, recall
+  is the coverage of real positives. *F1* averages them. *ROC-AUC* and *PR-AUC* summarize
+  performance across all thresholds. A *confusion matrix* shows the raw numbers behind every other
+  metric. Picking the right one matters more than picking the model that scores highest on the wrong
+  one.
+</TldrCallout>
+
+## Why this lesson matters
+
+Picking the wrong metric is how teams ship bad models that look good on
+paper. The most common version: a team reports 99% accuracy on a
+fraud-detection model, deploys it, and discovers it catches almost no
+fraud — because it was a 99/1 imbalanced dataset and the model learned the
+shortcut "always say not-fraud."
+
+We're going to build the vocabulary to never make that mistake.
+
+## The confusion matrix is the source of truth
+
+For any binary classifier, every prediction falls into one of four buckets:
+
+```
+                       Actual: Positive       Actual: Negative
+Predicted: Positive    True Positive (TP)     False Positive (FP)
+Predicted: Negative    False Negative (FN)    True Negative (TN)
+```
+
+A{" "}
+
+<GlossaryTerm
+  term="Confusion Matrix"
+  definition="A 2×2 table (for binary classification) showing the count of true positives, false positives, true negatives, and false negatives. The raw foundation under every binary-classification metric. For multi-class problems, it generalizes to N×N."
+>
+  confusion matrix
+</GlossaryTerm>
+records the counts in each bucket. Every summary metric you'll read about is built from those four
+numbers.
+
+## Accuracy, and why it lies
+
+<GlossaryTerm
+  term="Accuracy"
+  definition="The fraction of predictions that are correct. (TP + TN) / total. Reliable only when classes are roughly balanced and false positives and false negatives are equally bad."
+>
+  Accuracy
+</GlossaryTerm>
+is the fraction of correct predictions: `(TP + TN) / total`. It's intuitive and the most-cited
+metric in beginner ML — and it's the most-misleading metric in real ML.
+
+The reason: when the classes are imbalanced, you can score high accuracy
+by ignoring the rare class entirely.
+
+<WorkedExample title="Accuracy lies on an imbalanced fraud dataset">
+
+A bank has 100,000 transactions; 1,000 of them are fraud (1% fraud rate). We
+build a 'classifier' that always predicts not-fraud.
+
+Confusion matrix:
+
+```
+                         Actual: Fraud (1,000)  Actual: Not-fraud (99,000)
+Predicted: Fraud         0                       0
+Predicted: Not-fraud     1,000                   99,000
+```
+
+Accuracy = (0 + 99,000) / 100,000 = **99%**.
+
+Sounds great. The classifier is catching exactly zero fraud and is
+completely useless.
+
+The fix: use a metric that pays attention to the positive class. Recall on
+fraud here is 0/1000 = 0%. That's the honest summary.
+
+</WorkedExample>
+
+## Precision and recall: a trade-off
+
+<GlossaryTerm
+  term="Precision"
+  definition="Of the samples the model predicted positive, the fraction that are actually positive. TP / (TP + FP). High precision means 'when the model says yes, it's usually right'. Matters most when false positives are expensive."
+>
+  Precision
+</GlossaryTerm>
+asks "when the model says positive, how often is it right?":
+
+```
+Precision = TP / (TP + FP)
+```
+
+<GlossaryTerm
+  term="Recall"
+  definition="Of all actual positive samples, the fraction the model correctly identified. TP / (TP + FN). High recall means 'the model catches most of the real positives'. Matters most when false negatives are expensive."
+>
+  Recall
+</GlossaryTerm>
+asks "of all the real positives, how many did the model catch?":
+
+```
+Recall = TP / (TP + FN)
+```
+
+They trade off because most classifiers internally output a probability,
+and the yes/no decision comes from a _threshold_. Lower the threshold and
+you flag more samples — recall goes up (you catch more real positives) but
+precision goes down (you also flag more not-really-positives). Raise the
+threshold and the opposite happens.
+
+The right balance depends on what each kind of error costs:
+
+- **Cancer screening:** false negatives are catastrophic (miss a real case).
+  Favor recall — accept more false alarms to ensure nothing slips through.
+- **Spam filtering:** false positives are annoying (legitimate email
+  blocked). Favor precision — better to let some spam through than block a
+  job offer.
+- **Fraud detection:** depends on policy. If a positive freezes the
+  account, false positives are very costly (favor precision). If a positive
+  just triggers a "verify this transaction?" prompt, favor recall.
+
+## F1 — one number when you must have one
+
+<GlossaryTerm
+  term="F1 Score"
+  definition="The harmonic mean of precision and recall: 2·P·R / (P+R). A single number summary that punishes models with very unbalanced precision and recall. Used heavily in NLP and information retrieval."
+>
+  F1
+</GlossaryTerm>
+is the harmonic mean of precision and recall:
+
+```
+F1 = 2 · P · R / (P + R)
+```
+
+The harmonic mean is dominated by the smaller of P and R, so F1 only
+rewards models that are good at both. It's a useful single-number summary
+— but you should always also look at P and R separately to know _how_ the
+model is balanced.
+
+## ROC and AUC — performance across all thresholds
+
+A{" "}
+
+<GlossaryTerm
+  term="ROC Curve"
+  definition="Receiver Operating Characteristic. Plots true-positive rate (recall) on the y-axis against false-positive rate on the x-axis as the decision threshold varies. A perfect classifier hugs the top-left corner; a random one traces the diagonal."
+>
+  ROC curve
+</GlossaryTerm>
+sweeps the decision threshold from 0 to 1, plotting true-positive rate (recall) against
+false-positive rate at each point. A perfect classifier reaches the top-left corner (100% TPR with
+0% FPR); a random classifier traces the diagonal.
+
+<GlossaryTerm
+  term="AUC"
+  definition="Area Under the (ROC) Curve. A single number between 0.5 (random) and 1.0 (perfect) summarizing classifier quality across all thresholds. Interpretation: the probability that a randomly chosen positive sample is ranked higher than a randomly chosen negative."
+>
+  AUC
+</GlossaryTerm>
+is the area under the ROC curve. 0.5 is random, 1.0 is perfect. Common loose target: 0.8+ is
+"decent", 0.9+ is "good".
+
+AUC has a clean probabilistic interpretation: if you pick a random
+positive sample and a random negative sample, AUC is the probability that
+the model ranks the positive one higher.
+
+## PR-AUC vs ROC-AUC for imbalanced data
+
+ROC-AUC has a subtle bias: on heavily imbalanced datasets, the FPR
+denominator (number of actual negatives) is huge, which makes the FPR
+small even when the model produces many false positives. The result is a
+deceptively high ROC-AUC for a practically useless model.
+
+For imbalanced problems (rarer than ~10% positive), use the
+**precision-recall curve** and its area, **PR-AUC**, instead. PR-AUC
+exposes the model's failures more honestly when positives are rare.
+
+<AnalogyCallout>
+  Imagine grading a job-application filter. Accuracy says "99% of the resumes you correctly
+  handled." Precision says "of the resumes you said 'great candidate', how many actually were?"
+  Recall says "of the great candidates in the pile, how many did you flag?" The right summary
+  depends on whether you're afraid of bothering interviewers with bad candidates (precision) or
+  letting great candidates slip away (recall).
+</AnalogyCallout>
+
+<InlineQuiz
+  question="A medical-imaging team builds a model to flag potentially-cancerous scans for radiologist review. They report 92% accuracy, 95% precision, 30% recall. Should they ship?"
+  options={[
+    { text: "Yes — accuracy and precision are both high." },
+    {
+      text: "No — 30% recall means they're missing 70% of real cancer cases, which is unacceptable for screening.",
+      correct: true,
+    },
+    { text: "Yes — radiologists will catch what the model misses anyway." },
+    { text: "Cannot tell without knowing F1." },
+  ]}
+  explanation="Recall is the metric that matters most for screening. 30% recall means the model misses 7 out of every 10 cancer cases. Even with high precision, this is a failure of the use case — the model isn't filtering useful information up to the radiologist. The team should re-tune the threshold (lower it to raise recall, accepting more false positives) or revisit the model entirely."
+/>
+
+## Where to look first when evaluating a model
+
+A practical order of operations:
+
+1. **Always look at the confusion matrix first.** The summary metrics make
+   sense only once you've seen the raw counts.
+2. **Check the class balance.** If imbalanced, ignore accuracy. Use
+   PR-AUC, plus precision and recall at your chosen threshold.
+3. **Decide what your error costs look like** (false positives vs. false
+   negatives). Pick the metric — or threshold — that reflects that
+   asymmetry.
+4. **Don't celebrate yet.** Check failure modes. Misclassified examples
+   often reveal feature bugs, label noise, or distribution gaps that no
+   summary metric exposes.
