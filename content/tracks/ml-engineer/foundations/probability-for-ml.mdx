@@ -225,6 +225,20 @@ posterior). That's Bayes' rule doing its job: combining the evidence
 
 </WorkedExample>
 
+## Play with Bayes' rule yourself
+
+The number that surprises most people: how _low_ the posterior can stay
+even with a very accurate test, when the prior is small. The calculator
+below lets you feel it.
+
+<BayesCalculator />
+
+Set the prior to 0.01 (a 1% base rate). Keep the test at 99% / 99%
+sensitivity and specificity. Look at the posterior — barely above 50%.
+Now slide the prior up to 0.10. Watch the posterior leap past 90%. The
+test didn't get better; the population did. **This is why diagnostic
+labs always know their base rates.**
+
 This is exactly the calculation a _naive Bayes_ spam classifier performs,
 just with many words instead of one. It's a one-paragraph algorithm that
 formed the backbone of email spam filtering for two decades.

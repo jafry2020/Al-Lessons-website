@@ -194,6 +194,25 @@ enough to chase the noise.
 
 </WorkedExample>
 
+## See the U-curve
+
+That worked example is doing the experiment in your head. The widget below
+is the actual experiment: 25 points sampled from `y = sin(x) + noise`,
+fitted with a polynomial of whatever degree you choose. Both the training
+points (filled circles) and a separate validation set (open circles) are
+shown.
+
+<PolynomialFit />
+
+Things to try:
+
+- Start at **degree 1**. Both losses are high — the model can't curve.
+- Slide up to **degree 4 or 5**. The fitted line tracks the sine wave;
+  both losses drop.
+- Push to **degree 9 or 10**. The fitted line threads through training
+  points but wiggles wildly between them. Training MSE keeps falling.
+  _Validation MSE explodes._ That gap is the variance.
+
 <AnalogyCallout>
   Imagine studying for an exam. *Underfitting* is reading the textbook once, getting the gist,
   missing details — you'll get the big questions right and the specific ones wrong. *Overfitting* is

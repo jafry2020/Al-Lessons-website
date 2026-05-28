@@ -216,6 +216,25 @@ The right balance depends on what each kind of error costs:
   account, false positives are very costly (favor precision). If a positive
   just triggers a "verify this transaction?" prompt, favor recall.
 
+## Feel the trade-off
+
+The widget below shows 1000 synthetic samples from a classifier (15% are
+real positives). Slide the threshold and watch the confusion matrix
+update — and watch precision and recall move in opposite directions.
+
+<ThresholdSlider />
+
+Things to try:
+
+- Move the threshold to **0.10**. Almost everything is flagged. Recall
+  is nearly 100% (you catch every real positive). Precision is terrible
+  (most of your positives are false alarms).
+- Move to **0.90**. The opposite. Precision is high — your few positives
+  are almost all real. Recall has collapsed — you've missed most of the
+  real positives.
+- The "sweet spot" depends entirely on what each error type costs. There
+  is no universal right answer.
+
 ## F1 — one number when you must have one
 
 <GlossaryTerm
