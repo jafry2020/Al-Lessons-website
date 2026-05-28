@@ -282,9 +282,9 @@ type, support tickets, recent usage). Metric: PR-AUC (highly imbalanced —
 fewer than 5% of users churn per month). Use case: when probability > 0.4,
 trigger a retention email; > 0.7, route to a customer-success rep.
 
-**Phase 2 (Data).** Pull 18 months of user data. Discover: 'cancelled_at'
+**Phase 2 (Data).** Pull 18 months of user data. Discover: 'cancelled*at'
 is null for some users who actually cancelled (joined and immediately left
-within the same billing period). Spend a week cleaning. Split by _user_,
+within the same billing period). Spend a week cleaning. Split by \_user*,
 not by _row_, so no user appears in both train and test.
 
 **Phase 3 (Features).** Engineer: days_since_last_login, tickets_per_month,
