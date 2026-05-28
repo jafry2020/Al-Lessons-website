@@ -1,0 +1,22 @@
+# Force LF line endings for every text file, in the repo AND in the
+# working tree, on every platform. Without this, Windows checkouts use
+# CRLF and Linux CI uses LF, which makes prettier disagree about
+# "correctly formatted" between local pre-commit and CI's format:check.
+
+* text=auto eol=lf
+
+# Lockfiles are huge; declare them text so diffs work.
+package-lock.json text eol=lf
+
+# Binary assets — leave alone.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.svg      text eol=lf
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.eot      binary
+*.pdf      binary
