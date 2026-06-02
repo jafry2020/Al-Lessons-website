@@ -1,0 +1,462 @@
+---
+title: "Cost optimisation and GPU economics"
+description: "What ML actually costs in 2026 and how to make it sustainable. GPU choices, spot instances, distillation, quantisation, multi-tenancy — the levers that decide whether you ship at $500/month or $50,000/month."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: cost-optimisation
+lessonCode: "A8.8"
+estMinutes: 13
+prereqs:
+  - "A8.4 Model packaging and serving"
+  - "A7.8 Computer vision deployment and inference optimisation"
+objectives:
+  - "Estimate the cost of training and inference for typical ML workloads."
+  - "Apply the cost-reduction toolkit: right-sizing, spot instances, quantisation, distillation, multi-tenancy."
+  - "Build a cost monitoring + alerting system that catches regressions."
+pitfalls:
+  - "Optimising too early. Hit quality bars first; optimise cost when scale demands it."
+  - "Ignoring per-request cost as a metric. Without it, regressions slip in silently."
+  - "Overusing the biggest GPUs. H100 is faster per inference but worse per dollar for many workloads."
+  - "Treating cloud GPU price lists as final. Negotiated rates, spot, and committed use discount can cut costs 50-70%."
+importantQuestions:
+  - question: "What does training and inference actually cost in 2026?"
+    shortAnswer: |
+      Training: fine-tune small encoder ~$5-50; fine-tune 7B LLM with LoRA ~$50-500; pretrain frontier model ~$10M-100M. Inference: GPT-4o API ~$0.005-0.01/req; self-hosted Llama-70B ~$0.001-0.005/req; fine-tuned encoder ~$0.0001/req.
+    detailed: |
+      Concrete ranges for 2026:
+
+      **Training**:
+      - Fine-tune DistilBERT / ConvNeXt-Base on 50k samples: $5-50 (a few hours on a single GPU).
+      - LoRA fine-tune Llama-7B on 10k samples: $20-100 (8-24 hours on single H100).
+      - Full fine-tune Llama-7B on 1M samples: $1,000-5,000.
+      - LoRA fine-tune Llama-70B (QLoRA on single H100): $500-2,000.
+      - Continued pretraining (domain adaptation) of Llama-7B: $10k-50k.
+      - Pretrain frontier model: $10M-100M+.
+
+      **Inference (per request)**:
+      - GPT-4o API: $0.005-0.02 (depends on prompt + response length).
+      - Claude 3.5 Sonnet: similar.
+      - GPT-4o-mini: $0.0001-0.0005.
+      - Self-hosted Llama-70B (H100, vLLM, batched): $0.001-0.005.
+      - Self-hosted Llama-7B (T4 / L4): $0.0001-0.0005.
+      - Fine-tuned BERT-base on GPU: $0.00005-0.0001.
+      - Fine-tuned BERT-base on CPU: $0.00001-0.00005.
+
+      At 1M req/day:
+      - GPT-4o: ~$5k-20k/day = $150k-600k/month.
+      - GPT-4o-mini: ~$100-500/day = $3k-15k/month.
+      - Self-hosted Llama-70B: ~$1k-5k/day = $30k-150k/month.
+      - Fine-tuned small encoder: ~$50-100/day = $1.5k-3k/month.
+
+      The 100-1000× cost ratio between frontier API and fine-tuned small model is real and matters at scale.
+    pitfalls:
+      - "API prices change. Use actual pricing pages, not 2024 estimates, for budget projections."
+  - question: "Which GPU should you use?"
+    shortAnswer: |
+      Depends on workload: H100 / H200 for frontier LLM training and high-throughput inference; A100 / L40S for general LLM serving; A10 / L4 for medium models; T4 for small models / CPU-comparable tasks. Cost per inference matters more than peak FLOPS.
+    detailed: |
+      GPU landscape in 2026 (approximate rental prices):
+
+      | GPU | Memory | Peak BF16 TFLOPS | Cloud $/hr (on-demand) | Spot $/hr |
+      | --- | ------ | ---------------- | ---------------------- | --------- |
+      | H100 | 80 GB | 989 | $3-8 | $1-3 |
+      | H200 | 141 GB | 989 | $4-10 | $1.5-4 |
+      | A100 (80 GB) | 80 GB | 312 | $1.5-3 | $0.5-1.5 |
+      | A100 (40 GB) | 40 GB | 312 | $1-2 | $0.4-1 |
+      | L40S | 48 GB | 366 | $1-2 | $0.4-1 |
+      | A10 | 24 GB | 125 | $0.5-1.5 | $0.2-0.6 |
+      | L4 | 24 GB | 121 | $0.4-1 | $0.15-0.5 |
+      | T4 | 16 GB | 65 | $0.2-0.5 | $0.1-0.25 |
+
+      Cost considerations:
+      - **Frontier LLM serving (70B+)**: H100 / H200 (need the memory).
+      - **30-70B LLMs**: A100 or H100; H100 may be cheaper per token due to higher throughput.
+      - **7-13B LLMs**: A100 or L40S; L4 if memory fits.
+      - **CV / NLP encoders**: T4 / L4; sometimes CPU is cheapest.
+      - **Training fine-tunes**: depends on memory needed; H100 if available, A100 otherwise.
+
+      A common pattern: smaller GPUs at higher utilisation often beat bigger GPUs at low utilisation on cost per inference.
+    pitfalls:
+      - "Don't auto-pick the biggest GPU. Profile workload; pick the smallest GPU that handles your batch / latency target."
+  - question: "When should you use spot instances?"
+    shortAnswer: |
+      Training workloads that can checkpoint and resume; batch inference; non-real-time serving. Spot is 50-70% cheaper but can be reclaimed with seconds-to-minutes notice. Real-time serving with strict SLAs: avoid spot.
+    detailed: |
+      Spot pricing offers 50-70% discount on cloud GPUs but with the catch that the cloud can reclaim the instance with 30 sec - 2 min notice.
+
+      Good fits:
+      - **Training jobs that checkpoint frequently**. Save every 10-30 min; resume from last checkpoint on reclamation.
+      - **Batch inference**: process backlog jobs; partial completion is fine.
+      - **Hyperparameter sweeps**: each trial is independent; loss of one trial is acceptable.
+      - **Background async work**: e.g., regenerating image embeddings for a corpus.
+
+      Bad fits:
+      - **Real-time user-facing serving** with SLA: reclamation breaks SLA.
+      - **Long single-machine training without checkpointing**: full loss on reclamation.
+      - **Distributed training with limited fault tolerance**: failure of one node crashes the run.
+
+      Workflow patterns:
+      - **Spot for training**, on-demand for serving.
+      - **Spot pool for stateless batch workers**.
+      - **Multi-cloud / multi-zone for higher availability**: less likely all clouds reclaim at once.
+
+      Tools: SageMaker spot training, Ray with autoscaler, Kubernetes Karpenter with diversified instance types.
+
+      Spot savings can take a $5k/month training bill to $1.5k/month. Worth the engineering for high-volume training.
+    pitfalls:
+      - "Some clouds offer 'preemptible' or 'spot' with different SLAs. Read the fine print on notice time and reclamation rate."
+  - question: "What's distillation and when is it the right call?"
+    shortAnswer: |
+      Train a small "student" model on the outputs of a large "teacher" model. Student matches teacher quality on the specific task at 10-100× cheaper inference. Worth the up-front cost at high volume.
+    detailed: |
+      Pattern:
+
+      1. Use a frontier model (GPT-4o, Claude, Llama-70B) to generate outputs on a large unlabelled corpus.
+      2. Use those outputs as labels for training a small model (encoder for classification, smaller LLM for generation).
+      3. Deploy the small model at production volume.
+
+      Quality: student often retains 95-99% of teacher's quality on the specific task. Loses generality.
+
+      Cost savings:
+      - GPT-4o at $0.005/req × 1M req/day = $5k/day.
+      - Fine-tuned encoder at $0.0001/req × 1M req/day = $100/day.
+      - 50× cost reduction; one-time fine-tune cost ($100-500).
+
+      Break-even: distillation makes sense at ~10k+ daily requests.
+
+      Process:
+      1. Collect labelled or pseudo-labelled data using the teacher (10k-1M examples typically).
+      2. Train the small model.
+      3. Evaluate against the teacher on a held-out set.
+      4. Deploy if quality is acceptable.
+
+      Variants:
+      - **Hard distillation**: use teacher's argmax predictions as hard labels.
+      - **Soft distillation**: use teacher's full probability distribution.
+      - **Response distillation** (for generation): use teacher's text outputs as targets.
+
+      Watch out: legal terms. Some API providers (OpenAI) restrict using their outputs to train competing models. Check terms before distilling commercial APIs.
+    pitfalls:
+      - "Distilled models lose general capability. They're great at the trained task; can't reason outside it. Don't expect open-ended performance."
+  - question: "How do quantisation and batching reduce cost?"
+    shortAnswer: |
+      Quantisation (INT8, INT4) cuts memory and compute 2-4×, fitting larger models on smaller GPUs and serving more requests per GPU. Batching raises GPU utilisation from ~10% (single inference) to 60-80% (batched), dropping cost per request 3-10×.
+    detailed: |
+      **Quantisation**:
+      - FP32 → INT8: 4× memory cut, 2-4× speedup (CV + small LLMs).
+      - FP16 / BF16 → INT4 (LLMs via GPTQ, AWQ, bitsandbytes): another 2-4× memory cut, ~1.5× speedup.
+
+      Quality impact: typically 0-2% drop with calibration / careful methods.
+
+      Effect on cost:
+      - Llama-70B FP16 needs 140 GB → A100 80GB × 2 or H100 × 1.
+      - Llama-70B INT4 needs ~40 GB → fits on 1× A100 or even L40S (48GB).
+      - Per-request cost can drop 4-10× from this alone.
+
+      **Batching**:
+      - GPU utilisation at batch 1: ~10%.
+      - At batch 16: ~60%.
+      - At batch 64+: 70-85%.
+      - Per-request compute amortised across the batch.
+      - Per-request cost drops 5-10× for the same workload.
+
+      For LLM serving specifically: vLLM's continuous batching + PagedAttention + INT4 quantisation can reduce cost per token 10-20× vs. unoptimised serving.
+
+      Implementation:
+      - Self-hosted: use vLLM or TensorRT-LLM for LLMs; ONNX Runtime / TensorRT for CV models.
+      - APIs: providers may automatically batch internally; you control quantisation only via model choice.
+    pitfalls:
+      - "Quantisation can degrade quality on tail cases. Always evaluate on production-like data, not just held-out test."
+  - question: "How do you monitor and control ML costs?"
+    shortAnswer: |
+      Track cost per request as a first-class metric. Alert on regressions (e.g., daily cost up 20%). Use tagged billing in cloud providers. Build dashboards: cost by endpoint, by model, by tier.
+    detailed: |
+      Cost monitoring essentials:
+
+      **First-class metric**: cost per request per endpoint. Log it. Track over time.
+
+      ```python
+      # Per request, attach:
+      {
+        "endpoint": "classify-ticket",
+        "model_version": "v2.4",
+        "input_tokens": 312,
+        "output_tokens": 45,
+        "compute_ms": 180,
+        "estimated_cost_usd": 0.00043,
+      }
+      ```
+
+      Aggregate hourly / daily. Dashboard: cost per endpoint, per model, total.
+
+      **Cloud tagging**: tag every resource (cluster, bucket, GPU) with team / project / environment. Cloud bills then break down by tag.
+
+      **Alerts**:
+      - Daily cost increase > 20%: investigate.
+      - Cost per request increase > 30%: investigate.
+      - Total daily cost > budget threshold: page.
+
+      **Quarterly cost review**:
+      - Which endpoints / models cost most?
+      - Where are obvious optimisations?
+      - Are unused resources still provisioned?
+
+      Tools:
+      - **Cloud-native**: AWS Cost Explorer, GCP Billing, Azure Cost Management.
+      - **3rd-party**: Vantage, Kubecost, Datadog Cost.
+      - **LLM-specific**: Helicone, Langfuse for API cost tracking.
+
+      For LLM-heavy applications: cost per request is dominated by tokens. Optimise prompts and outputs to keep both manageable. See A6.7.
+    pitfalls:
+      - "Without per-endpoint cost attribution, regressions hide in the aggregate. Tag everything."
+---
+
+<TldrCallout>
+  ML cost in 2026 spans 5+ orders of magnitude: $0.0001/req for a fine-tuned encoder; $0.01/req for
+  frontier LLM API. The cost-reduction toolkit: right-size the GPU, use spot for training, quantise
+  (INT8 / INT4), batch (continuous batching for LLMs), distill from frontier to small fine-tuned,
+  and monitor cost per request as a first-class metric. The difference between a sustainable and
+  unsustainable ML service is usually 2-3 of these levers applied.
+</TldrCallout>
+
+## What ML actually costs
+
+Concrete 2026 ranges:
+
+| Workload                            | Cost       |
+| ----------------------------------- | ---------- |
+| Fine-tune DistilBERT on 50k samples | $5-50      |
+| LoRA Llama-7B on 10k samples        | $20-100    |
+| LoRA Llama-70B (QLoRA)              | $500-2,000 |
+| Continued pretraining Llama-7B      | $10k-50k   |
+| Pretrain frontier model             | $10M-100M+ |
+
+| Inference                       | Per request      |
+| ------------------------------- | ---------------- |
+| GPT-4o API                      | $0.005-0.02      |
+| GPT-4o-mini API                 | $0.0001-0.0005   |
+| Self-hosted Llama-70B (batched) | $0.001-0.005     |
+| Self-hosted Llama-7B            | $0.0001-0.0005   |
+| Fine-tuned BERT-base on GPU     | $0.00005-0.0001  |
+| Fine-tuned BERT-base on CPU     | $0.00001-0.00005 |
+
+The 100-1000× ratio between frontier API and fine-tuned small encoder is what makes cost optimisation matter.
+
+At 1M req/day:
+
+- GPT-4o: $150k-600k/month.
+- Self-hosted Llama-70B: $30k-150k/month.
+- Fine-tuned encoder: $1.5k-3k/month.
+
+Choose with deployment economics in mind.
+
+## GPU choice matters
+
+Pick the smallest GPU that meets latency and batch size needs:
+
+| GPU          | Memory    | When                                           |
+| ------------ | --------- | ---------------------------------------------- |
+| H100 / H200  | 80-141 GB | Frontier LLM training; 70B+ LLM serving        |
+| A100 (80 GB) | 80 GB     | Mid-range LLMs; serious training               |
+| L40S         | 48 GB     | Mid-LLMs; cheaper than A100 for many workloads |
+| A10 / L4     | 24 GB     | Small LLMs (7B with quantisation); CV training |
+| T4           | 16 GB     | Small CV models; cheap inference               |
+| CPU          | —         | Tiny models; spike-y traffic; legacy           |
+
+Cloud rates (approximate 2026, vary by provider / region):
+
+| GPU       | On-demand $/hr | Spot $/hr |
+| --------- | -------------- | --------- |
+| H100      | $3-8           | $1-3      |
+| A100 80GB | $1.5-3         | $0.5-1.5  |
+| L40S      | $1-2           | $0.4-1    |
+| A10       | $0.5-1.5       | $0.2-0.6  |
+| L4        | $0.4-1         | $0.15-0.5 |
+| T4        | $0.2-0.5       | $0.1-0.25 |
+
+Smaller GPU at higher utilisation often beats larger GPU at low utilisation.
+
+<AnalogyCallout>
+  Choosing a GPU is like choosing a delivery vehicle. A semi-truck (H100) hauls freight efficiently
+  when fully loaded; for one package, it's wasteful. A bicycle courier (T4) handles short trips
+  well; can't haul a load. Match the vehicle to the job — and to how many jobs you have per hour.
+</AnalogyCallout>
+
+## Spot instances: 50-70% cheaper
+
+Spot GPUs cost half to a third of on-demand. Catch: cloud can reclaim with 30 sec - 2 min notice.
+
+Use spot for:
+
+- **Training jobs that checkpoint frequently** (save every 10-30 min; resume on reclamation).
+- **Batch inference / async work** (partial completion fine).
+- **Hyperparameter sweeps** (trials are independent).
+
+Don't use spot for:
+
+- **Real-time user-facing serving** with SLA.
+- **Long single-machine training without checkpointing**.
+
+Tools that help: SageMaker spot training, Ray autoscaler, Kubernetes with Karpenter and diversified instance types.
+
+A $5k/month training bill can become $1.5k/month with spot. Worth the engineering for sustained training workloads.
+
+## Quantisation: 2-4× speedup / 4× memory cut
+
+Quantise model weights to lower precision:
+
+| Precision   | Memory | Speedup           | Quality cost |
+| ----------- | ------ | ----------------- | ------------ |
+| FP32        | 1×     | 1×                | 0            |
+| BF16 / FP16 | 0.5×   | 1.5-2×            | Negligible   |
+| INT8        | 0.25×  | 2-4×              | 0-2%         |
+| INT4 (LLMs) | 0.125× | 1.5× more vs INT8 | 0-3%         |
+
+For LLMs in 2026: GPTQ, AWQ, bitsandbytes are standard INT4 implementations.
+
+Cost effect:
+
+- Llama-70B FP16: 140 GB → 2× A100 80GB or 1× H100.
+- Llama-70B INT4: 40 GB → 1× A100 or L40S.
+- Per-request cost can drop 4-10×.
+
+For CV in 2026: ONNX Runtime / TensorRT with INT8 calibration; PyTorch quantisation tooling. See A7.8.
+
+## Batching: 3-10× cost reduction
+
+GPU at batch size 1: ~10% utilisation. At batch 32+: 60-80% utilisation. Same hardware; 3-10× the throughput.
+
+For LLMs specifically: vLLM's continuous batching at the token level is the production standard. Costs per token drop 5-10× vs unbatched serving.
+
+For CV / NLP encoders: BentoML, Triton handle dynamic batching. Configure max batch size and timeout for your latency target.
+
+Don't over-batch for real-time UX: long batch waits hurt p99 latency. Tune for your specific latency SLO.
+
+## Distillation: 100× cheaper at high volume
+
+Pattern (covered in earlier modules):
+
+1. Use frontier LLM (GPT-4o, Claude, Llama-70B) to generate outputs on a large pseudo-labelled corpus.
+2. Train a small model (encoder, small LLM) on those outputs.
+3. Deploy the small model.
+
+Quality retained: typically 95-99% of teacher.
+
+Cost saved: 50-1000×.
+
+Break-even: ~10k daily requests. Below that, the up-front fine-tune cost doesn't amortise.
+
+Watch out: licensing terms. Some API providers restrict training competing models on their outputs.
+
+## Per-request cost as a first-class metric
+
+Treat it like latency or accuracy:
+
+```python
+# Per request:
+{
+    "endpoint": "classify_ticket",
+    "model_version": "v2.4",
+    "input_tokens": 312,
+    "output_tokens": 45,
+    "estimated_cost_usd": 0.00043,
+    "latency_ms": 180,
+}
+```
+
+Aggregate hourly. Dashboard by endpoint, model, tier.
+
+Alerts:
+
+- Daily cost up 20% → investigate.
+- Cost per request up 30% → investigate.
+- Daily total > budget threshold → page.
+
+Cloud tagging: tag everything (cluster, bucket, GPU) with team / project / environment. Bills break down by tag.
+
+Tools:
+
+- **Cloud-native**: AWS Cost Explorer, GCP Billing, Azure Cost Management.
+- **3rd-party**: Vantage, Kubecost, Datadog Cost.
+- **LLM-specific**: Helicone, Langfuse.
+
+<InlineQuiz
+  question="You're spending $40k/month on GPT-4o for a customer support classifier. Traffic is 1M classifications/day, well-defined task with 8 categories, you have 200k examples of GPT-4o's classifications. What's the highest-leverage optimisation?"
+  options={[
+    { text: "Negotiate a better OpenAI rate." },
+    {
+      text: "Distill: fine-tune DistilBERT or ModernBERT-base on the 200k GPT-4o outputs. Deploy self-hosted. Expected: ~$200-500/month inference cost, 95-99% of GPT-4o quality, 50× speedup. Break-even on the $200-500 fine-tune cost in hours.",
+      correct: true,
+    },
+    { text: "Add prompt caching." },
+    { text: "Switch to GPT-4o-mini." },
+  ]}
+  explanation="Classic distillation scenario: well-defined task, large volume of LLM outputs as labels. Fine-tuned small encoder for classification is ~100× cheaper at this scale. GPT-4o-mini would help (drop to ~$5k/month) but distillation drops to $200-500/month. Rate negotiation is incremental. Prompt caching helps 50-90% on cached tokens but doesn't change the architecture cost. The pattern: prototype with frontier API, distill to small model when volume justifies."
+/>
+
+## Multi-tenancy
+
+For teams with many models, share resources:
+
+| Pattern                                                            | Savings                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------- |
+| **Triton multi-model serving** on one GPU                          | Multiple small models share a GPU instead of 1 GPU each |
+| **vLLM serving multiple LoRA adapters** on one base model          | Adapters share base model weights                       |
+| **Model fleet routing**: many small models on few large GPUs       | Better utilisation than per-model GPUs                  |
+| **Shared embedding model**: one embedder for many downstream tasks | One inference per input, many uses                      |
+
+Multi-tenancy adds operational complexity (noisy-neighbour issues, fair scheduling) but cuts costs significantly at scale.
+
+For LoRA-fine-tuned LLMs specifically: vLLM's multi-LoRA serves dozens of LoRA adapters on one base model — game-changing for cost.
+
+## Cost optimisation checklist
+
+When the bill is too high:
+
+1. **Right-size GPUs**: smallest that meets latency / batch needs.
+2. **Quantise** (INT8 / INT4): 2-4× memory + speed gain.
+3. **Batch** (continuous batching for LLMs): 3-10× cost reduction.
+4. **Spot for training**: 50-70% cheaper.
+5. **Distill** frontier → fine-tuned: 50-1000× cheaper at high volume.
+6. **Prompt caching** (for LLMs): 50-90% on stable prefixes.
+7. **Model routing**: cheap model for simple cases, frontier for complex.
+8. **Auto-scale** to demand: pay for idle = wasted spend.
+9. **Negotiate cloud rates / commit discounts**: 20-50% off list price at sustained spend.
+10. **Multi-tenancy**: share GPU resources across models.
+
+Most teams that achieve sustainable economics apply 4-7 of these.
+
+<InlineQuiz
+  question="True or false: smaller models are always cheaper than larger models per request."
+  options={[
+    { text: "True — fewer parameters = less compute = less cost." },
+    {
+      text: "Often but not always. A larger model with better batching, quantisation, or multi-tenant sharing can be cheaper per request than a smaller model deployed inefficiently. Cost is about utilisation and engineering, not just parameter count.",
+      correct: true,
+    },
+    { text: "False — only API pricing matters." },
+    { text: "True if both are deployed on the same hardware." },
+  ]}
+  explanation="A small model with single inference per request (batch 1) can cost more per request than a large model with batch 64. A large LoRA-fine-tuned model multi-tenanted on one base can be cheaper than a small standalone. Quantisation matters more than parameter count for many workloads. Cost = compute × utilisation, and small models are sometimes deployed at terrible utilisation. The 'use the smallest model' heuristic is a good default but not absolute."
+/>
+
+## Closing for cost
+
+ML cost optimisation is engineering, not negotiation. The biggest gains come from architectural choices (right-sized GPUs, batching, quantisation, distillation) applied with care. Monitor cost per request as a first-class metric. Apply the optimisation levers in priority order: quantisation + batching + right-size GPU first; distillation when scale justifies.
+
+## Closing for Module 8
+
+This module has covered the operational side of production ML:
+
+- **A8.1**: the MLOps landscape.
+- **A8.2**: experiment tracking — the bedrock of reproducibility.
+- **A8.3**: data versioning + feature stores.
+- **A8.4**: model packaging + serving.
+- **A8.5**: monitoring + drift detection.
+- **A8.6**: CI/CD for ML.
+- **A8.7**: training-serving skew — the silent killer.
+- **A8.8**: cost optimisation.
+
+The discipline of these practices is what separates "we built a model" from "we run an ML service reliably." The capstone synthesises everything in this track into end-to-end ML system design.

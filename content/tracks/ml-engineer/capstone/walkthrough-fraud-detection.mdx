@@ -1,0 +1,457 @@
+---
+title: "Capstone walkthrough: fraud detection"
+description: "A full ML system design for credit-card fraud detection at moderate scale. Walking through the 7-step framework with explicit trade-offs, decisions, and what would actually ship in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: capstone
+moduleLabel: "Capstone · End-to-end ML system design"
+lesson: walkthrough-fraud-detection
+lessonCode: "A9.2"
+estMinutes: 16
+prereqs:
+  - "A9.1 The end-to-end ML system design framework"
+  - "A2.5 Gradient boosting: XGBoost, LightGBM, CatBoost"
+  - "A8.7 Training-serving skew and pipeline correctness"
+objectives:
+  - "Apply the 7-step framework to a concrete tabular ML system."
+  - "Justify XGBoost over deep learning for this specific problem and constraint set."
+  - "Design evaluation, serving, monitoring, and iteration for production fraud detection."
+pitfalls:
+  - "Treating fraud detection as a balanced classification problem. Fraud is rare; PR-AUC and precision @ recall are the right metrics."
+  - "Skipping feature engineering. For tabular fraud, features dominate model architecture."
+  - "Auto-retraining on drift signals alone. Fraud evolves adversarially; retraining on contaminated data amplifies the problem."
+  - "Building the model before evaluation infrastructure. Without baseline metrics and slice analysis, you can't know if you're winning."
+importantQuestions:
+  - question: "What's the problem framing for a credit-card fraud detector?"
+    shortAnswer: |
+      Auto-decide approve/flag/review on transactions in real-time, given a fraud probability score. Reduce manual review burden while maintaining catch rate. Constraints: <50ms latency, 1M+ transactions/day, asymmetric costs (FN ~$300, FP ~$5).
+    detailed: |
+      Detailed framing:
+
+      **Business context**: payment processor handling 1M+ transactions/day. Current fraud rate: 0.5%. Current manual review of all flagged transactions costs $2/review and takes 30 minutes; team handles 50k/day.
+
+      **The decision**: for each transaction, output a fraud probability. Downstream code thresholds:
+      - p < 0.05: auto-approve.
+      - p > 0.5: auto-block (rare; high-confidence fraud).
+      - 0.05 - 0.5: queue for manual review.
+
+      **Why ML**: rule-based systems catch some fraud but miss novel patterns; manual review doesn't scale. ML can learn patterns automatically.
+
+      **Constraints**:
+      - Latency: <50 ms (part of payment authorisation flow).
+      - Throughput: 1M+/day with peaks at 5x daily avg.
+      - Calibrated probabilities (downstream cost-weighted thresholding).
+      - Data privacy: PCI-compliant; no raw card numbers in features.
+      - Audit: regulators require explainable decisions for high-value blocks.
+
+      **Cost of errors**:
+      - False positive: customer friction ($5 effective cost — annoyance, lost transaction, support time).
+      - False negative: chargeback + investigation ($300 effective cost).
+      - Ratio 60:1 → favour high recall on positive class.
+
+      This frame tells us: tabular ML with calibrated probabilities, latency-sensitive serving, cost-aware threshold tuning.
+    pitfalls:
+      - "Don't accept 'just detect fraud.' Push for specifics on volume, cost asymmetry, regulatory needs."
+  - question: "What's the right success metric?"
+    shortAnswer: |
+      Precision at fixed recall (e.g., precision when catching 80% of fraud) plus per-segment metrics (per-country, per-card-type, per-merchant-category). PR-AUC for offline model comparison; cost-weighted accuracy as ultimate business metric.
+    detailed: |
+      Why not accuracy: with 0.5% fraud, predicting "never fraud" scores 99.5% accuracy.
+
+      Why not F1 alone: doesn't reflect the 60:1 cost asymmetry.
+
+      Practical metric stack:
+
+      **Primary**: Precision @ Recall = 0.80. "Among the transactions we flag, what fraction are real fraud, given we catch 80% of all fraud?"
+
+      **Secondary**:
+      - PR-AUC (precision-recall area under curve): single number for model comparison.
+      - Per-segment precision/recall: per-country, per-card type, per-merchant category.
+      - Calibration: predicted probability vs. observed fraud rate.
+      - Cost-weighted accuracy: ($300 × FN + $5 × FP) / total. Lower is better.
+
+      **Operating-point metric**:
+      - Number of manual reviews triggered (capacity-constrained).
+      - $ saved per day vs. baseline.
+
+      Report all of these monthly. Aggregate "model accuracy" is irrelevant for fraud.
+    pitfalls:
+      - "Per-segment metrics often reveal that 'overall PR-AUC is 0.82' hides 'PR-AUC for EU cards is 0.65'. Always slice."
+  - question: "What data do you use?"
+    shortAnswer: |
+      Transaction features (amount, time, merchant, location), card / customer history (avg spend, recent activity, age of account), velocity features (transactions in last hour / day), device / IP features (when available). Plus labels from chargebacks (delayed 60-180 days).
+    detailed: |
+      Feature families:
+
+      **Transaction features** (available at request time):
+      - Amount, currency.
+      - Merchant ID, merchant category code (MCC).
+      - Time of day, day of week.
+      - Geographic location (country, region).
+      - Payment method (chip, contactless, online).
+
+      **Customer / card history** (precomputed, lookup at request):
+      - Avg spend (7d, 30d, 90d).
+      - Recent activity count.
+      - Card age, customer age.
+      - Historical fraud incidents.
+      - Average transaction velocity.
+
+      **Velocity features** (precomputed; aggregated in feature store):
+      - Transactions in last 1 hour / 24 hours / 7 days.
+      - Distinct merchants in last 24 hours.
+      - Total amount in last hour / day.
+
+      **Risk signals** (from external services):
+      - Device fingerprint risk.
+      - IP reputation.
+      - Authentication strength (was 2FA used?).
+
+      **Labels**: chargebacks (delayed ground truth). Available 60-180 days after transaction. Use the delay carefully — temporal split for evaluation.
+
+      Data lives in:
+      - Real-time transaction stream (Kafka).
+      - Customer / card DB (Postgres / Aurora).
+      - Velocity counters (Redis / DynamoDB with TTL).
+      - Risk signals (vendor API responses cached).
+
+      Privacy:
+      - PCI-DSS compliant; no card numbers in features.
+      - Hashed customer IDs.
+      - Audit logs of all decisions.
+    pitfalls:
+      - "Don't use 'transactions in next 24 hours' as a feature — temporal leakage. All features must be available at decision time."
+  - question: "What model do you pick?"
+    shortAnswer: |
+      XGBoost or LightGBM. Tabular fraud is the textbook gradient-boosting use case: structured features, calibrated probabilities, fast inference, well-understood interpretability. Beats deep learning at this scale and data type.
+    detailed: |
+      Why XGBoost / LightGBM:
+
+      - **Tabular data**: trees dominate tabular ML benchmarks.
+      - **Heterogeneous features**: numerical + categorical + binary handled natively.
+      - **Calibrated probabilities**: tree ensemble outputs are reasonably calibrated (vs. deep models which need post-hoc calibration).
+      - **Fast inference**: ~1ms for a deep model with 1000 trees on optimised serving.
+      - **Interpretable**: SHAP values for explaining individual predictions to regulators.
+      - **Robust**: handles missing values, scale variations, outliers.
+
+      Why not deep learning:
+      - Tabular DL (TabNet, FT-Transformer) doesn't consistently beat XGBoost on this kind of data.
+      - Higher serving cost (GPU vs CPU).
+      - More overfitting risk on 1-10M training examples.
+
+      Why not logistic regression:
+      - Linear can't capture interactions that fraud often relies on.
+      - Without heavy feature engineering, recall is lower.
+
+      Specific recipe:
+      - **LightGBM** (faster than XGBoost on large data; native categorical support).
+      - Hyperparameters: ~500 boosting rounds, lr=0.05, max_depth=8, num_leaves=64, class_weight balanced.
+      - Tuning: Optuna, Bayesian search over lr, depth, leaves, reg_lambda.
+      - Calibration: isotonic regression on validation set.
+    pitfalls:
+      - "Don't over-tune. LightGBM with reasonable defaults + good features beats fancy tuning with mediocre features."
+  - question: "How do you evaluate this system?"
+    shortAnswer: |
+      Time-based holdout (train on past, test on future) to avoid temporal leakage. Report PR-AUC + precision @ recall = 0.80, per-segment metrics, calibration plot, cost-weighted accuracy. Regression suite of 100-500 cases for CI.
+    detailed: |
+      Evaluation infrastructure:
+
+      **Train / val / test split**:
+      - Time-based: train on month 1-6, validate on month 7, test on month 8.
+      - Never random-split temporal data; temporal leakage hides in random splits.
+
+      **Held-out test metrics** (per release):
+      - PR-AUC on the test month.
+      - Precision @ Recall = 0.80, 0.85, 0.90.
+      - Per-segment metrics: per-country, per-card-type, per-merchant-category.
+      - Calibration plot: predicted probability vs. observed fraud rate in test.
+      - Cost-weighted accuracy at the operating threshold.
+
+      **Regression suite (CI)**:
+      - 100-500 curated cases: known fraud patterns, edge cases, recently observed false positives.
+      - Expected: model probability above / below threshold.
+      - Block PR merge on failures.
+
+      **Slice-aware evaluation**:
+      - "EU cards, low-value transactions" vs "US cards, high-value transactions" — fraud patterns differ.
+      - Report top 10 segments by volume; investigate any with metric outside acceptable range.
+
+      **Robustness suite**:
+      - Adversarial: tiny perturbations in feature values.
+      - Out-of-distribution: transactions from new card types, new markets.
+      - Concept drift simulation: train on month 1-3, evaluate on month 6.
+
+      **Production sampling**:
+      - 5% of decisions sampled for offline review.
+      - Eventual chargebacks used to compute true precision/recall on production traffic.
+      - Compare to held-out test metrics; gaps indicate train-serving issues.
+    pitfalls:
+      - "PR-AUC of 0.85 sounds good but may be the ceiling at this difficulty. Compare to a strong rule-based baseline; if you don't beat it, reconsider."
+---
+
+<TldrCallout>
+  Credit-card fraud detection illustrates classic tabular ML: XGBoost / LightGBM on structured features, calibrated probabilities, real-time serving (<50ms), cost-weighted thresholds, time-based evaluation, per-segment monitoring. The interesting work isn't the model — it's feature engineering, calibration, threshold tuning, and adversarial drift handling. The 7-step framework applied to this problem demonstrates how each step's choices flow through.
+</TldrCallout>
+
+## The framing
+
+Let's apply the 7-step framework to credit-card fraud detection.
+
+**1. Problem framing**:
+
+- 1M+ transactions/day, 0.5% fraud rate.
+- Each transaction: output a fraud probability in <50ms.
+- Downstream code thresholds: p<0.05 auto-approve, p>0.5 auto-block, else queue for review (50k/day capacity).
+- FP cost ~$5 (customer friction); FN cost ~$300 (chargeback).
+- Regulators may demand explainability for any auto-blocked transaction.
+
+**Why ML**: rules catch known patterns; ML adapts to novel ones.
+
+## Success metrics
+
+**Primary**: Precision at Recall = 0.80 (or whatever recall the business commits to).
+
+**Secondary**:
+
+- PR-AUC for model comparison.
+- Per-segment precision / recall (country, card type, merchant category).
+- Calibration plot.
+- Cost-weighted accuracy: ($300 × FN + $5 × FP) / total.
+
+**Operating-point metric**:
+
+- Manual review volume (must stay under 50k/day capacity).
+- $ saved per day vs. rule-based baseline.
+
+Aggregate accuracy is meaningless with 0.5% fraud. PR-AUC and segment metrics tell the real story.
+
+## Data strategy
+
+Feature families and where they live:
+
+| Family                  | Examples                          | Latency budget              |
+| ----------------------- | --------------------------------- | --------------------------- |
+| Transaction             | Amount, time, merchant, location  | 0ms (in request)            |
+| Card / customer history | Avg spend, age, prior incidents   | ~5ms (cached lookup)        |
+| Velocity                | Txns last 1h/24h/7d; total amount | ~5ms (Redis counters)       |
+| Device / IP             | Risk scores from vendors          | ~10ms (cached vendor calls) |
+
+Total feature gathering: ~20ms. Leaves ~30ms for model + decision.
+
+**Labels**: chargebacks, available 60-180 days after transaction. Two implications:
+
+- Evaluation uses old data with confirmed labels.
+- Online monitoring uses delayed feedback.
+
+**Privacy / compliance**:
+
+- PCI-DSS: no raw card numbers in features.
+- Hashed customer IDs.
+- Decision audit log retained 7 years.
+
+**Data quality**:
+
+- Schema validation on incoming transactions.
+- Cardinality monitoring (alert on new merchant categories).
+- Velocity counter health checks.
+
+## Modelling approach
+
+**Pick**: LightGBM (gradient boosting).
+
+**Why**:
+
+- Tabular data → trees win.
+- Calibrated probabilities out of the box (with mild post-hoc calibration).
+- Fast inference (~1ms for 500 trees).
+- SHAP explanations for regulator audits.
+- Native handling of categorical features.
+
+**Why not**:
+
+- Deep tabular models (TabNet) don't consistently beat LightGBM at this scale.
+- Logistic regression: too weak for interaction-rich fraud patterns.
+- Neural net: higher serving cost; doesn't justify on this data.
+
+**Recipe**:
+
+```python
+import lightgbm as lgb
+from sklearn.isotonic import IsotonicRegression
+
+model = lgb.LGBMClassifier(
+    n_estimators=500,
+    learning_rate=0.05,
+    max_depth=8,
+    num_leaves=64,
+    class_weight="balanced",
+    reg_lambda=1.0,
+    feature_fraction=0.8,
+    bagging_fraction=0.8,
+)
+model.fit(X_train, y_train, eval_set=[(X_val, y_val)], early_stopping_rounds=50)
+
+# Post-hoc calibration
+calibrator = IsotonicRegression(out_of_bounds="clip")
+calibrator.fit(model.predict_proba(X_cal)[:, 1], y_cal)
+```
+
+Hyperparameter search via Optuna on val set; 50 trials Bayesian.
+
+<AnalogyCallout>
+  Tabular fraud is the home turf of gradient boosting. Reaching for deep learning here is like using
+  a sports car to deliver newspapers — flashy, but the boring delivery truck (LightGBM) does the job
+  faster, cheaper, and more reliably.
+</AnalogyCallout>
+
+## Evaluation
+
+**Time-based splits**:
+
+- Train: month 1-6.
+- Val: month 7 (hyperparameter tuning).
+- Test: month 8 (final evaluation).
+
+Never random-split temporal data.
+
+**Per-release evaluation**:
+
+- PR-AUC on test month.
+- Precision @ Recall {0.80, 0.85, 0.90}.
+- Per-segment metrics (top 10 segments by volume).
+- Calibration plot.
+- Inference latency benchmark (p50, p99).
+
+**Regression suite** (CI, blocks PR merge):
+
+- 200 curated cases (known fraud patterns, recently observed FPs, edge cases).
+- Expected: model probability above / below threshold.
+
+**Robustness suite**:
+
+- Adversarial: tiny perturbations in feature values.
+- OOD: transactions from new markets, new card types.
+- Concept drift: train on month 1-3; evaluate on month 6.
+
+**Production sampling**:
+
+- 5% of decisions sampled for offline review.
+- Eventual chargebacks used to compute true precision / recall on production traffic.
+- Compare to held-out test metrics; gaps indicate train-serving skew.
+
+## Serving and operations
+
+**Serving stack**:
+
+- Model exported to ONNX.
+- Triton Inference Server on Kubernetes (multi-model: fraud + other tabular models).
+- Velocity features from Redis (~5ms).
+- Customer features from cache (~5ms; warmed from Postgres).
+- Total p99 latency target: 50ms.
+
+**Throughput**: 1M/day average = 12 req/sec average; peak 5× = 60 req/sec. Single T4 GPU + 2-4 replicas covers it comfortably.
+
+**Monitoring**:
+
+- Latency p50, p95, p99.
+- Throughput.
+- Feature distribution drift (PSI) per feature, hourly.
+- Predicted-positive rate (fraction of transactions flagged).
+- Per-segment predicted-positive rate.
+- Cost / transaction.
+
+**Alerts**:
+
+- Page on: p99 > 100ms; error rate > 1%.
+- Slack on: feature drift PSI > 0.2; predicted-positive rate up/down 20%.
+- Weekly digest: per-segment performance.
+
+**Retraining cadence**:
+
+- Scheduled: monthly retraining on most recent labelled month + historical window.
+- Drift-triggered: if PSI > 0.3 on key features + accuracy regression on production-confirmed samples → expedited retraining.
+
+**Rollback**:
+
+- Multiple model versions in registry.
+- Tag-based deployment.
+- Canary 5% → 50% → 100% over 1 week.
+
+## Risk and iteration
+
+**Risks**:
+
+| Risk                         | Mitigation                                               |
+| ---------------------------- | -------------------------------------------------------- |
+| Adversarial fraudsters adapt | Continuous monitoring; rapid retraining capability       |
+| Feature pipeline bug         | Schema validation, parity tests, distribution monitoring |
+| Calibration drift            | Periodic recalibration on production samples             |
+| Velocity counter staleness   | Monitoring Redis health; fallback to last-known-good     |
+| Vendor risk API outage       | Circuit breaker + default value with separate flag       |
+| Bias on demographic segments | Per-segment monitoring; bias audits quarterly            |
+| Compliance audit             | Decision logs retained 7 years; SHAP for explanations    |
+
+**Iteration plan**:
+
+- **v0** (week 0-4): ship LightGBM with basic features; outperform rule-based baseline by 5% PR-AUC.
+- **v1** (week 4-12): add velocity features, vendor risk signals; target 15% PR-AUC improvement over baseline.
+- **v2** (week 12-24): per-segment models or stratified training for weak segments; cost optimisation.
+- **Ongoing**: monthly retraining, quarterly per-segment audit, ad-hoc model updates on novel fraud patterns.
+
+## Cost estimate
+
+- **Training**: monthly retraining on 100GB of data. ~$50/month in compute.
+- **Serving**: 2× T4 GPUs (~$0.30/hr × 24 × 30 = $432/month) + Triton + redundancy = ~$1k/month.
+- **Feature stores**: Redis for velocity counters (~$200/month for the volume).
+- **Monitoring**: Datadog + Evidently (~$200/month).
+- **Total**: ~$1.5k-2k/month infrastructure.
+
+**Compare to**: cost of one chargeback ($300). System pays for itself if it prevents ~7 chargebacks/month. Realistic gain: catches 80% of $300 × 5000 fraud-per-day = $1.2M/day = $36M/month of fraud value caught. ROI is overwhelming.
+
+<InlineQuiz
+  question="The fraud team proposes adding a deep neural network (transformer-based) over the same tabular features, hoping to capture richer interactions. Should you?"
+  options={[
+    { text: "Yes — transformers are always better." },
+    {
+      text: "Probably not. LightGBM on these features is near the ceiling for tabular fraud; deep tabular models rarely beat it by meaningful margins. Serving cost would 10× without quality gain. Better investments: more / better features, or per-segment models.",
+      correct: true,
+    },
+    { text: "Yes, if you also add CLIP for product images." },
+    { text: "Doesn't matter; pick whatever the team is enthusiastic about." },
+  ]}
+  explanation="Tabular ML benchmarks (Grinsztajn et al. 2022, recent updates) consistently show: gradient boosting matches or beats tabular deep learning across most tabular problems. For fraud specifically — high-cardinality categoricals, interactions, calibrated probabilities needed — XGBoost / LightGBM is near optimal. Transformer over tabular features adds serving cost and architecture risk without quality gain. The right next investments: better feature engineering, per-segment models for the worst segments, or velocity / vendor signals not yet incorporated."
+/>
+
+## What this walkthrough shows
+
+The 7-step framework applied to a concrete problem:
+
+1. **Problem framing** is granular: 1M/day, 0.5% fraud, cost asymmetry, latency budget.
+2. **Metric** is precision @ recall (not accuracy or F1).
+3. **Data** is structured + lookup-heavy; latency budget shapes feature design.
+4. **Model** is gradient boosting — boring, right, and the right call for this data type.
+5. **Evaluation** uses time-based splits, per-segment, regression suite.
+6. **Serving** matches the latency budget; monitoring covers drift and skew.
+7. **Risk** anticipates adversarial drift, calibration, vendor outages.
+
+Each step's choices flow from the previous. Skipping or reordering breaks the design.
+
+<InlineQuiz
+  question="A regulator asks: 'For the customer whose card was just auto-blocked, explain why.' What's the best response?"
+  options={[
+    { text: "We can't explain neural network decisions." },
+    {
+      text: "Generate a SHAP explanation: list the top 3-5 features (with values) that drove the prediction above 0.5 — e.g., 'unusual velocity (15 transactions in 1 hour); transaction in a new country; merchant category historically risky.' SHAP is built into LightGBM via TreeExplainer; this is exactly why we picked an interpretable tree model.",
+      correct: true,
+    },
+    { text: "Send the regulator the trained model file." },
+    { text: "Explain that ML is too complex for explanation." },
+  ]}
+  explanation="One of the reasons to pick LightGBM over deep learning for regulated fraud detection is exactly this: SHAP TreeExplainer produces per-prediction explanations cheaply. The regulator gets a human-readable explanation of which features pushed the decision past the threshold. This audibility is a real production concern in financial services and a determinant of model choice. Black-box deep models would require post-hoc explainability tooling that is less reliable."
+/>
+
+## Closing the fraud walkthrough
+
+Tabular fraud detection illustrates the framework on a "boring" but real problem. The discipline is what matters: precise framing, right metric, careful temporal evaluation, the right model class (gradient boosting), latency-aware serving, drift-aware monitoring.
+
+The next walkthrough shows the same framework applied to a hybrid CV + NLP system — much more complex inputs, but the same 7-step structure.

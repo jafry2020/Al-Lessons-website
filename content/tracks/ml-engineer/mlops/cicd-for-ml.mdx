@@ -1,0 +1,434 @@
+---
+title: "CI/CD for ML"
+description: "Automating the ML lifecycle — testing, validation, training, deployment. The differences from software CI/CD (data validation, model evaluation gates, A/B promotion) and the tools that handle them."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: cicd-for-ml
+lessonCode: "A8.6"
+estMinutes: 11
+prereqs:
+  - "A8.4 Model packaging and serving"
+  - "A8.5 Monitoring and drift detection"
+objectives:
+  - "Write CI tests for ML: data validation, code correctness, model evaluation gates."
+  - "Build CD pipelines that deploy models via canary, shadow, or A/B testing."
+  - "Trigger retraining from drift / schedule / data-arrival signals."
+pitfalls:
+  - "Treating ML CI as 'just unit tests.' Data validation and model evaluation gates are where ML CI earns its value."
+  - "Deploying without canary or shadow testing. Production users find quality regressions you missed."
+  - "Auto-retraining without an eval gate. New models can be worse; require explicit promotion criteria."
+  - "Over-automation. Frequent retraining on noisy data degrades quality. Match cadence to actual data evolution."
+importantQuestions:
+  - question: "What goes in an ML CI pipeline?"
+    shortAnswer: |
+      Code tests (unit, integration), data validation (schema, distribution, null rates), feature pipeline tests (parity train vs serving), model evaluation (regression suite, golden set), security and lint. Ideally runs in < 30 min.
+    detailed: |
+      A complete ML CI pipeline:
+
+      **Code level**:
+      - Unit tests: feature engineering functions, model code, preprocessing.
+      - Integration tests: training loop on small data, inference path end-to-end.
+      - Linting + formatting (ruff, black).
+      - Type checking (mypy, pyright).
+
+      **Data level**:
+      - Schema validation: training data has expected columns, types.
+      - Distribution checks: feature ranges within sanity bounds.
+      - Null / missing rate checks.
+      - Cardinality checks for categoricals.
+
+      **Feature pipeline parity**:
+      - Run the same feature engineering on a known sample in training context AND serving context.
+      - Assert identical outputs.
+      - This catches training-serving skew before deployment (covered in A8.7).
+
+      **Model level**:
+      - Regression test suite: golden set of (input, expected output / behaviour) pairs.
+      - Performance benchmarks: accuracy on held-out > threshold.
+      - Inference latency check: doesn't regress.
+      - Model size sanity check.
+
+      **Security**:
+      - Dependency vulnerability scan (Dependabot, Trivy).
+      - Secret scanning (no API keys in code).
+      - SBOM generation.
+
+      Tools: GitHub Actions, GitLab CI, CircleCI, Buildkite. ML-specific: DVC pipelines, Argo Workflows, Kubeflow Pipelines, Prefect, Dagster.
+
+      For a typical CI run: under 30 minutes. Longer means devs skip it.
+    pitfalls:
+      - "If CI takes 2 hours, developers will find ways around it. Optimise critical paths; defer expensive tests to nightly."
+  - question: "How do you deploy a new model safely?"
+    shortAnswer: |
+      Three patterns: shadow (send copy of traffic to new model, compare predictions; no user impact), canary (route small % of traffic; gradually increase), A/B (split users; measure business metric). Use them progressively for high-stakes models.
+    detailed: |
+      **Shadow deployment**:
+      - New model receives copy of production traffic.
+      - Predictions logged but not returned to users.
+      - Compare new vs current model offline.
+      - Zero user risk; detects integration bugs.
+
+      **Canary deployment**:
+      - Route small % (e.g., 1-5%) of traffic to new model.
+      - Monitor metrics on the canary slice.
+      - Gradually increase to 100% if metrics hold.
+      - Rollback if metrics degrade.
+
+      **A/B testing**:
+      - Random 50/50 split of users.
+      - Measure business metric (revenue, conversion, retention) over time.
+      - Decide based on statistical significance.
+
+      Common pattern:
+      1. Shadow for 1-7 days to catch integration bugs and verify offline metrics align.
+      2. Canary to 5% for 1-2 days; check operational and ML-specific metrics.
+      3. A/B test 50/50 for 1-4 weeks for business metric measurement.
+      4. Full rollout if all checks pass.
+
+      Tools: feature flags (LaunchDarkly, Split.io), service-level traffic routing (Istio, Linkerd), application-level A/B (in-house common).
+
+      For non-critical models: skip A/B; canary is sufficient.
+
+      For high-stakes (lending, hiring, healthcare): all three stages, weeks-long test, formal review.
+    pitfalls:
+      - "Don't compare canary vs production purely on offline metrics. Production behaviour matters; users interact differently with different model outputs."
+  - question: "When should retraining be automated?"
+    shortAnswer: |
+      For models with clear ground truth signals and drift-prone data (recommendation, click prediction, fraud). Avoid for models with delayed / ambiguous labels or high-stakes decisions where retraining cadence should be deliberate.
+    detailed: |
+      **Good candidates for auto-retraining**:
+      - Clear ground truth available quickly (clicks, conversions, fraud confirmed in days).
+      - Data evolves frequently (recommendation systems, search ranking, click prediction).
+      - Drift-detection signals correlate with performance.
+      - Low downside of slight quality regressions.
+
+      **Bad candidates**:
+      - Delayed ground truth (months to years: long-term credit risk, customer LTV).
+      - High-stakes (lending, hiring, healthcare).
+      - Labels require expensive human review.
+      - Each retraining requires regulatory review.
+
+      Automated retraining triggers:
+      - **Scheduled**: weekly, monthly. Simple and reliable.
+      - **Drift-triggered**: when drift score exceeds threshold AND accuracy regression on sample.
+      - **Data-arrival**: when N new labelled examples are available.
+      - **Performance-triggered**: when accuracy drops below SLA.
+
+      A retraining pipeline:
+      1. Pull recent data + labels (immutable snapshot).
+      2. Train on the new data + a baseline of historical.
+      3. Evaluate against the regression suite.
+      4. Compare with current production model.
+      5. Promote to staging if better.
+      6. Deploy via canary if staging passes review.
+
+      Key: **always gate promotion on the regression suite**. Auto-trained models should never auto-deploy without passing the gate.
+    pitfalls:
+      - "Frequent retraining on small data amplifies noise. Match cadence to how fast the data actually changes."
+  - question: "What's a model evaluation gate?"
+    shortAnswer: |
+      A pre-deployment check that a candidate model passes specific criteria — accuracy thresholds, regression suite pass, no degradation on important slices — before being promoted. Block deploy if any criterion fails.
+    detailed: |
+      A practical gate looks like:
+
+      ```yaml
+      # evaluation_gate.yaml
+      requirements:
+        - metric: macro_f1
+          on: held_out_test
+          minimum: 0.85
+        - metric: per_class_f1
+          on: held_out_test
+          for_class: minority_class
+          minimum: 0.70
+        - metric: latency_p99_ms
+          on: benchmark_load
+          maximum: 100
+        - metric: regression_suite_pass_rate
+          minimum: 1.0  # all must pass
+        - metric: accuracy_on_slice
+          on: held_out_test
+          slice: "important_user_segment"
+          minimum_relative: 0.95  # within 5% of overall
+      ```
+
+      The CI pipeline:
+      1. Train candidate model.
+      2. Evaluate against the gate.
+      3. If all pass: promote to staging registry.
+      4. If any fail: block; report which.
+
+      Gate criteria evolve:
+      - Add a new requirement when a regression slips through.
+      - Tighten thresholds as the system matures.
+      - Loosen when business priorities shift (e.g., accept slightly lower accuracy for faster inference).
+
+      Tools: most teams build custom; some use Great Expectations for data + custom Python for model. Arize / Fiddler offer eval gates as a service.
+    pitfalls:
+      - "If the eval gate keeps failing, don't loosen it reflexively. Understand the regression first."
+  - question: "How do you roll back a bad deployment?"
+    shortAnswer: |
+      Pre-prepare: keep N previous model versions in registry; serving framework reads model version by tag; rollback = swap tag back. Automated rollback on monitoring alerts is possible but requires high-confidence detection.
+    detailed: |
+      Rollback essentials:
+
+      **Pre-conditions**:
+      - Previous model version still in registry.
+      - Serving reads from registry by version / tag.
+      - Tag swap is atomic.
+
+      **Manual rollback** (most common):
+      1. Detect issue (alerts, user reports).
+      2. Page on-call engineer.
+      3. Engineer changes deployment tag to previous version.
+      4. Serving picks up new version on next pod restart (or hot-reload if supported).
+      5. Monitor recovery.
+
+      **Auto-rollback** (advanced):
+      1. Monitoring detects regression with high confidence (e.g., error rate up 50% for 5 minutes).
+      2. Automation reverts to previous version.
+      3. Alerts on-call engineer to investigate.
+
+      Auto-rollback requires high-quality detection — false positives that flap deployments are worse than slow manual rollback.
+
+      Time-to-rollback target: minutes for high-stakes, hours for routine. The infrastructure should support sub-minute rollback even if normal procedure is slower.
+
+      For LLM deployments: rolling back a prompt is the same idea — version prompts, revert tag.
+    pitfalls:
+      - "Test rollback procedures during normal hours, not during the first emergency. Practice prevents panic."
+---
+
+<TldrCallout>
+  CI/CD for ML extends software practices with data validation, feature pipeline parity checks, and
+  model evaluation gates. CD uses progressive deployment patterns — shadow (no user impact), canary
+  (small %), A/B (split user populations). Automate retraining where ground truth is fast and stakes
+  are low; require eval gates always. Pre-prepare for rollback by versioning models and using
+  registry tags. The discipline catches regressions before users do.
+</TldrCallout>
+
+## CI for ML
+
+A modern ML CI pipeline includes layers software doesn't:
+
+| Layer            | Checks                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| Code             | Unit / integration tests, lint, type check                     |
+| Data             | Schema validation, distribution checks, null rates             |
+| Feature pipeline | Parity tests: same input → same output in training and serving |
+| Model            | Regression suite, accuracy thresholds, latency benchmarks      |
+| Security         | Dependency scan, secret scan                                   |
+
+Run on every PR. Target: under 30 minutes. Slower than that and developers find workarounds.
+
+For long-running checks (full retraining, large evals): nightly jobs, not per-PR.
+
+## Data validation in CI
+
+Use a schema-validation library:
+
+```python
+# Using Great Expectations or Pandera
+import pandera as pa
+
+schema = pa.DataFrameSchema({
+    "user_id": pa.Column(int, nullable=False, unique=True),
+    "age": pa.Column(int, pa.Check.in_range(18, 100)),
+    "income": pa.Column(float, pa.Check.ge(0)),
+    "region": pa.Column(str, pa.Check.isin(["NA", "EU", "APAC", "LATAM"])),
+    "label": pa.Column(int, pa.Check.in_range(0, 1)),
+})
+
+schema.validate(training_df)  # raises if violation
+```
+
+Tools:
+
+- **Great Expectations**: feature-rich; verbose; enterprise.
+- **Pandera**: lightweight; Pythonic; pandas-native.
+- **TFDV (TensorFlow Data Validation)**: TF-ecosystem.
+- **Soda Core**: open-source data quality.
+
+Catch upstream data changes that would break models silently.
+
+## Feature pipeline parity tests
+
+The bug that ruins production ML: feature computation differs between training and serving.
+
+A parity test:
+
+```python
+def test_feature_parity():
+    sample_input = {"user_id": "u1", "events": [...]}
+
+    # Compute features via the training pipeline
+    features_train = training_feature_pipeline(sample_input)
+
+    # Compute via the serving pipeline
+    features_serve = serving_feature_pipeline(sample_input)
+
+    # Assert identical (with tolerance for floats)
+    assert features_train == features_serve  # or numpy close
+```
+
+Run on every PR. If the pipelines diverge, CI fails.
+
+Best done by using a single shared feature library imported by both training and serving — then parity is automatic.
+
+Covered in depth in A8.7.
+
+## Model evaluation gates
+
+Before promoting a model to production:
+
+```yaml
+# evaluation_gate.yaml
+requirements:
+  - metric: macro_f1
+    on: held_out_test
+    minimum: 0.85
+  - metric: per_class_f1
+    on: held_out_test
+    for_class: minority_class
+    minimum: 0.70
+  - metric: regression_suite_pass_rate
+    minimum: 1.0
+  - metric: latency_p99_ms
+    maximum: 100
+```
+
+The gate is a release blocker. If any criterion fails, block the deploy.
+
+Build it once; tune as you learn the system's normal patterns. Tighten thresholds as the system matures; add new criteria as new failure modes surface.
+
+<AnalogyCallout>
+  An eval gate is like the wind tunnel for an aircraft prototype. Before the new model takes off in
+  production, it passes through a series of tests at known conditions. Failing the wind tunnel means
+  staying in the workshop. Passing means cleared for deploy — not guaranteed success, but the
+  obvious failure modes are ruled out.
+</AnalogyCallout>
+
+## Progressive deployment
+
+For high-stakes models, deploy in stages:
+
+```
+┌─ Shadow ──────┬─ Canary ──┬─ A/B test ──┬─ Full rollout ─┐
+   1-7 days       1-2 days     1-4 weeks      ongoing
+   No user        5% traffic   50/50 split    100% traffic
+   impact         monitoring   business KPI
+```
+
+| Stage            | What it catches                                             |
+| ---------------- | ----------------------------------------------------------- |
+| **Shadow**       | Integration bugs; offline metric divergence                 |
+| **Canary**       | Operational issues at small scale; immediate quality issues |
+| **A/B**          | Business metric impact; longer-term effects                 |
+| **Full rollout** | Ongoing monitoring                                          |
+
+For routine, low-stakes models: skip shadow; go to canary → full.
+
+For high-stakes (lending, hiring, healthcare): all four stages, formal review at each gate.
+
+## Retraining pipelines
+
+A retraining trigger options:
+
+| Trigger                          | When                                       |
+| -------------------------------- | ------------------------------------------ |
+| **Scheduled** (weekly / monthly) | Simple, reliable, default for most models  |
+| **Drift-detected**               | When drift + accuracy regression confirmed |
+| **Data-arrival**                 | When N new labelled samples accumulate     |
+| **Performance**                  | When accuracy drops below SLA              |
+
+A typical retraining pipeline:
+
+```
+1. Pull immutable snapshot of recent + historical data.
+2. Train candidate model (auto or manual review).
+3. Evaluate against regression suite + benchmarks.
+4. Compare to current production model on metrics.
+5. If superior + passes gate: promote to staging.
+6. Shadow / canary / A/B test (manual or auto progression).
+7. Full deploy.
+```
+
+**Always require an eval gate before deploy.** Auto-trained models should never auto-deploy without passing the gate.
+
+Cadence guidance:
+
+- **Frequently-drifting** (recommendation, ads): daily / weekly retraining.
+- **Slow-drifting** (LTV, churn): monthly / quarterly.
+- **Stable** (image classification on a fixed task): re-evaluate quarterly; retrain on drift only.
+
+## Rollback essentials
+
+Before you need it:
+
+- **Multiple model versions in registry** at all times.
+- **Serving reads by version tag**, not file path.
+- **Tag swap is atomic** in your serving system.
+
+When you need it:
+
+- Detect via monitoring / user reports.
+- Page on-call engineer.
+- Engineer reverts the tag.
+- Serving picks up previous version (rolling restart or hot reload).
+- Investigate the issue post-recovery.
+
+**Practice rollback during normal hours.** The first time you do it should not be during an emergency.
+
+Auto-rollback (on monitoring detection) is possible but requires high-confidence triggers. False-positive auto-rollbacks that flap models are worse than slow manual rollback.
+
+<InlineQuiz
+  question="You ship a new model via canary at 5%. After 1 hour, p99 latency on the canary slice is 350ms vs 90ms on the baseline. Accuracy metrics are unchanged. What's the right immediate action?"
+  options={[
+    { text: "Increase canary to 50% to validate the latency at scale." },
+    {
+      text: "Rollback the canary — the latency regression is severe and not worth absorbing while investigating. Then debug offline: is it the new model architecture, a serving config issue, or load characteristics?",
+      correct: true,
+    },
+    { text: "Page the team and wait for daytime to investigate." },
+    { text: "Increase canary to 100% to gather more data." },
+  ]}
+  explanation="A 3.9× latency increase is a clear production-quality regression. Rolling back is fast (tag swap) and removes user impact. Increasing canary increases the blast radius; waiting until daytime stretches user pain. The 'fail fast, debug later' principle: revert known-bad changes immediately, then root-cause without time pressure. This is exactly why you build rollback infrastructure before you need it."
+/>
+
+## Automation maturity
+
+Stages of automation:
+
+| Level | Description                                                                            |
+| ----- | -------------------------------------------------------------------------------------- |
+| **0** | Manual training, manual evaluation, manual deployment. Common starting point.          |
+| **1** | CI on PRs (data + code + model gate); manual deploy with canary.                       |
+| **2** | Scheduled retraining with auto-promotion if eval gate passes; canary auto-progression. |
+| **3** | Drift-triggered retraining; auto-rollback on regression; A/B testing automated.        |
+
+Most production ML in 2026 lives at Level 1-2. Level 3 is enterprise mature.
+
+**Match your level to your stakes and team size.** Auto-everything is dangerous if you can't catch failures fast. Manual-everything is slow if your data changes weekly.
+
+<InlineQuiz
+  question="A small team (3 engineers) has a tabular ML model that's been performing well for 6 months. They want to add CI/CD. What's the highest-impact first step?"
+  options={[
+    { text: "Auto-retrain on every batch of new data." },
+    {
+      text: "Build a regression test suite (50-100 cases) that runs on every PR, plus a simple eval gate (held-out F1 above threshold). Block PR merge on failures.",
+      correct: true,
+    },
+    { text: "Move to Kubernetes with KServe and Argo." },
+    { text: "Buy SageMaker Pipelines." },
+  ]}
+  explanation="The regression test suite + eval gate is the highest-leverage CI investment. It prevents quality regressions on every code change for the cost of writing a Python file. Auto-retraining is premature for a 3-engineer team with a stable model. Kubernetes / SageMaker are infrastructure-heavy; not what a 3-engineer team needs first. Start with the test discipline; add infrastructure when you have the team and traffic to use it."
+/>
+
+## Closing for CI/CD
+
+CI/CD for ML extends standard software practices with data validation, feature pipeline parity tests, and model evaluation gates. CD progresses through shadow → canary → A/B → full rollout for high-stakes models. Automate retraining where stakes are low and feedback is fast; gate everything on eval suites.
+
+For most teams in 2026: GitHub Actions for CI + a custom eval pipeline + canary deployment via feature flags or service-mesh traffic routing covers the essentials.
+
+The next lesson dives into training-serving skew — the single most common silent failure mode in production ML.

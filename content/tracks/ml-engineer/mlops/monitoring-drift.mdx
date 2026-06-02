@@ -1,0 +1,424 @@
+---
+title: "Monitoring and drift detection"
+description: "ML systems fail silently. Monitoring beyond uptime — input distribution, prediction distribution, accuracy on sampled production data — is what tells you something is wrong before users do."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: monitoring-drift
+lessonCode: "A8.5"
+estMinutes: 13
+prereqs:
+  - "A8.4 Model packaging and serving"
+  - "A3.7 Anomaly detection in production"
+objectives:
+  - "Instrument an ML service with the right metrics: operational + ML-specific."
+  - "Detect distribution drift (input and output) using statistical tests and embedding distances."
+  - "Pick a monitoring tool (Arize, WhyLabs, Evidently, custom) for your team's stage."
+pitfalls:
+  - "Monitoring only latency and error rate. ML degrades silently; uptime metrics miss it entirely."
+  - "Setting drift thresholds too aggressively. Every test set drifts a little; constant alerts get ignored."
+  - "Treating drift as model failure. Sometimes drift is real-world change you should adapt to."
+  - "Ignoring the cost of monitoring. Logging every input feature at scale isn't free."
+importantQuestions:
+  - question: "What should an ML service monitor?"
+    shortAnswer: |
+      Operational metrics (latency, throughput, error rate, cost) plus ML-specific (input distribution, prediction distribution, accuracy on sampled production data, drift scores). Per-segment whenever possible.
+    detailed: |
+      The two layers:
+
+      **Operational** (any service needs):
+      - Latency: p50, p95, p99.
+      - Throughput: requests/sec.
+      - Error rate: 4xx and 5xx separately.
+      - Cost per request.
+      - Resource utilisation: CPU, GPU, memory.
+
+      **ML-specific** (what makes production ML distinct):
+      - Input feature distributions: histograms of numerical features, top-k counts of categoricals.
+      - Prediction distribution: class probabilities, confidence histograms.
+      - Drift score: statistical distance from training distribution.
+      - Accuracy on sampled production data (when labels are available).
+      - Per-class precision/recall over time.
+      - Per-segment metrics: by user type, region, time-of-day.
+
+      Tools:
+      - Operational: Datadog, Prometheus + Grafana, CloudWatch.
+      - ML-specific: Arize, WhyLabs, Fiddler, Evidently AI (open).
+
+      Most production ML in 2026 needs both layers. Operational catches obvious failures; ML-specific catches silent quality degradation.
+    pitfalls:
+      - "Log monitoring data in a place separate from production traffic. Don't slow inference for the sake of observability."
+  - question: "What is data drift?"
+    shortAnswer: |
+      The distribution of inputs in production diverges from the distribution at training. The model still works (no exceptions) but its predictions are based on a world that's changed.
+    detailed: |
+      Types of drift:
+
+      **Data drift (covariate shift)**: P(x) changes. Inputs look different than training. Example: a fraud model trained on pre-pandemic transactions; pandemic changed spending patterns.
+
+      **Concept drift**: P(y|x) changes. Same inputs map to different correct outputs. Example: customer preferences shift; same demographic features now predict different products.
+
+      **Label drift (prior shift)**: P(y) changes. Class proportions shift. Example: fraud rates rise from 1% to 3%.
+
+      **Feature drift**: a specific feature's distribution changes (a column in a tabular model).
+
+      Detecting drift:
+      - **KS test, Wasserstein distance**: compare numerical distributions.
+      - **PSI (Population Stability Index)**: standard in finance / risk modelling.
+      - **Chi-squared**: categorical features.
+      - **Embedding distance**: for high-dim or text / image; compare embedding statistics over time.
+      - **Adversarial classifier**: train a classifier to distinguish training from production batches; if it succeeds, there's drift.
+
+      Tools: Evidently AI, Arize, WhyLabs all implement these natively.
+
+      Drift is not always bad. Sometimes it reflects real change you should adapt to (retrain). Sometimes it's a data pipeline bug (alert and fix).
+    pitfalls:
+      - "Don't treat any drift as failure. Set thresholds with expected variance in mind."
+  - question: "How do you measure production accuracy without ground truth?"
+    shortAnswer: |
+      Sample production traffic for human review (slow but golden), use delayed-feedback signals (clicks, returns, refunds), use proxy metrics (confidence calibration, prediction distribution stability), and run shadow traffic against a known-good model.
+    detailed: |
+      Strategies when labels are delayed or unavailable:
+
+      **Human review** of sampled predictions:
+      - 50-500 random samples per week, reviewed by an internal team or labelling service.
+      - Gold standard for accuracy but slow and expensive.
+
+      **Delayed feedback signals**:
+      - User actions (clicks, conversions, returns) as implicit labels.
+      - Days-to-weeks delay; still earlier than ground truth.
+
+      **Proxy metrics**:
+      - Confidence calibration on production data (compare predicted prob to outcome where available).
+      - Prediction distribution: are class proportions stable?
+      - Embedding distance to training samples.
+
+      **Shadow traffic**:
+      - Send a copy of production traffic to a known-good (or known-baseline) model.
+      - Compare predictions; large divergences indicate one or the other is drifting.
+
+      **A/B tests** with explicit outcome tracking.
+
+      For most production: combine 2-3 of these. Weekly human review for 100 samples + daily proxy metrics + monthly accuracy report when ground truth catches up.
+    pitfalls:
+      - "Delayed feedback is biased — selection bias of which predictions get user action. Account for it."
+  - question: "What's a reasonable monitoring stack in 2026?"
+    shortAnswer: |
+      Datadog or Prometheus for operational + a dedicated ML monitoring tool (Evidently for open source, Arize / WhyLabs / Fiddler for managed). Per-model dashboards; alerts on regressions; weekly review cadence.
+    detailed: |
+      The 2026 monitoring stack:
+
+      **Operational** (standard infrastructure observability):
+      - Datadog: managed, integrated.
+      - Prometheus + Grafana: self-hosted, free.
+      - CloudWatch / Stackdriver: cloud-native.
+
+      **ML-specific drift / accuracy**:
+      - **Arize**: commercial; rich UI; broad integrations.
+      - **WhyLabs**: commercial; open-source `whylogs` SDK; data quality + drift.
+      - **Fiddler**: commercial; explainability + monitoring.
+      - **Evidently AI**: open source; Python library + dashboards.
+      - **TruEra / Robust Intelligence**: enterprise-focused.
+
+      **LLM-specific**:
+      - **Langfuse**: open-source LLM observability.
+      - **Helicone**: managed LLM observability + caching.
+      - **LangSmith**: commercial; LangChain-integrated.
+
+      **Custom**: many teams build minimal monitoring with periodic batch jobs writing to a metrics store + dashboards.
+
+      Workflow:
+      - Daily / hourly: automated alerts on operational + drift thresholds.
+      - Weekly: review dashboards; investigate suspicious patterns.
+      - Monthly: model performance review against business KPIs.
+
+      For small teams: Datadog basic + Evidently (open) is enough. Larger teams: add Arize / WhyLabs.
+    pitfalls:
+      - "Alert fatigue is real. Set thresholds carefully; tune them as the team learns the system's normal patterns."
+  - question: "How do you alert on the right things?"
+    shortAnswer: |
+      Tiered alerts: page on operational failures (5xx, latency SLO violations); Slack on ML-specific signals (drift score above threshold, accuracy regression on sampled data); weekly digest of trends. Avoid paging on slow-moving drift.
+    detailed: |
+      Alert design:
+
+      **Page-worthy** (wake someone up at 3 AM):
+      - Service down (50% error rate, > 1 minute).
+      - p99 latency > 2× SLO for > 5 min.
+      - Critical metric (e.g., fraud detection's catch rate) drops > 20% in an hour.
+
+      **Slack channel** (resolve next business day):
+      - Drift score above threshold.
+      - Accuracy on sampled data below historical norm.
+      - Cost per request rising > 30%.
+
+      **Weekly digest**:
+      - Trends in drift, accuracy, latency.
+      - Cost summary.
+      - Model performance per slice.
+
+      **Don't alert**:
+      - Tiny drift (within noise).
+      - Single sample being wrong.
+      - Slow-moving trends (monitor in dashboards, not alerts).
+
+      Tools: PagerDuty for paging; Slack / email for non-urgent. Alert rules in Datadog / Prometheus AlertManager / Arize / WhyLabs.
+
+      Tune iteratively. Every false page reduces signal value. Every missed alert reduces trust. Find the equilibrium for your system.
+    pitfalls:
+      - "If an alert fires more than once a week, it's probably noise. Tune the threshold or remove the alert."
+  - question: "When does drift mean 'retrain'?"
+    shortAnswer: |
+      When drift correlates with accuracy regression on sampled production data. Drift alone isn't a retraining signal; some drift is fine. Accuracy decline + drift = retrain. Accuracy stable + drift = update monitoring baseline.
+    detailed: |
+      Drift is a signal, not a verdict. Two outcomes:
+
+      **Real shift in the world**:
+      - New product launches change feature distributions.
+      - Seasonal patterns.
+      - Demographic shifts in user base.
+      - **Response**: retrain on recent data. Update training baseline.
+
+      **Data pipeline bug**:
+      - Feature computation changed.
+      - New default value for missing data.
+      - Sampling logic changed upstream.
+      - **Response**: fix the bug. Don't retrain on bad data.
+
+      **Expected fluctuation**:
+      - Day-of-week / time-of-day variation.
+      - Normal weekly cycles.
+      - **Response**: no action; update threshold to account for variance.
+
+      Decision rule: drift alone → investigate. Drift + accuracy regression → retrain or fix bug. Drift alone, accuracy stable → noise or expected variance.
+
+      Build a retraining playbook: drift detected → check accuracy → if regressed, run retraining pipeline → evaluate against regression suite → deploy if better.
+    pitfalls:
+      - "Retraining is expensive. Don't trigger it on every drift signal; require concurrent accuracy regression."
+---
+
+<TldrCallout>
+  ML systems fail silently — predictions drift without exceptions. Monitoring must cover operational
+  (latency, errors) AND ML-specific (input distribution, prediction distribution, accuracy on
+  sampled production data, drift scores). Tools: Datadog / Prometheus for operational; Evidently /
+  Arize / WhyLabs for ML drift. Set tiered alerts (page for service down, Slack for drift, weekly
+  digest for trends). Drift alone isn't 'retrain'; drift plus accuracy regression is.
+</TldrCallout>
+
+## What to monitor
+
+Two layers:
+
+**Operational** (any service):
+
+- Latency: p50, p95, p99.
+- Throughput: requests/sec.
+- Error rate: 4xx vs 5xx.
+- Cost per request.
+- Resource utilisation (CPU, GPU, memory).
+
+**ML-specific** (what's different):
+
+- Input feature distributions (histograms, top-k counts).
+- Prediction distribution (class probabilities, confidence histograms).
+- Drift scores (statistical distance from training distribution).
+- Accuracy on sampled production data (when labels available).
+- Per-class precision / recall over time.
+- Per-segment metrics (user type, region, time-of-day).
+
+The operational layer catches obvious failures. The ML-specific layer catches the silent quality regressions that uptime monitoring misses.
+
+## Why ML monitoring is different
+
+A traditional web service fails noisily — 500 errors, exception logs, dropped connections. You see it.
+
+An ML service fails silently — same 200 OK responses, same latency, predictions just gradually become worse as the data distribution shifts. Users notice before you do, if you don't have ML-specific monitoring.
+
+This is the operational difference covered in A8.1: silent quality degradation requires dedicated tooling.
+
+## Detecting drift
+
+Several statistical approaches:
+
+| Method                               | Use for                                                     |
+| ------------------------------------ | ----------------------------------------------------------- |
+| **KS test**                          | Numerical features; compare CDFs                            |
+| **Wasserstein distance**             | Numerical features; geometric distance                      |
+| **PSI (Population Stability Index)** | Standard in finance; bins numerical or categorical          |
+| **Chi-squared**                      | Categorical features                                        |
+| **Embedding distance**               | High-dim, text, image                                       |
+| **Adversarial classifier**           | Train classifier to distinguish train vs production batches |
+
+Modern libraries (Evidently, Arize, WhyLabs) compute these for you. You provide a reference (training) distribution and a current (production) distribution; the library produces drift scores per feature plus overall.
+
+For embeddings (text or image): cosine similarity between centroids of training embeddings and recent production embeddings. Distance growing = drift.
+
+## A sample monitoring schema
+
+For a tabular classifier:
+
+```python
+# Per-request, log:
+{
+    "timestamp": "2026-06-15T10:30:00Z",
+    "request_id": "abc123",
+    "input_features": {  # sampled or hashed for high-cardinality
+        "age": 34,
+        "income": 75000,
+        "region": "EU",
+        ...
+    },
+    "prediction": {
+        "class": "approved",
+        "probability": 0.87,
+    },
+    "model_version": "v2.4.1",
+    "latency_ms": 23,
+}
+
+# Periodic batch jobs:
+# - Aggregate to histograms (hourly).
+# - Compute drift score (daily) vs training reference.
+# - Sample 100 predictions/day for human review.
+# - Roll up to per-segment accuracy when ground truth catches up.
+```
+
+Storage: write to a log aggregator (BigQuery, Snowflake, S3 + Athena). Aggregate in batch. Don't slow the inference path.
+
+## Tools for ML monitoring
+
+| Tool                            | Type                | Best for                                                |
+| ------------------------------- | ------------------- | ------------------------------------------------------- |
+| **Evidently AI**                | Open source         | Self-host; Python library + dashboards                  |
+| **Arize**                       | Commercial          | Rich UI; broad integrations; standard for serious teams |
+| **WhyLabs**                     | Commercial          | Open-source `whylogs` SDK; data quality + drift         |
+| **Fiddler**                     | Commercial          | Explainability + monitoring                             |
+| **TruEra, Robust Intelligence** | Enterprise          | Compliance-heavy, finance                               |
+| **Langfuse**                    | Open / LLM-specific | LLM observability; prompts + outputs                    |
+| **Helicone**                    | Commercial / LLM    | LLM observability + caching                             |
+
+For small teams: Evidently (open) covers most needs. As you grow: Arize / WhyLabs for richer UX and integrations.
+
+For LLM features specifically: Langfuse / Helicone over general ML tools — they speak prompts and outputs natively.
+
+<AnalogyCallout>
+  Monitoring an ML model is like monitoring a delivery driver's performance. Uptime monitoring = the
+  driver is showing up. Latency monitoring = the driver is on time. Quality monitoring = the driver
+  is delivering the right packages to the right addresses. Skip the third and you only find out
+  about the bad deliveries from angry customer calls.
+</AnalogyCallout>
+
+## Production accuracy without ground truth
+
+Most production ML doesn't get instant ground truth. Strategies:
+
+**Human review sample**:
+
+- 50-500 predictions/week reviewed by internal team or labelling service.
+- Slow and expensive but gold standard.
+
+**Delayed feedback signals**:
+
+- User actions (click, purchase, return, refund) as implicit labels.
+- Days-to-weeks delay; still earlier than full ground truth.
+- Biased by selection (which predictions actually trigger user action).
+
+**Proxy metrics**:
+
+- Confidence calibration: predicted prob vs observed rate where comparable.
+- Prediction distribution stability: are class proportions drifting?
+- Embedding distance: production samples diverging from training distribution.
+
+**Shadow traffic**:
+
+- Send a copy of requests to a known-good (or known-baseline) model.
+- Compare predictions; large divergences suggest one is drifting.
+
+**A/B tests** with explicit outcome tracking.
+
+For most production: combine 2-3 of these. Weekly human review + daily proxy + monthly accuracy report when ground truth catches up.
+
+## Alert tiering
+
+Avoid alert fatigue:
+
+| Tier                          | Examples                                                                                   | Channel           |
+| ----------------------------- | ------------------------------------------------------------------------------------------ | ----------------- |
+| **Page** (3 AM wake-up)       | 50% error rate > 1 min; p99 latency 2× SLO > 5 min; critical accuracy drop > 20% in 1 hour | PagerDuty         |
+| **Slack** (next business day) | Drift score above threshold; accuracy regression on sample; cost rising > 30%              | Slack channel     |
+| **Weekly digest**             | Trend reports across drift, accuracy, cost, latency                                        | Email / dashboard |
+| **Don't alert**               | Single mispredictions; slow-moving drift within noise                                      | Just log          |
+
+**If an alert fires more than weekly, it's probably noise.** Tune the threshold or remove the alert. Trust in monitoring depends on signal-to-noise.
+
+<InlineQuiz
+  question="A fraud detection model has been in production for 6 months. Monitoring shows: input feature distribution PSI score gradually rising from 0.05 to 0.18 over the period. Latency, error rate, and predicted-positive rate are stable. What's the right interpretation?"
+  options={[
+    { text: "The model is broken; retrain immediately." },
+    {
+      text: "Some drift is happening but the prediction behaviour is stable. Investigate whether real-world fraud patterns are shifting, check sampled accuracy if available, and consider whether retraining is warranted — not as an emergency.",
+      correct: true,
+    },
+    { text: "PSI of 0.18 is harmless; ignore it." },
+    { text: "Roll back to the previous model version." },
+  ]}
+  explanation="PSI 0.18 is moderate drift (typically: <0.1 stable, 0.1-0.25 moderate, >0.25 significant). Stable error rate and predicted-positive rate suggest the model is still functioning. The right response: investigate. Check accuracy on sampled labelled data; review which features are drifting; check if it's real-world shift vs pipeline bug. Retrain if accuracy regressed; update monitoring baseline if not. Don't act in panic; drift is data, not yet a verdict."
+/>
+
+## When does drift mean retrain?
+
+Decision rule:
+
+| Situation                      | Action                                                       |
+| ------------------------------ | ------------------------------------------------------------ |
+| Drift alone, accuracy stable   | Investigate; update monitoring baseline; no retrain          |
+| Drift + accuracy regression    | Retrain on recent data                                       |
+| Drift due to data pipeline bug | Fix the bug; don't retrain on bad data                       |
+| No drift, accuracy stable      | All good                                                     |
+| No drift, accuracy regression  | Suspicious — likely a deployment / serving bug, not training |
+
+Drift detection should trigger investigation, not automatic retraining. Automatic retraining on every drift signal:
+
+- Wastes compute.
+- Risks training on bad / biased recent data.
+- Can amplify a problem if the drift is a bug.
+
+A reasonable retraining cadence: scheduled monthly + on-demand when drift correlates with accuracy regression.
+
+## The cost of monitoring
+
+Monitoring isn't free:
+
+- **Storage**: logs of input features, predictions, and metadata can become TB / month.
+- **Compute**: drift calculations are batch jobs.
+- **Engineering**: maintenance, alert tuning, dashboard updates.
+
+Cost-effective practices:
+
+- **Sample, don't log everything**: 1-10% of requests for detailed feature logging.
+- **Aggregate at ingestion**: histograms / counts instead of raw values.
+- **Hash high-cardinality features**: log hash distributions, not values.
+- **Tiered storage**: hot (last 30 days) on fast store; cold (older) on S3 Glacier.
+- **Drift detection runs hourly / daily**, not per-request.
+
+For a 100k requests/day service: monitoring infrastructure usually adds $50-200/month. Worth it.
+
+<InlineQuiz
+  question="True or false: in production ML, monitoring is more valuable than the model itself."
+  options={[
+    { text: "False — the model is the product." },
+    {
+      text: "Partially true — without monitoring, you can't know if the model is working, leading to silent failures. A good model with no monitoring degrades into uselessness; a mediocre model with strong monitoring stays calibrated. Monitoring is the precondition for trustworthy deployment.",
+      correct: true,
+    },
+    { text: "True — you can replace the model anytime but never replace monitoring." },
+    { text: "Irrelevant; both are required equally." },
+  ]}
+  explanation="A model without monitoring inevitably degrades — the world changes, data drifts, code paths diverge, and you can't see it. A model with strong monitoring stays in a state where degradations are detected and addressed. The skill of the ML engineer is increasingly about building the feedback loops that keep models trustworthy, not just the model itself. This is one of the few aspects where 2026 production ML differs sharply from research."
+/>
+
+## Closing for monitoring
+
+ML monitoring is the discipline that turns 'we shipped a model' into 'we run a model in production reliably'. Both operational and ML-specific layers required. Drift detection is a signal, not a verdict — investigate before reacting. Alert tiering preserves signal value.
+
+The next lesson covers automation: CI/CD for ML pipelines.

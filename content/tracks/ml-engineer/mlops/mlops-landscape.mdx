@@ -1,0 +1,356 @@
+---
+title: "The MLOps landscape"
+description: "What it actually takes to run ML in production in 2026. The skills, the tools, and the trade-offs that distinguish 'demoware' from systems people can rely on."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: mlops-landscape
+lessonCode: "A8.1"
+estMinutes: 10
+prereqs:
+  - "A7.8 Computer vision deployment and inference optimisation"
+  - "A6.7 Working with LLM APIs in production"
+objectives:
+  - "Define MLOps and distinguish it from DevOps and data engineering."
+  - "Map the production ML lifecycle to its tooling categories: tracking, packaging, serving, monitoring, retraining."
+  - "Identify the right minimal MLOps stack for a small team vs. an enterprise."
+pitfalls:
+  - "Buying into a 'unified ML platform' before you have the volume to justify it. Many teams overpay for tools they barely use."
+  - "Treating MLOps as 'DevOps but for ML.' The differences (data versioning, model drift, training-serving skew) need ML-specific tooling."
+  - "Skipping experiment tracking 'until things stabilise.' Reproducibility is cheapest to add at the start."
+  - "Underestimating evaluation infrastructure. It's not glamorous; it's what prevents production regressions."
+importantQuestions:
+  - question: "What is MLOps, in one sentence?"
+    shortAnswer: |
+      The operational discipline of building and running ML systems in production: experiment tracking, data versioning, model packaging, serving, monitoring, drift detection, retraining. Distinct from but overlapping with DevOps and data engineering.
+    detailed: |
+      MLOps emerged because ML systems break in ways traditional software doesn't:
+
+      - **The data changes.** Models trained on yesterday's data behave differently on today's. Software code doesn't have this problem.
+      - **Behaviour drifts silently.** A bug in code throws an exception. A model that degrades gradually shows no errors — just worse predictions.
+      - **Training is non-deterministic.** Same code, same data: different model (different seeds, hardware, library versions). Reproducibility requires explicit effort.
+      - **The model is data + code + hyperparams.** Versioning all three matters.
+      - **Training and serving environments differ.** Even when "the same code," subtle preprocessing differences cause silent quality regressions.
+
+      So MLOps adds tooling for: data versioning, experiment tracking, model registries, automated evaluation, drift detection, A/B testing, retraining pipelines.
+
+      It overlaps with DevOps (CI/CD, infrastructure, monitoring) and data engineering (pipelines, storage, quality), but the ML-specific concerns are real and need dedicated attention.
+    pitfalls:
+      - "MLOps tools are often sold as platforms. Most teams need 5 lightweight tools, not one heavy platform."
+  - question: "What's the production ML lifecycle?"
+    shortAnswer: |
+      Data → experiment → train → evaluate → register → package → deploy → monitor → retrain. Each step has tooling. Maturity ladder: from 'manual scripts' to 'CI-driven retraining' to 'continuous deployment.'
+    detailed: |
+      The canonical loop:
+
+      1. **Data ingestion + versioning**: collect labelled data; version it (DVC, LakeFS, or git-LFS).
+      2. **Experimentation + tracking**: run experiments; track every config, metric, artefact (W&B, MLflow).
+      3. **Training**: scaled or single-node training; reproducible.
+      4. **Evaluation**: against held-out, golden set, robustness suite.
+      5. **Model registry**: versioned models with metadata (training data version, metrics, lineage).
+      6. **Packaging**: containerise or export to inference format (ONNX, TensorRT, CoreML).
+      7. **Deployment**: serve via container, batch job, or edge runtime.
+      8. **Monitoring**: latency, error rate, prediction distribution, drift.
+      9. **Retraining trigger**: scheduled, drift-driven, or performance-driven.
+      10. **A/B testing or shadow traffic**: validate new models against current production.
+
+      MLOps maturity levels (Google's MLOps framework):
+      - **Level 0**: scripts and notebooks. Manual deployment. Most teams start here.
+      - **Level 1**: orchestrated training + monitoring. Pipelines exist.
+      - **Level 2**: CI/CD for ML — automated retraining, A/B, rollback.
+
+      Most production ML in 2026 lives between Level 0 and Level 1. Level 2 is enterprise / mature teams.
+    pitfalls:
+      - "Don't engineer for Level 2 maturity when you're at Level 0 traffic. Each step has cost; match to scale."
+  - question: "What's the minimal MLOps stack for a small team?"
+    shortAnswer: |
+      Experiment tracking (W&B or MLflow free tier), Git for code, S3 / GCS for data, Docker for packaging, FastAPI / BentoML for serving, basic Datadog / Prometheus monitoring, scheduled cron for retraining. ~$200/month for a small startup.
+    detailed: |
+      The pragmatic small-team stack:
+
+      | Concern | Tool | Cost |
+      | ------- | ---- | ---- |
+      | Code | GitHub | Free / cheap |
+      | Data versioning | S3 + DVC or git-LFS | <$50/mo storage |
+      | Experiment tracking | W&B free tier or MLflow self-host | Free |
+      | Training | Cloud GPU (Modal, Lambda, RunPod) | Pay-per-use |
+      | Model registry | W&B / MLflow / HuggingFace Hub | Free |
+      | Container | Docker | Free |
+      | Serving | BentoML or FastAPI on Modal / Replicate | Pay-per-use |
+      | Monitoring | Datadog basic / Prometheus + Grafana | $50-100/mo |
+      | Drift / quality | Evidently AI open source | Free |
+      | Orchestration | GitHub Actions or Prefect | Free |
+
+      Total: ~$200-500/mo for a startup with modest traffic. Scales with usage.
+
+      Avoid heavyweight platforms (Databricks, SageMaker) until you have the traffic and team size to justify them.
+
+      For larger teams (10+ MLE):
+      - Add **Triton** or **vLLM** for high-throughput inference.
+      - Add **Arize / WhyLabs** for ML-specific drift monitoring.
+      - Add a **feature store** (Feast, Tecton) if shared features matter.
+      - Add **A/B testing infra** (in-house or LaunchDarkly).
+    pitfalls:
+      - "Tooling proliferation is real. Add tools when pain justifies; don't anticipate."
+  - question: "How does MLOps differ from DevOps?"
+    shortAnswer: |
+      DevOps versions code; MLOps versions code + data + models. DevOps deploys binaries; MLOps deploys models that depend on data distributions. DevOps monitors for failures; MLOps monitors for accuracy drift. ML-specific concerns require ML-specific tools.
+    detailed: |
+      Side by side:
+
+      | Concern | DevOps | MLOps |
+      | ------- | ------ | ----- |
+      | Versioning | Code | Code + data + model + hyperparams |
+      | Reproducibility | Same code = same binary | Same code + data + seed + libs = (usually) same model |
+      | Testing | Unit + integration tests | Plus: data validation, model evaluation, regression suites |
+      | Monitoring | Latency, errors, uptime | Plus: prediction distribution, accuracy, drift |
+      | Rollback | Git revert + redeploy binary | Git revert + revert model artefact + revert data version |
+      | Failure modes | Exceptions, crashes | Plus: silent quality degradation, distribution shift |
+      | Deployment | Stateless services | Stateful (model files, sometimes feature stores) |
+
+      DevOps tools alone aren't enough for ML; you need additions for the data + model + drift dimensions.
+
+      But also: MLOps without solid DevOps is fragile. Containerisation, CI, monitoring, infrastructure-as-code — all still required.
+    pitfalls:
+      - "Don't hire 'an MLOps engineer' to fix bad DevOps. The foundations matter."
+  - question: "What's the single most impactful MLOps practice?"
+    shortAnswer: |
+      Tied: (a) experiment tracking with reproducible artefacts (you know what produced every model), and (b) a regression evaluation suite that runs on every change. Without either, production ML becomes guesswork.
+    detailed: |
+      Two practices give disproportionate value:
+
+      **Experiment tracking + reproducibility.** Every model deployed should have: training data version, code commit, hyperparams, metrics, training environment. Without this, debugging a production regression is impossible.
+
+      Tooling: W&B, MLflow, or even Git + structured logs. Minimum viable: log a JSON with the above for every training run.
+
+      **Regression evaluation suite.** A curated set of (input, expected behaviour) cases that every model release must pass. Without this, prompt / data / code changes silently break things.
+
+      For LLM-powered features: golden set with LLM-as-judge.
+
+      For traditional models: held-out test set with per-segment metrics.
+
+      These two together turn ML from "ship and pray" to "ship with confidence." The other MLOps practices (data versioning, feature stores, drift detection, etc.) are valuable but secondary.
+
+      Start here; add the rest as needed.
+    pitfalls:
+      - "Make the regression suite a release gate. If it fails, the deployment is blocked. Without enforcement, it stops being maintained."
+  - question: "When do you need a 'unified ML platform' (Databricks, SageMaker, Vertex)?"
+    shortAnswer: |
+      Larger teams (20+ MLE), enterprise compliance requirements, integrated data lake + training + serving needs. For most teams, a curated set of best-of-breed tools beats a single platform on price and flexibility.
+    detailed: |
+      Unified ML platforms package: data lake, notebooks, training infra, model registry, serving, monitoring. Single vendor, single interface.
+
+      Pros:
+      - **Integration**: components designed to work together.
+      - **Compliance**: SOC2, HIPAA, etc., often built in.
+      - **Skills consolidation**: hire for one platform instead of five tools.
+      - **Vendor management**: one contract, one support relationship.
+
+      Cons:
+      - **Cost**: 2-5× the bill of equivalent best-of-breed.
+      - **Lock-in**: migrating off later is expensive.
+      - **Limited flexibility**: you use their training framework, serving framework, etc.
+      - **Quality varies by component**: rarely best-in-class at everything.
+
+      When to choose:
+      - Enterprise with compliance needs.
+      - Team > 20 ML engineers.
+      - Heavy ETL + training + serving integrated workflows.
+      - Risk-averse leadership.
+
+      When to skip:
+      - Startups, scale-ups (<20 ML team).
+      - Open-source-friendly culture.
+      - Specific workflows where the platform's defaults don't fit.
+
+      In 2026, the "best-of-breed" path (W&B + Modal + Triton + Arize + Evidently) covers 90% of small-team needs at 30% of platform cost.
+    pitfalls:
+      - "Don't choose a platform because 'it's the standard.' Match it to your team size and workflow."
+---
+
+<TldrCallout>
+  MLOps is the operational discipline of building and running ML in production: experiment tracking,
+  data versioning, model packaging, serving, monitoring, drift detection, retraining. The minimal
+  stack for a small team: W&B (tracking), S3 (data), Docker (packaging), BentoML / Modal (serving),
+  Datadog (basic monitoring), Evidently (drift). Two highest-leverage practices: experiment tracking
+  with reproducible artefacts, and a regression evaluation suite that runs on every change.
+</TldrCallout>
+
+## What this module covers
+
+| Lesson | Topic                                   |
+| ------ | --------------------------------------- |
+| A8.2   | Experiment tracking and reproducibility |
+| A8.3   | Data versioning and feature stores      |
+| A8.4   | Model packaging and serving             |
+| A8.5   | Monitoring and drift detection          |
+| A8.6   | CI/CD for ML                            |
+| A8.7   | Training-serving skew                   |
+| A8.8   | Cost optimisation and GPU economics     |
+
+The focus throughout: what an ML engineer actually does in production, not what vendors say they should do.
+
+## Why MLOps is its own thing
+
+Software systems break with exceptions, error logs, crashes. You see them.
+
+ML systems break with silent quality degradation. The API returns 200 OK; the predictions are wrong.
+
+Three properties make ML production different:
+
+1. **Models depend on data distributions.** When traffic shifts (new users, new products, new regions), the model's quality changes without any code change.
+2. **Training is non-deterministic.** Same code, same data: different model (different seeds, hardware, library versions). Without explicit reproducibility, you can't go back.
+3. **The deployment artefact is data + code + hyperparams + metrics.** Versioning all four matters.
+
+MLOps tooling addresses these specifically. Standard DevOps tooling does what it does well; MLOps adds layers for what's specific to ML.
+
+## The production ML lifecycle
+
+```
+Data → Track experiments → Train → Evaluate → Register → Package → Deploy → Monitor → Retrain
+                ↑                                                                       │
+                └───────────────────────────────────────────────────────────────────────┘
+```
+
+Each step has dedicated tooling. The next seven lessons cover each in depth.
+
+Three maturity levels (from Google's MLOps framework):
+
+| Level | What it looks like                                                                                |
+| ----- | ------------------------------------------------------------------------------------------------- |
+| **0** | Manual scripts, notebooks, ad-hoc deployment. Most teams start here.                              |
+| **1** | Orchestrated pipelines, automated monitoring, scheduled retraining.                               |
+| **2** | CI/CD for ML — automated retraining triggered by data / quality, A/B testing, automated rollback. |
+
+In 2026, **most production ML lives between Level 0 and Level 1**. Level 2 is enterprise mature. Don't over-engineer for higher maturity than your traffic justifies.
+
+<AnalogyCallout>
+  MLOps is to ML what DevOps was to software in 2010: a recognition that the "ship it" step is half
+  the work, and the tooling to support it is a discipline. Same way developers in 2008 learned
+  containers, CI/CD, monitoring; ML engineers in 2026 learn experiment tracking, drift detection,
+  training-serving skew prevention.
+</AnalogyCallout>
+
+## The minimal 2026 stack
+
+For a small team shipping ML to production:
+
+| Concern                  | Tool (open / cheap)                              |
+| ------------------------ | ------------------------------------------------ |
+| Code versioning          | Git + GitHub                                     |
+| Data versioning          | S3 / GCS + DVC or git-LFS                        |
+| Experiment tracking      | Weights & Biases (free tier) or MLflow self-host |
+| Training infra           | Modal, Lambda Labs, RunPod, vast.ai              |
+| Model registry           | W&B / MLflow / HuggingFace Hub                   |
+| Containers               | Docker                                           |
+| Serving                  | BentoML, FastAPI, vLLM, Triton                   |
+| Monitoring               | Datadog / Prometheus + Grafana                   |
+| Drift detection          | Evidently AI (open source)                       |
+| Orchestration            | GitHub Actions, Prefect, or simple cron          |
+| Feature store (optional) | Feast (open) or skip                             |
+
+Total monthly cost for a startup: ~$200-500. Scales with usage.
+
+For larger teams (10+ MLE), add:
+
+- **Triton** or **vLLM** for high-throughput inference.
+- **Arize / WhyLabs / Fiddler** for ML-specific monitoring.
+- **Feature store** if shared features become coordination overhead.
+- **A/B testing infra** (in-house or LaunchDarkly).
+
+For enterprises with compliance + integration needs: consider Databricks, SageMaker, or Vertex — but be honest about cost vs. flexibility.
+
+## The two practices that matter most
+
+If you do nothing else:
+
+**1. Experiment tracking with reproducible artefacts.**
+
+Every model you ship should have:
+
+- Training data version (which dataset, which commit / hash).
+- Code commit (git SHA).
+- Hyperparameters (full config).
+- Metrics (per-class, on held-out, on slices).
+- Environment (Python version, library versions, hardware).
+
+Without this, debugging a production regression is guesswork.
+
+**2. A regression evaluation suite that runs on every change.**
+
+A curated set of (input, expected behaviour) cases. Every model release must pass it. Without it, prompt changes, data changes, code changes silently break things.
+
+For LLM-powered features: golden set + LLM-as-judge (see A6.8).
+
+For traditional models: held-out test set with per-segment metrics.
+
+These two together turn ML from "ship and pray" to "ship with confidence." The other MLOps practices are valuable but secondary.
+
+<InlineQuiz
+  question="A startup has 3 ML engineers shipping a tabular model and an NLP classifier. Quarterly traffic is 100k requests. They're considering buying a 'unified ML platform' for $5k/month. What's the most useful advice?"
+  options={[
+    { text: "Buy the platform — it's the industry standard." },
+    {
+      text: "Don't yet. At their scale, W&B + Modal + Docker + Datadog + Evidently (open source) covers everything at ~$200-300/mo, with more flexibility. Revisit when team or traffic 5×.",
+      correct: true,
+    },
+    { text: "Hire 2 more MLOps engineers to build a custom platform." },
+    { text: "Skip MLOps entirely until they hit production failures." },
+  ]}
+  explanation="Unified platforms are sized for enterprises (20+ MLE). At 3 MLE and 100k req/quarter, best-of-breed open / free tools cover the needs at 5-10% the cost with much more flexibility. The lock-in cost of platforms is significant — migrating off later is months of work. Revisit when team or scale outgrows the simple stack. Skipping MLOps entirely is also wrong — even small teams need tracking + regression suites."
+/>
+
+## How ML differs from traditional software
+
+A summary of the key differences:
+
+| Aspect                | Software                | ML                                             |
+| --------------------- | ----------------------- | ---------------------------------------------- |
+| Versioning            | Code                    | Code + data + model + hyperparams              |
+| Failure mode          | Exception               | Silent quality degradation                     |
+| Testing               | Unit + integration      | Plus: data validation, model evaluation        |
+| Reproducibility       | Same code = same binary | Same code + data + seed + libs (sometimes)     |
+| Rollback              | Revert binary           | Revert model + data + code                     |
+| Monitoring            | Latency, errors         | Plus: prediction distribution, accuracy, drift |
+| Time to detect issues | Seconds (exceptions)    | Days-weeks (drift)                             |
+
+These differences are why MLOps tooling exists. Most of the upcoming lessons address one specific difference.
+
+## What's NOT in this module
+
+- **Feature engineering** (covered in A2.8 for tabular).
+- **Model architecture** (covered in Modules 4-7).
+- **Pure infrastructure** (Kubernetes, networking, observability) — not ML-specific.
+- **Frontier-scale LLM training operations** (distributed training, FSDP details) — covered in A4.7 / A5.7.
+- **Ethics, governance, regulatory compliance** — touched but not deep.
+
+For ML engineers in most production roles, this module covers the essential operational concerns.
+
+<InlineQuiz
+  question="Which of these is the most distinctive aspect of ML systems vs. traditional software?"
+  options={[
+    { text: "They use neural networks." },
+    {
+      text: "Quality can degrade silently because the data distribution can shift even when the code is identical — making 'is this working correctly' much harder to detect than 'is this throwing exceptions'.",
+      correct: true,
+    },
+    { text: "They need more compute." },
+    { text: "They are written in Python." },
+  ]}
+  explanation="Silent quality degradation is the defining feature of production ML failure. Traditional software fails noisily (exceptions, 500 errors). ML systems often keep returning 200 OK with subtly worse predictions as data drifts. This is why MLOps has dedicated monitoring beyond uptime — accuracy, drift, prediction distribution. The other answers describe surface characteristics but not the core operational challenge."
+/>
+
+## The rest of this module
+
+Each subsequent lesson addresses one practice or tool family in depth:
+
+- **A8.2**: Experiment tracking — the bedrock of reproducibility.
+- **A8.3**: Data versioning + feature stores.
+- **A8.4**: Model packaging + serving — turning files into endpoints.
+- **A8.5**: Monitoring + drift detection — knowing when things break.
+- **A8.6**: CI/CD for ML — automating the lifecycle.
+- **A8.7**: Training-serving skew — the single most common silent failure mode.
+- **A8.8**: Cost optimisation and GPU economics — making it affordable.
+
+The Capstone (A9.x) synthesises this with two end-to-end system walkthroughs.

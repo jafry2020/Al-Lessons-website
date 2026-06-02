@@ -1,0 +1,466 @@
+---
+title: "The end-to-end ML system design framework"
+description: "A reusable structure for designing production ML systems from a problem statement. The seven steps experienced engineers walk through, the trade-offs at each, and the questions to ask before committing to a design."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: capstone
+moduleLabel: "Capstone · End-to-end ML system design"
+lesson: system-design-framework
+lessonCode: "A9.1"
+estMinutes: 15
+prereqs:
+  - "A8.8 Cost optimisation and GPU economics"
+  - "A6.6 Semantic search and retrieval (RAG)"
+objectives:
+  - "Apply a 7-step framework to any ML system design question."
+  - "Identify the key trade-offs at each step (quality vs cost; latency vs throughput; build vs buy)."
+  - "Communicate a design decision with justified trade-offs to non-ML stakeholders."
+pitfalls:
+  - "Starting with the model. Most design effort is in problem framing, data, and evaluation — model is usually the easy part."
+  - "Optimising prematurely. Pick a baseline; iterate; optimise only what measurement shows is worth optimising."
+  - "Ignoring constraints (latency, cost, compliance) until late. They often invalidate the obvious design."
+  - "Treating ML system design as a fixed template. Each problem reshapes the framework's emphasis."
+importantQuestions:
+  - question: "What's the 7-step framework?"
+    shortAnswer: |
+      (1) Problem framing, (2) Success metric, (3) Data strategy, (4) Modelling approach, (5) Evaluation, (6) Serving and operations, (7) Risk and iteration plan. Each step has trade-offs and constraints feeding into the next.
+    detailed: |
+      The seven steps, in order of when they bind decisions downstream:
+
+      **1. Problem framing**: What's the actual business question? What user action does this support? What's the alternative (current system, human review, do nothing)?
+
+      **2. Success metric**: What single number captures success? How does it map to business value? What's the acceptable trade-off (e.g., precision vs recall)?
+
+      **3. Data strategy**: What data do we have? What do we need? Labelled / unlabelled? How fresh? Where does it live? Licensing?
+
+      **4. Modelling approach**: Given the data and metric, which model family is appropriate? Foundation model? Fine-tune? From scratch? API or self-hosted?
+
+      **5. Evaluation**: What's the train / val / test split? Golden set? LLM-as-judge? Per-slice metrics? What's the bar to ship?
+
+      **6. Serving and operations**: Latency requirements? Throughput? Cost budget? Deployment target (cloud, edge, mobile)? Monitoring / drift?
+
+      **7. Risk and iteration plan**: What could go wrong? Failure modes (data, model, pipeline, drift)? Rollback plan? Iteration cadence?
+
+      Each step's choices constrain the next. Don't skip steps; don't reorder them. Walk through them explicitly in design discussions.
+    pitfalls:
+      - "Skipping problem framing leads to building the right solution for the wrong problem. Spend disproportionate time on step 1."
+  - question: "How do you frame an ML problem well?"
+    shortAnswer: |
+      State the user-facing or business goal. Identify the prediction task that supports it. Identify the alternative (baseline, human, status quo). State quality / latency / cost constraints. Sketch how the prediction is used in the broader system.
+    detailed: |
+      Good problem framing:
+
+      **Bad**: "Build a fraud detection model."
+
+      **Good**: "We process 100k credit-card transactions per hour. Currently, 0.5% of transactions are fraudulent; we manually review 5% of high-risk transactions (~5k per hour) at $2 each. We want to automate decisions on the 95% of low-risk transactions to free up review capacity for harder cases. The prediction task is: for each transaction, output a fraud probability. The system uses this probability + cost-weighted thresholding to either: auto-approve (< 0.1), auto-flag for review (> 0.5), or queue for routine review (0.1-0.5). Latency must be < 50ms (real-time payment authorisation). False positive cost: $5 (customer friction). False negative cost: $300 (chargeback)."
+
+      The frame gives:
+      - Business context.
+      - The decision the model supports (not "predict fraud" but "auto-approve / flag / queue").
+      - Quantitative quality targets (cost-weighted; threshold-sensitive).
+      - Latency constraints.
+      - Cost-of-error asymmetry.
+
+      Now you can pick a metric (precision at threshold τ, recall at fixed FPR), pick a model class (something fast and calibrated), and design evaluation.
+    pitfalls:
+      - "Don't accept a vague problem statement. Push for specifics: who, when, what decision, what cost of error?"
+  - question: "How do you pick a success metric?"
+    shortAnswer: |
+      Map to business value. For balanced classification: accuracy or F1. For imbalanced: precision / recall at operating point or PR-AUC. For retrieval: recall@k or NDCG. For generation: LLM-as-judge with rubric. Always report per-slice in addition to aggregate.
+    detailed: |
+      Metric per task type:
+
+      | Task | Primary metric | Secondary |
+      | ---- | --------------- | --------- |
+      | Balanced classification | Accuracy, macro F1 | Per-class F1, confusion matrix |
+      | Imbalanced classification | Precision @ recall fixed; PR-AUC | Recall @ fixed FPR |
+      | Multi-label | Micro / macro F1, mAP | Per-label F1 |
+      | Sequence labeling | Span-level F1 (seqeval) | Per-entity-type F1 |
+      | Retrieval | Recall @ k, NDCG @ k | MRR |
+      | Generation | LLM-as-judge w/ rubric; BLEU / ROUGE secondary | Human eval sample |
+      | RAG | Per-stage: retrieval recall, faithfulness, answer relevance | End-to-end LLM-as-judge |
+      | Detection | mAP @ [0.5:0.95] | Per-class AP |
+      | Segmentation | mIoU | Per-class IoU |
+      | Forecasting | MAPE, MAE, RMSE | Quantile loss |
+
+      Then ladder to business metric:
+      - Classification: F1 of fraud detection → dollars saved per FP/FN.
+      - Recommendation: NDCG@10 → conversion rate uplift.
+      - Generation: rubric score → user thumbs-up rate.
+
+      Per-slice reporting catches blind spots:
+      - Per-user-segment (new vs returning).
+      - Per-region.
+      - Per-source (mobile vs web).
+      - Per-time-of-day.
+
+      Aggregate metrics can hide poor performance on important slices.
+    pitfalls:
+      - "If your primary metric doesn't correlate with the business outcome, it's the wrong metric. Validate the link."
+  - question: "How do you decide modelling approach?"
+    shortAnswer: |
+      Start with the simplest baseline that could work. Foundation model via API for prototyping; fine-tuned small model for high volume; classical ML for tabular. Add complexity only when measurement shows it's worth it.
+    detailed: |
+      A decision tree:
+
+      **Is this a generation / open-ended task?**
+      → Yes: prototype with frontier LLM API; if scale demands, distill to smaller self-hosted.
+
+      **Is this tabular?**
+      → XGBoost / LightGBM is the default. Linear models or fine-tuned tabular foundation model for special needs.
+
+      **Is this NLP classification / extraction?**
+      → Fine-tune a small encoder (DistilBERT / ModernBERT) on labelled data. Few-shot LLM if data is tiny.
+
+      **Is this CV classification?**
+      → Fine-tune ConvNeXt / ViT with strong augmentation. EfficientNet-Lite for edge / mobile.
+
+      **Is this CV detection / segmentation?**
+      → YOLO for real-time; DETR / Mask2Former for quality; SAM for promptable.
+
+      **Is this retrieval / search?**
+      → CLIP / SigLIP for image-text; sentence-transformers for text-text. Hybrid (BM25 + dense) for production.
+
+      **Is this multimodal reasoning?**
+      → VLM (GPT-4V, Claude, LLaVA).
+
+      Constraints flip choices:
+      - Real-time UX (< 100ms) → no frontier API; fine-tuned small model.
+      - Edge / mobile → MobileNet / quantised small model.
+      - High volume + simple task → distill to small model.
+      - Tiny labelled data → few-shot prompt OR linear probe foundation features.
+
+      Always: try a baseline first. Frontier API for prompting prototype. Linear probe DINOv2 / sentence-transformers. Logistic regression on TF-IDF. See if it suffices before designing complex pipelines.
+    pitfalls:
+      - "The 'right' answer is often boring (XGBoost, fine-tune BERT, linear probe). Don't reach for novelty just to use novel tech."
+  - question: "What about evaluation infrastructure?"
+    shortAnswer: |
+      Build the eval pipeline before (or with) the model. Held-out test set; golden / regression suite; per-slice metrics; drift / robustness suite; (for generative) LLM-as-judge with human-validated correlation.
+    detailed: |
+      Evaluation infrastructure is the discipline that keeps ML systems trustworthy. Components:
+
+      **Held-out test set**: large enough for stable estimates; representative; not used in training or hyperparameter tuning.
+
+      **Golden / regression test suite**: curated inputs with expected outputs / behaviour; runs on every code / model change.
+
+      **Per-slice metrics**: by demographic, source, time, etc.
+
+      **Robustness suite**: known-hard cases; adversarial; out-of-distribution.
+
+      **Production-like data sample**: regular sample of production traffic with ground truth (if available) or proxy.
+
+      **LLM-as-judge** (for generative): rubric + human-validated judge.
+
+      **Drift detection**: input + output distribution monitoring.
+
+      Build these in CI:
+      - PR-level: regression suite + held-out test on a sample.
+      - Nightly: full held-out test + slice metrics.
+      - Weekly: production sample review.
+      - Monthly: full drift analysis.
+
+      Without evaluation infrastructure, you have anecdotes; with it, you have a basis for shipping decisions.
+    pitfalls:
+      - "Don't over-build evaluation for early prototypes. A simple held-out + manual inspection of 20 examples is fine for v0."
+  - question: "How do you serve and operate the model?"
+    shortAnswer: |
+      Match serving stack to scale: managed (Modal / Replicate) for small / prototype; BentoML / Triton / vLLM for production; ONNX / TensorRT for max throughput. Monitor latency, throughput, accuracy, drift, cost. Plan retraining cadence.
+    detailed: |
+      Decisions per scale tier:
+
+      **Prototype / low volume (<1k req/day)**:
+      - Serving: Modal / Replicate (managed, pay-per-use).
+      - Monitoring: basic logging + manual review.
+      - Cost: tens of dollars per month.
+
+      **Production at moderate scale (1k-100k/day)**:
+      - Serving: BentoML on managed K8s, or Modal for serverless GPU.
+      - Monitoring: Datadog + Evidently for drift.
+      - Cost: hundreds to low thousands per month.
+
+      **Production at scale (100k+/day)**:
+      - Serving: vLLM (LLM) or Triton (CV/multi-model) on self-managed K8s.
+      - Monitoring: Datadog + Arize / WhyLabs.
+      - Cost optimisation: quantisation, batching, distillation, spot for training.
+      - Cost: thousands to tens of thousands per month.
+
+      Plan from day 1:
+      - Versioned model registry.
+      - Canary deployment pattern.
+      - Rollback procedure (pre-tested).
+      - Retraining cadence (scheduled + drift-triggered).
+      - Cost / request as monitored metric.
+
+      Defer to actual need:
+      - Multi-region failover.
+      - Sophisticated A/B testing infrastructure.
+      - Feature store.
+      - Custom auto-scaling.
+    pitfalls:
+      - "Don't engineer for Level 3 MLOps maturity (A8.1) at Level 0 traffic. Match infrastructure to actual scale, not aspirational."
+---
+
+<TldrCallout>
+  The 7-step ML system design framework: (1) Problem framing, (2) Success metric, (3) Data strategy,
+  (4) Modelling approach, (5) Evaluation, (6) Serving and operations, (7) Risk and iteration. Each
+  step's choices constrain the next. Most design effort is in framing and data, not modelling. Use
+  this as the scaffold for any ML system design conversation — including interviews and
+  architectural review.
+</TldrCallout>
+
+## Why this framework matters
+
+Most ML system designs in practice (and in interviews) skip straight to "use this model." That's the wrong starting point. The interesting design lives in the steps before and after.
+
+The 7-step framework is:
+
+1. **Problem framing**
+2. **Success metric**
+3. **Data strategy**
+4. **Modelling approach**
+5. **Evaluation**
+6. **Serving and operations**
+7. **Risk and iteration plan**
+
+Walk through them explicitly. Don't skip. Don't reorder. Each step's choices constrain the next.
+
+## Step 1: Problem framing
+
+**The single most important step.** Many ML projects fail here.
+
+What to articulate:
+
+- **Business / user goal**: what real outcome does this enable?
+- **The decision** the prediction supports.
+- **The current alternative** (human review, status quo, simpler heuristic).
+- **Quality / latency / cost constraints**.
+- **The cost of each error type** (false positives vs false negatives).
+
+A weak framing: "Build a fraud detection model."
+
+A strong framing: "We process 100k transactions per hour. Currently we manually review 5%. We want to auto-approve the 95% lowest-risk transactions to free up review capacity. The model outputs fraud probability; downstream code thresholds it. Latency <50ms. FP cost $5 (customer friction); FN cost $300 (chargeback)."
+
+The strong framing tells you: what metric matters (precision at high recall on the positive class), what model is acceptable (anything fast and calibrated), and how to evaluate (cost-weighted error).
+
+<AnalogyCallout>
+  Problem framing is to ML system design what requirements gathering is to software engineering.
+  Skip it and you build something elegant that solves the wrong problem. Spend half your design time
+  here; the rest of the design will fall into place faster.
+</AnalogyCallout>
+
+## Step 2: Success metric
+
+What single number captures success?
+
+Decision trees from earlier modules:
+
+| Task                      | Primary metric                      |
+| ------------------------- | ----------------------------------- |
+| Balanced classification   | Macro F1                            |
+| Imbalanced classification | Precision @ recall fixed; or PR-AUC |
+| Sequence labeling (NER)   | Span-level F1                       |
+| Retrieval                 | Recall@k, NDCG@k                    |
+| Generation                | LLM-as-judge w/ rubric              |
+| RAG                       | Per-stage + end-to-end              |
+| Detection                 | mAP@[0.5:0.95]                      |
+| Segmentation              | mIoU                                |
+| Forecasting               | MAPE / MAE / RMSE                   |
+
+Then **ladder to business value**:
+
+- Classification F1 → dollars saved per FP / FN.
+- Recommendation NDCG → conversion rate uplift.
+- Generation rubric → user thumbs-up rate.
+
+The link from ML metric to business outcome must be testable. If you can't validate it, you have the wrong metric.
+
+**Per-slice metrics are essential.** Aggregate hides failures on important sub-populations.
+
+## Step 3: Data strategy
+
+Questions to answer:
+
+| Question                                  | Why it matters                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| What data do we have?                     | Determines available models                                             |
+| What do we need?                          | Determines labelling / acquisition effort                               |
+| Labelled vs unlabelled?                   | Labelled = supervised; unlabelled = self-supervised / foundation models |
+| How fresh / how often updated?            | Drift cadence; retraining cadence                                       |
+| Where does it live?                       | Engineering effort to access                                            |
+| What's the licensing?                     | Commercial use; data privacy                                            |
+| Are there obvious biases?                 | Production fairness concerns                                            |
+| Is there ground truth at production time? | Determines monitoring approach                                          |
+
+Often, data is the constraint. "We don't have labelled data" reshapes everything: few-shot prompting an LLM, frozen foundation model + linear probe, weak supervision, or labelling effort.
+
+Production-grade ML systems treat data as a first-class engineering concern, not an afterthought.
+
+## Step 4: Modelling approach
+
+Given the framing, metric, and data, pick the model family.
+
+Decision tree:
+
+```
+Is it generation / open-ended?
+├─ Yes → Frontier LLM API (prototype) → distill to small if scale (production)
+└─ No
+   ├─ Tabular? → XGBoost / LightGBM
+   ├─ NLP classification? → Fine-tune DistilBERT / ModernBERT
+   ├─ NER / sequence labeling? → Fine-tune encoder with BIO
+   ├─ Retrieval? → CLIP/SigLIP (image-text) or sentence-transformers (text)
+   ├─ Image classification? → ConvNeXt / EfficientNet / DINOv2 + linear probe
+   ├─ Object detection? → YOLO (real-time) / DETR (quality)
+   ├─ Segmentation? → Mask2Former / SAM
+   └─ Multimodal reasoning? → VLM (GPT-4V, Claude, LLaVA)
+```
+
+Constraints flip choices:
+
+- Real-time UX (<100ms) → no frontier API.
+- Edge / mobile → MobileNet / quantised small.
+- High volume → fine-tune small (cost economics).
+- Tiny data → few-shot prompt or linear probe.
+
+**Always try the simplest baseline first.** Frontier API for prompting. Linear probe DINOv2. Logistic regression on TF-IDF. Often the boring baseline gets you 80% of the way; you spend the remaining design on the last 20%.
+
+## Step 5: Evaluation
+
+Build the eval pipeline before (or alongside) the model. Components:
+
+- **Held-out test set**: representative, large enough for stable estimates.
+- **Golden / regression suite**: curated cases run on every change.
+- **Per-slice metrics**: by demographic, source, time, etc.
+- **Robustness suite**: known-hard cases.
+- **Production-like sample**: real production traffic with proxy or eventual ground truth.
+- **LLM-as-judge** (for generative): rubric + human-validated correlation.
+- **Drift detection**: input + output monitoring.
+
+In CI:
+
+- **PR-level**: regression suite + held-out sample.
+- **Nightly**: full held-out + slice metrics.
+- **Weekly**: production sample review.
+- **Monthly**: drift analysis.
+
+Without this discipline, shipping decisions become anecdotes. With it, you have a basis for trust.
+
+## Step 6: Serving and operations
+
+Match the stack to scale:
+
+| Scale       | Stack                                              |
+| ----------- | -------------------------------------------------- |
+| Prototype   | Modal / Replicate; logs + manual review            |
+| 1k-100k/day | BentoML on managed K8s; Datadog + Evidently        |
+| 100k+/day   | vLLM / Triton on self-managed K8s; Arize / WhyLabs |
+
+Plan from day 1:
+
+- Versioned model registry.
+- Canary deployment pattern.
+- Pre-tested rollback procedure.
+- Retraining cadence.
+- Cost / request as a monitored metric.
+
+Defer to actual need:
+
+- Multi-region failover.
+- Sophisticated A/B test infrastructure.
+- Feature store.
+- Custom autoscaling.
+
+## Step 7: Risk and iteration
+
+What could go wrong?
+
+| Risk                  | Mitigation                                       |
+| --------------------- | ------------------------------------------------ |
+| Data quality issues   | Schema validation in CI; data quality dashboards |
+| Model regression      | Regression suite gate; canary deployment         |
+| Distribution shift    | Drift monitoring; retraining triggers            |
+| Training-serving skew | Shared feature library; parity tests             |
+| Adversarial inputs    | Input validation; rate limits                    |
+| Cost overruns         | Per-request cost metric; alerts                  |
+| Compliance / fairness | Per-slice metrics; bias audits                   |
+| Operational failure   | Health checks; rollback; runbook                 |
+
+Iteration plan:
+
+- v0: baseline shipped; learn from production.
+- v1: address top failure modes from v0.
+- v2: optimise cost / latency.
+- Beyond: continuous evaluation, periodic retraining.
+
+Don't ship and forget. Plan the next 3-6 months of iteration.
+
+<InlineQuiz
+  question="In an ML system design interview, a candidate immediately says 'I'd use a transformer model.' What's the most useful feedback?"
+  options={[
+    { text: "Great choice; let's go deeper on the transformer architecture." },
+    {
+      text: "Step back to problem framing first: what's the actual task, what data is available, what are the latency / cost / quality constraints? Model choice is downstream of these. Picking a model before framing the problem signals that the engineer hasn't internalised what makes ML systems work or fail in production.",
+      correct: true,
+    },
+    { text: "Suggest a non-transformer alternative." },
+    { text: "Move on to deployment without questioning." },
+  ]}
+  explanation="Strong ML system design starts with problem framing. Going to model first is the classic novice pattern — and the cause of many ML projects that ship the wrong thing well. The framework's order is intentional: problem → metric → data → model → eval → serve → iterate. Each step's choices constrain downstream. In interviews and in practice, the engineers who get this right are the ones whose systems work in production."
+/>
+
+## Communicating the design
+
+A good ML system design document:
+
+1. **One-page summary**: the problem, the approach, the key trade-offs, the metric, the cost.
+2. **Detailed framing**: business goal, decision supported, alternatives, constraints.
+3. **Data**: what we have, what we need, lineage, freshness.
+4. **Modelling**: chosen approach, why this over alternatives.
+5. **Evaluation**: metrics, test sets, regression suite, slice analysis.
+6. **Serving**: stack, latency / throughput targets, cost estimate.
+7. **Monitoring**: what we'll watch, alert thresholds.
+8. **Risk**: failure modes, mitigations.
+9. **Iteration plan**: v0 ship date, v1 priorities.
+
+A non-ML stakeholder should be able to read 1-2 and understand. ML engineers should be able to read 3-9 and start building.
+
+Tools: Notion / Confluence / Markdown in repo. Often paired with a 1-page architecture diagram.
+
+## The framework in interviews
+
+ML system design interviews follow this framework even when the interviewer doesn't say so:
+
+1. Clarify the problem (15-20% of time).
+2. Define success metrics.
+3. Discuss data / features.
+4. Pick the model.
+5. Discuss evaluation.
+6. Discuss serving / deployment.
+7. Address scale, monitoring, edge cases.
+
+A candidate who starts with step 4 has revealed weak design instincts. The framework is what makes you look senior.
+
+The two walkthroughs in A9.2 and A9.3 demonstrate this end-to-end on concrete problems.
+
+<InlineQuiz
+  question="Which of these is most likely to be the bottleneck in a real production ML project?"
+  options={[
+    { text: "Choosing the wrong model architecture." },
+    {
+      text: "Problem framing, data quality, and evaluation infrastructure — together, these dominate the timeline and quality of most ML projects. Model architecture choice is rarely the binding constraint.",
+      correct: true,
+    },
+    { text: "Computing power." },
+    { text: "Library version compatibility." },
+  ]}
+  explanation="Surveys of production ML practitioners consistently show: data and evaluation infrastructure dominate project effort and risk. Model selection is rarely the binding constraint — pretrained models + standard recipes get most projects most of the way. The 'choose the perfect architecture' obsession is misplaced; it ranks 5th or 6th in actual production challenges. Junior engineers focus on architecture; senior engineers focus on data and evaluation."
+/>
+
+## What's next in the capstone
+
+The next two lessons walk through the framework on concrete systems:
+
+- **A9.2**: A tabular ML system — fraud detection at moderate scale.
+- **A9.3**: A hybrid CV + NLP system — support ticket triage with attached images.
+
+Each walks through all seven steps with explicit reasoning. The goal is to show what good design looks like in practice — and to demonstrate that the framework adapts to wildly different problems while maintaining its discipline.

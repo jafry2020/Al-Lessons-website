@@ -1,0 +1,430 @@
+---
+title: "Training-serving skew and pipeline correctness"
+description: "The single most common silent failure in production ML. When training data and serving inputs go through different code paths, models that look great offline fail in production. The patterns, the prevention, and the testing."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: training-serving-skew
+lessonCode: "A8.7"
+estMinutes: 12
+prereqs:
+  - "A8.3 Data versioning and feature stores"
+  - "A8.6 CI/CD for ML"
+objectives:
+  - "Identify the four kinds of training-serving skew."
+  - "Build feature pipelines with shared logic between training and serving."
+  - "Test for skew programmatically in CI and monitor for it in production."
+pitfalls:
+  - "Building feature pipelines twice (pandas for training; production code for serving). Drift between them is inevitable."
+  - "Skipping feature parity tests. Without explicit assertions, divergence isn't visible until production behaves wrong."
+  - "Computing statistics (means, scalers) on production data at serving time. They should be frozen at training time."
+  - "Treating training-serving skew as a feature problem only. Label leakage and timestamp skew are equally pernicious."
+importantQuestions:
+  - question: "What is training-serving skew?"
+    shortAnswer: |
+      A mismatch between the data the model trains on and the inputs it sees in production. The model performs well offline (where the mismatch is hidden) and worse online. The single most common silent failure in production ML.
+    detailed: |
+      Skew has four common flavours:
+
+      **1. Feature engineering skew**: feature computed differently in training (pandas notebook) vs serving (production code). Different defaults for missing values, different normalisation, different timestamp logic.
+
+      **2. Data distribution skew**: training data sampled from a different time / population than serving sees. Covered in A8.5 as drift.
+
+      **3. Label skew / leakage**: features computed using information unavailable at serving time. E.g., training features include "user's purchase next week," which isn't known at inference.
+
+      **4. Pipeline skew**: serving uses a different feature extractor / preprocessor / normalisation than training. Image preprocessing in OpenCV vs PIL. Tokenisation with the wrong tokenizer version.
+
+      All four produce the same symptom: offline metrics look great; production behaviour is worse than expected. The root cause is hard to spot because no code throws errors.
+
+      Prevention is about: single source of truth for feature logic, parity tests in CI, monitoring for divergence in production.
+    pitfalls:
+      - "Many bugs labelled 'data drift' are actually training-serving skew — the data hasn't changed; the pipeline has."
+  - question: "Why is training-serving skew so common?"
+    shortAnswer: |
+      The training environment (Jupyter notebooks, pandas, exploratory code) is wildly different from production (real-time services, scaled inference). Without explicit shared abstractions, the same logic gets reimplemented and quietly diverges.
+    detailed: |
+      The structural problem:
+
+      Training happens in a research-y environment:
+      - Pandas / numpy / batch processing.
+      - Whole dataset in memory.
+      - Iterative, exploratory.
+      - Done by ML engineers or data scientists.
+
+      Serving happens in a production environment:
+      - Per-request inference (or streaming batches).
+      - Real-time constraints.
+      - Reliability, monitoring, observability.
+      - Often done by different engineers.
+
+      Without explicit shared abstractions:
+      - Training: `df['feature'] = df['amount'].fillna(0).clip(0, 1000)`
+      - Serving: someone re-implements this in production code; maybe forgets the clip; uses `null` instead of 0.
+
+      Hours later, no errors are thrown. Days later, production accuracy is 5 points worse than offline. Weeks later, someone notices.
+
+      The fix: shared feature library, parity tests, monitoring. Cover each layer.
+    pitfalls:
+      - "Even with shared libraries, version skew (training uses old version; serving updates) causes the same problem. Pin and test."
+  - question: "What's the right way to structure feature engineering?"
+    shortAnswer: |
+      Put feature logic in a shared library imported by both training and serving. Tests in CI verify identical outputs. Optional: use a feature store as the canonical source for both pipelines.
+    detailed: |
+      Architecture options, in order of preference:
+
+      **1. Shared feature library**:
+      ```python
+      # feature_engineering.py — shared module
+      def compute_features(raw_input: dict) -> dict:
+          features = {}
+          features["amount_clipped"] = min(max(raw_input.get("amount", 0), 0), 1000)
+          features["country_encoded"] = country_to_id.get(raw_input.get("country", "UNK"), 0)
+          return features
+
+      # Training:
+      train_features = train_df.apply(lambda row: compute_features(row.to_dict()), axis=1)
+
+      # Serving:
+      @app.post("/predict")
+      def predict(req: PredictRequest):
+          features = compute_features(req.model_dump())
+          return model.predict([features])
+      ```
+
+      Single code path. Parity by construction. Version the library; pin in training and serving.
+
+      **2. Feature store** (covered in A8.3):
+      - Feature definitions in a DSL.
+      - Offline store for training; online store for serving.
+      - Same definitions, materialised in both stores.
+
+      **3. Recompute in serving from raw inputs** (rather than caching):
+      - Serving has access to raw inputs (user_id, item_id).
+      - Recomputes features by the same logic used at training.
+      - Trade-off: latency vs simplicity.
+
+      For most small-mid teams: option 1 (shared library). Option 2 when feature store overhead justified.
+    pitfalls:
+      - "If you can't unit-test your feature logic in isolation, you can't guarantee parity. Structure for testability."
+  - question: "How do you write feature parity tests?"
+    shortAnswer: |
+      For each sample input, run the training feature pipeline AND the serving feature pipeline; assert outputs are equal (with float tolerance). Run in CI. Block merges on parity failures.
+    detailed: |
+      A simple parity test:
+
+      ```python
+      def test_feature_parity():
+          samples = load_test_samples()  # fixed list of representative inputs
+          
+          for sample in samples:
+              # Path 1: training-style (pandas / batch)
+              train_df = pd.DataFrame([sample])
+              train_features = training_pipeline(train_df).iloc[0].to_dict()
+              
+              # Path 2: serving-style (per-request)
+              serve_features = serving_pipeline(sample)
+              
+              # Compare with float tolerance
+              for key in train_features:
+                  if isinstance(train_features[key], float):
+                      assert abs(train_features[key] - serve_features[key]) < 1e-6
+                  else:
+                      assert train_features[key] == serve_features[key]
+      ```
+
+      If both pipelines use the same shared library, parity is trivially true. The test guards against regressions.
+
+      For more thorough coverage:
+      - Test with edge cases: missing values, extreme values, unknown categoricals.
+      - Test on a representative sample from production data.
+      - Run in CI on every PR.
+
+      For LLM features: parity test the tokenizer, the prompt template, the post-processing.
+
+      For image models: parity test the resize, the normalisation, the augmentation toggle (off at serving).
+    pitfalls:
+      - "Floats are tricky. Use `np.isclose` with appropriate atol / rtol; don't expect bit-exact float equality across pandas vs numpy paths."
+  - question: "How do you detect skew in production?"
+    shortAnswer: |
+      Log feature values at inference (sampled). Compute distribution statistics. Compare to training reference. Alert on divergence. Same drift-detection tooling (Evidently, Arize) handles this.
+    detailed: |
+      Production skew monitoring:
+
+      1. **Sample-log feature values** at inference: 1-10% of requests, with features as computed by the serving pipeline.
+      2. **Aggregate** into hourly / daily distributions.
+      3. **Compare to training reference**: histograms, KS test, embedding distance.
+      4. **Alert on divergence** above threshold.
+
+      This is the same machinery as data drift detection (A8.5), but specifically watching for skew between training and serving versions of features.
+
+      Symptoms:
+      - Feature X mean shifts dramatically without corresponding raw data shift.
+      - Distribution shape changes (bimodal → unimodal).
+      - Null rate changes.
+      - Categorical distribution shifts (new categories appearing; expected categories missing).
+
+      When skew is detected:
+      - Check the feature pipeline code (version vs. training time).
+      - Run parity tests with current samples.
+      - Investigate raw data pipeline changes.
+
+      Often the root cause is a deployment that updated one pipeline (training or serving) without updating the other. Always deploy both together.
+    pitfalls:
+      - "Don't only monitor feature *values*. Monitor feature *computation latency* too — slow downs indicate pipeline issues."
+  - question: "What about temporal skew?"
+    shortAnswer: |
+      Features computed at training using 'future' information (relative to the label) leak; in production, that information isn't available. Use point-in-time correct feature lookup; never compute features using data from after the prediction event.
+    detailed: |
+      Temporal skew (a form of label leakage):
+
+      Training: for label at time T (e.g., "fraud at T"), feature is "total spend in last 30 days." The training pipeline computes this using all events from T-30 to T. Fine.
+
+      But if the pipeline accidentally includes events at T+1 (because the table was joined on user_id without a strict time filter), the feature contains information about the label outcome. Leakage. The model "learns" to predict fraud using non-existent future evidence.
+
+      Serving: only events up to T are available. The feature is computed correctly. Predictions are worse than offline.
+
+      Prevention:
+      - **Point-in-time correct joins**: when joining features to labels, always filter features to time ≤ label time.
+      - **Feature stores** handle this natively (Feast's point-in-time correctness).
+      - **Manual SQL**: be careful with date filters in feature aggregations.
+      - **Test with held-out time period**: split by time; train on past; evaluate on future. Leakage shows up.
+
+      Symptoms of temporal leakage:
+      - Offline metrics suspiciously high (95%+ when domain difficulty suggests 80%).
+      - Time-split evaluation much worse than random-split.
+      - Production behaviour matches time-split evaluation, not random-split.
+    pitfalls:
+      - "Random train/test splits hide temporal leakage. Always evaluate with a time-based holdout if temporal data."
+---
+
+<TldrCallout>
+  Training-serving skew is the silent killer of production ML. The training environment (pandas,
+  notebooks) and serving environment (production code) drift apart, causing models that look great
+  offline to underperform in production. Prevention: shared feature library imported by both
+  pipelines, parity tests in CI, sampled-feature monitoring in production. Most "data drift" alerts
+  trace back to skew.
+</TldrCallout>
+
+## What goes wrong
+
+The standard story:
+
+1. ML engineer trains a model in a notebook using pandas. Offline accuracy: 92%.
+2. Engineer hands off feature logic to production team or rewrites it in serving code.
+3. Service ships. Logs say everything's healthy.
+4. Two weeks later: monitoring shows accuracy on production samples is 85%.
+5. After investigation: production fills missing values with 0; training filled with the column median. The bug is in feature engineering, not the model.
+
+The model was never the problem. The two pipelines diverged. The 7-point gap is training-serving skew.
+
+This is the most common silent failure in production ML. Multiple surveys put it as the #1 production-ML problem.
+
+## Four kinds of skew
+
+| Type                          | Example                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| **Feature engineering**       | Different default values, normalisation, encoding between training and serving          |
+| **Data distribution** (drift) | Production data shifts from training. (A8.5)                                            |
+| **Label leakage / temporal**  | Features computed using info unavailable at inference time                              |
+| **Pipeline / preprocessing**  | Different image preprocessing, tokenisation, normalisation between training and serving |
+
+All four produce the same symptom — offline metrics look fine; production is worse. The fix requires identifying which kind.
+
+## The root cause: two environments
+
+Training:
+
+- Pandas / numpy.
+- Whole dataset in memory.
+- Exploratory notebooks.
+- Done by ML engineers.
+
+Serving:
+
+- Per-request (or streaming) inference.
+- Production-grade reliability.
+- Done by ML engineers + platform engineers.
+
+Without explicit shared abstractions, the same logic gets implemented twice. Even with discipline, drift creeps in: pandas methods don't always have equivalents in production code; defaults differ; edge cases handled differently.
+
+The structural fix: share one implementation.
+
+## Shared feature library
+
+The simplest pattern:
+
+```python
+# feature_engineering/features.py — shared module
+
+def compute_features(raw_input: dict) -> dict:
+    """Compute model features from raw inputs. Used by both training and serving."""
+    features = {}
+
+    amount = raw_input.get("amount", 0.0)
+    features["amount_clipped"] = max(0.0, min(amount, 1000.0))
+    features["amount_log"] = np.log1p(features["amount_clipped"])
+
+    country = raw_input.get("country", "UNK")
+    features["country_id"] = COUNTRY_TO_ID.get(country, 0)
+
+    features["is_weekend"] = raw_input["timestamp"].weekday() >= 5
+
+    return features
+
+# Training:
+from feature_engineering.features import compute_features
+
+train_features = [compute_features(row) for row in train_data]
+
+# Serving:
+@app.post("/predict")
+def predict(req: dict):
+    features = compute_features(req)
+    return model.predict([features])
+```
+
+Single source of truth. Pin the library version in both contexts. Parity by construction.
+
+For more complex feature engineering (aggregations over historical data), use a feature store (A8.3) or a shared SQL / dbt model that both pipelines query.
+
+<AnalogyCallout>
+  Training-serving skew is like building a bridge from both sides of a river without coordinating.
+  Each side measures, plans, builds — and when they meet in the middle, they're a few metres apart.
+  The fix isn't 'be more careful'; it's 'use a shared blueprint that both sides build from.' Same in
+  ML: shared feature library is the blueprint.
+</AnalogyCallout>
+
+## Parity tests in CI
+
+A test that runs on every PR:
+
+```python
+# tests/test_feature_parity.py
+import pytest
+import pandas as pd
+import numpy as np
+from feature_engineering.features import compute_features as serve_features
+from training.features import training_pipeline  # batch pandas version
+
+
+def test_parity():
+    """Same input produces same features in training and serving paths."""
+    samples = [
+        {"amount": 100.0, "country": "US", "timestamp": pd.Timestamp("2026-06-15")},
+        {"amount": 0.0, "country": "UNKNOWN", "timestamp": pd.Timestamp("2026-06-16")},
+        {"amount": 5000.0, "country": "EU", "timestamp": pd.Timestamp("2026-06-17")},  # clipped
+        {"amount": None, "country": None, "timestamp": pd.Timestamp("2026-06-18")},  # missing
+    ]
+
+    for sample in samples:
+        # Path 1: batch (training pipeline)
+        df = pd.DataFrame([sample])
+        train_out = training_pipeline(df).iloc[0].to_dict()
+
+        # Path 2: per-request (serving pipeline)
+        serve_out = serve_features(sample)
+
+        for key in train_out:
+            if isinstance(train_out[key], float):
+                assert np.isclose(train_out[key], serve_out[key], atol=1e-6), \
+                    f"Mismatch on {key}: train={train_out[key]}, serve={serve_out[key]}"
+            else:
+                assert train_out[key] == serve_out[key], \
+                    f"Mismatch on {key}: train={train_out[key]}, serve={serve_out[key]}"
+```
+
+If you used the shared library in both pipelines, this passes trivially. But the test ensures it stays passing as code evolves.
+
+For more thorough coverage, include edge cases: extreme values, missing fields, unknown categoricals, malformed inputs.
+
+## Detecting skew in production
+
+Even with parity tests, runtime skew can emerge:
+
+- Library version mismatch (training updated; serving still on old).
+- Configuration drift (different scaling params in two environments).
+- Deployment race (serving updated before training was re-run on new feature schema).
+
+Monitor:
+
+1. **Sample-log features** at inference (1-10% of requests).
+2. **Aggregate** to distributions (hourly / daily).
+3. **Compare to training reference** distribution.
+4. **Alert on divergence**.
+
+This is the same machinery as data drift detection (A8.5), but applied to detect skew specifically. Evidently AI, Arize, WhyLabs all support this.
+
+## Temporal leakage: the subtle one
+
+A feature computed using information from after the prediction event leaks the label:
+
+```sql
+-- WRONG: joins features without time filter
+SELECT
+  l.user_id,
+  l.timestamp AS label_time,
+  l.is_fraud,
+  SUM(t.amount) AS total_spend_30d  -- this includes future transactions!
+FROM labels l
+LEFT JOIN transactions t ON t.user_id = l.user_id
+  AND t.timestamp >= l.timestamp - INTERVAL '30 days'
+  -- MISSING: AND t.timestamp < l.timestamp
+GROUP BY 1, 2, 3
+```
+
+The fix:
+
+```sql
+-- CORRECT: strict time filter
+LEFT JOIN transactions t ON t.user_id = l.user_id
+  AND t.timestamp >= l.timestamp - INTERVAL '30 days'
+  AND t.timestamp < l.timestamp  -- features must precede labels
+```
+
+In feature stores, point-in-time correctness is built in. Outside feature stores, vigilance is required.
+
+Detection:
+
+- **Time-split evaluation** (not random split): train on past, evaluate on future. Big gap vs random split = likely leakage.
+- **Suspiciously high accuracy**: 95%+ on a domain that should be 80% — investigate first.
+
+## Pipeline / preprocessing skew for CV and NLP
+
+For non-tabular models:
+
+**Image preprocessing**:
+
+- Resize: bilinear vs bicubic, antialiasing on/off.
+- Normalisation: ImageNet means/stds (A7.2) — must match what the backbone was trained with.
+- Channel order: RGB vs BGR.
+- Crop: random crop at training, centre crop at inference.
+
+**Text preprocessing**:
+
+- Tokenizer version (different vocab between training and serving).
+- Special token handling (BOS, EOS, padding).
+- Truncation length (different in training vs serving).
+- Casing / Unicode normalisation.
+
+The same shared-library / parity-test pattern applies. For CV: use timm or HuggingFace processors at both ends. For NLP: use AutoTokenizer with explicit revision pinning.
+
+<InlineQuiz
+  question="A fraud model has 92% offline accuracy. Production accuracy on labelled samples drops to 79% in week 2 post-launch. You suspect training-serving skew. What's the most useful first investigation?"
+  options={[
+    { text: "Retrain on more data." },
+    {
+      text: "Pick 50 production requests; log the features as computed at inference; recompute the same features using the training pipeline on the same raw inputs; compare side by side. Mismatches indicate the source of skew.",
+      correct: true,
+    },
+    { text: "Switch to a different model architecture." },
+    { text: "Lower the decision threshold." },
+  ]}
+  explanation="Side-by-side feature comparison is the diagnostic for skew. If features differ, you've found the root cause and can fix the divergent pipeline. If features are identical, it's not pipeline skew — investigate label or temporal leakage, or actual data drift. Retraining without understanding the cause doesn't help. Architecture change is unrelated. Threshold tuning compensates for one symptom but doesn't fix the root."
+/>
+
+## Closing for skew
+
+Training-serving skew is the most common silent failure in production ML. Prevention is structural: single source of truth for feature logic (shared library or feature store), parity tests in CI, monitoring for divergence in production. The bug isn't usually exotic — it's a default value, a missing time filter, an encoding mismatch. The discipline of preventing it pays off in trust.
+
+The final operational lesson covers cost: making production ML economically sustainable.

@@ -1,0 +1,439 @@
+---
+title: "Experiment tracking and reproducibility"
+description: "The single most impactful MLOps practice: tracking every config, metric, and artefact of every training run, so you can reproduce, compare, and ship with confidence. W&B, MLflow, and what 'reproducible' actually means."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: experiment-tracking
+lessonCode: "A8.2"
+estMinutes: 12
+prereqs:
+  - "A8.1 The MLOps landscape"
+objectives:
+  - "Track experiments end-to-end with Weights & Biases or MLflow."
+  - "Identify the seven things every model run should log to be reproducible."
+  - "Build a comparison view across runs that actually informs decisions."
+pitfalls:
+  - "Logging only the final metrics. Without intermediate (per-epoch) logs, you can't diagnose mid-training failures."
+  - "Skipping system metadata (Python version, library versions, hardware). Without it, 'I can't reproduce this' becomes the default state."
+  - "Saving model checkpoints to /tmp. Treat them as immutable artefacts — store in a registry."
+  - "Not tagging runs by purpose. After 300 runs, you can't tell which were sweeps, fine-tunes, or production candidates."
+importantQuestions:
+  - question: "What should every training run log?"
+    shortAnswer: |
+      Seven things: hyperparameters (full config), code commit (git SHA), data version (dataset hash or commit), environment (Python + library versions), per-step metrics, final metrics on held-out, and the model checkpoint with a version ID.
+    detailed: |
+      The seven essentials, in order of importance:
+
+      1. **Full hyperparameter config**. Learning rate, batch size, model size, augmentation params, optimizer settings, schedule, regularisation. Use a structured config (YAML, dataclass, Hydra) — don't pass scattered argparse flags.
+
+      2. **Code commit (git SHA)**. Without it, you can't reproduce. Log `git rev-parse HEAD` as a string.
+
+      3. **Data version**. Hash of the dataset, path to a versioned snapshot, or DVC tag. If data is mutable, you'll be unable to compare runs over time.
+
+      4. **Environment**. Python version, key library versions (torch, transformers, etc.), CUDA, GPU model. `pip freeze` to a file; log the file.
+
+      5. **Per-step metrics**: loss, learning rate, gradient norm. Without these you can't diagnose mid-training issues (NaN, plateau, divergence).
+
+      6. **Final / per-epoch metrics on held-out**: accuracy, F1, per-class, calibration. The numbers you make decisions with.
+
+      7. **Model checkpoint with version**. Stored in a registry (W&B artefacts, MLflow registry, HuggingFace Hub, or S3 with versioning). Never `/tmp`.
+
+      W&B and MLflow handle most of this with one-line API calls. The discipline is using them consistently.
+    pitfalls:
+      - "If you can't reproduce a model from the logged metadata, the logging is incomplete. Test this periodically."
+  - question: "What's Weights & Biases and how does it compare to MLflow?"
+    shortAnswer: |
+      W&B: SaaS-first, polished UI, strong dashboards. MLflow: open-source, self-hostable, integrates with Databricks. For most teams W&B's free tier is the quickest path; MLflow when you need self-hosting or already use Databricks.
+    detailed: |
+      | Feature | W&B | MLflow |
+      | ------- | --- | ------ |
+      | Hosting | SaaS (free tier) or self-host (paid) | Self-host, free; managed via Databricks |
+      | UI quality | Polished, real-time | Functional, less slick |
+      | Multi-user, teams | Easy | Possible but more setup |
+      | Artifact tracking | Strong | Strong |
+      | Sweeps / hyperparam tuning | Built-in (Bayesian, random, grid) | Less integrated; use Optuna separately |
+      | Model registry | Yes | Yes (more enterprise-flavoured) |
+      | Cost (small team) | Free for academic / small commercial; $50-100/user/mo paid | Free if self-hosted; infra cost |
+      | Integration with PyTorch / HF / Lightning | First-class | Good, less native |
+      | Reports / sharing | Strong (interactive notebooks) | Limited |
+
+      Common pattern in 2026:
+      - **Startups, research, small teams**: W&B (free tier or paid).
+      - **Enterprises with Databricks**: MLflow.
+      - **Open source / self-hosted preference**: MLflow.
+
+      Other options:
+      - **Comet**: similar to W&B; smaller community.
+      - **Neptune**: similar; smaller.
+      - **Aim**: open-source, self-hosted, lighter than MLflow.
+      - **TensorBoard**: free, basic; for small projects.
+    pitfalls:
+      - "Don't run multiple tracking systems. Pick one and use it consistently; switching mid-project loses history."
+  - question: "What does 'reproducible' actually mean for ML?"
+    shortAnswer: |
+      Same model artefact within meaningful tolerance, given same code + data + hyperparams + environment + seed. Bit-exact reproducibility is hard (GPU non-determinism); 'statistically the same model' is the practical bar.
+    detailed: |
+      ML reproducibility has tiers:
+
+      **Bit-exact**: every weight identical. Requires `torch.manual_seed`, `torch.use_deterministic_algorithms(True)`, single GPU, no async ops. Slow and limiting; rarely achievable in distributed training.
+
+      **Statistically equivalent**: same hyperparameters, same data, same code → metrics within 0.1-0.5% on validation. The practical bar. Requires logged seed + environment.
+
+      **Roughly equivalent**: same recipe → metrics within 1-2%. Often what teams actually achieve.
+
+      What to log for statistical reproducibility:
+      - Random seed (`torch.manual_seed`, `numpy.random.seed`, `random.seed`).
+      - Library versions (`pip freeze`).
+      - Hardware (GPU type — A100 vs H100 produces different numbers due to FP32 vs TF32).
+      - Mixed precision setting (BF16 vs FP16 vs FP32).
+      - Distributed training setting (DDP vs FSDP, number of GPUs).
+
+      For LLM-fine-tuning specifically: with a fixed seed and identical environment, runs often differ by ~0.5% in validation. That's the practical floor; chase further only if it matters.
+    pitfalls:
+      - "torch.use_deterministic_algorithms(True) can slow training 2-5×. Use it for final eval / debug runs, not all training."
+  - question: "How should hyperparameter sweeps be tracked?"
+    shortAnswer: |
+      Use the tracking tool's sweep mechanism: W&B Sweeps, Optuna + MLflow, or Ray Tune. Parent-child relationship between sweep and individual runs. Search strategy (random, Bayesian, grid) chosen for the search space.
+    detailed: |
+      Sweep tooling:
+
+      **W&B Sweeps**: declarative YAML for search space + strategy. Each trial is a W&B run; parent sweep aggregates results.
+
+      ```yaml
+      method: bayes
+      metric:
+        name: val_accuracy
+        goal: maximize
+      parameters:
+        learning_rate:
+          distribution: log_uniform_values
+          min: 1e-5
+          max: 1e-3
+        batch_size:
+          values: [16, 32, 64]
+      ```
+
+      **Optuna**: Python library for Bayesian / TPE / random search. Often combined with MLflow for tracking.
+
+      **Ray Tune**: scales to distributed search; supports ASHA early stopping.
+
+      Strategies:
+      - **Random search**: surprisingly strong baseline. Use 50-100 trials.
+      - **Grid search**: only for small discrete spaces (<5 dimensions).
+      - **Bayesian / TPE**: efficient on continuous spaces, ~50% fewer trials for similar result.
+      - **Hyperband / ASHA**: early-stops bad trials; useful for expensive training.
+
+      For LLM fine-tuning where each trial is expensive: ASHA / Hyperband. For tabular models where trials are cheap: random or Bayesian with 100 trials.
+
+      Don't sweep over too many dimensions at once. >5 dimensions and search becomes ineffective.
+    pitfalls:
+      - "Log the sweep's seed (different seed per trial). Otherwise repeated sweeps give identical 'random' choices."
+  - question: "What's a model registry and why use it?"
+    shortAnswer: |
+      A versioned store of model artefacts with metadata (training data version, metrics, lineage). Replaces 'which model.pt was that?' guesswork with explicit version tags and promotion workflows.
+    detailed: |
+      Registry capabilities:
+
+      - **Versioned artefacts**: every saved model gets a version ID; old versions retained.
+      - **Metadata**: training data version, hyperparams, metrics attached.
+      - **Promotion stages**: dev → staging → production, with manual or automated promotion.
+      - **Lineage**: from data through training run to deployed model.
+      - **API access**: load by version or stage.
+
+      Examples:
+      - **W&B Artifacts**: built into W&B; track datasets and models as versioned artifacts.
+      - **MLflow Model Registry**: dev/staging/production stages, with audit log.
+      - **HuggingFace Hub**: public / private model hosting; great for sharing, less for production registry.
+      - **SageMaker Model Registry**: AWS integrated.
+      - **S3 + naming convention**: minimal-viable. Use semantic versioning in the path.
+
+      Workflow:
+      1. Training run completes; log model as artefact.
+      2. Evaluate against regression suite; if pass, promote to staging.
+      3. A/B test against current production; if better, promote to production.
+      4. Deploy from registry by version tag.
+
+      For LLMs: HuggingFace Hub is the standard for storing fine-tuned models. For internal models: W&B / MLflow registries.
+    pitfalls:
+      - "Don't keep `latest.pt` as the model anywhere. Always use explicit versions; the meaning of 'latest' drifts."
+  - question: "How do you compare experiments to make decisions?"
+    shortAnswer: |
+      Use the tracking tool's comparison view: tables filtered by tags, parallel coordinates plots, scatter plots of metric vs. config dimension. Decisions come from comparing across many runs, not from individual runs.
+    detailed: |
+      Effective comparison patterns:
+
+      **Tables of runs**: filter by tag (e.g., 'sweep-1', 'production-candidates'). Sort by metric.
+
+      **Parallel coordinates**: visualise multiple hyperparams + metric simultaneously. Spot patterns: 'lr > 1e-3 always underperforms.'
+
+      **Scatter plot**: one hyperparam (x-axis) vs. metric (y-axis). See the relationship.
+
+      **Reports / dashboards**: curated views for stakeholders. W&B Reports excel at this.
+
+      Tagging conventions:
+      - **Purpose**: 'sweep', 'fine-tune', 'production-candidate', 'baseline'.
+      - **Owner**: who ran it.
+      - **Dataset version**.
+      - **Experiment series**: 'augmentation-study-2026-q3'.
+
+      Cleanliness compounds. With 1000 runs and no tags, you're lost. With good tagging, you can compare across months.
+
+      Comparison anti-pattern: 'I ran 50 experiments and picked the best one.' Often the 'best' is noise; the underlying hyperparam doesn't have a real effect. Multiple runs per config, with seed variation, gives honest measurement.
+    pitfalls:
+      - "Don't run only one trial per config. Variance across seeds is real (often 0.3-1%). Run 3 seeds for important comparisons."
+---
+
+<TldrCallout>
+  Experiment tracking is the single highest-leverage MLOps practice. Log seven things per run: full
+  hyperparameter config, code commit, data version, environment, per-step metrics, final metrics,
+  and model artefact. Use Weights & Biases (free tier) for SaaS-first; MLflow for self-hosted or
+  Databricks. The practice of tracking turns ML from 'we got a good number once' into a
+  reproducible, comparable, shippable process.
+</TldrCallout>
+
+## What every run should log
+
+Seven things:
+
+1. **Hyperparameter config** — every knob, in a structured format (YAML, dataclass, Hydra).
+2. **Code commit** — `git rev-parse HEAD`.
+3. **Data version** — hash, snapshot ID, DVC tag.
+4. **Environment** — Python version, library versions (`pip freeze`), CUDA, GPU model.
+5. **Per-step metrics** — loss, lr, gradient norm. For diagnosing mid-training issues.
+6. **Final / per-epoch metrics on held-out** — accuracy, F1, per-class, calibration.
+7. **Model checkpoint** — saved to a registry with a version ID, not `/tmp`.
+
+W&B and MLflow handle most of this with one-line API calls. The discipline is doing it consistently.
+
+## Weights & Biases: the modern default
+
+W&B in 5 lines:
+
+```python
+import wandb
+
+wandb.init(project="my-classifier", config={"lr": 1e-4, "batch_size": 32})
+# Training loop
+for epoch in range(epochs):
+    train_loss = train_one_epoch()
+    val_metrics = evaluate()
+    wandb.log({"train_loss": train_loss, **val_metrics})
+
+# Save model
+wandb.save("model.pt")
+wandb.finish()
+```
+
+UI features:
+
+- **Run table**: every run, every metric, sortable / filterable.
+- **Charts**: live training curves; compare multiple runs.
+- **Parallel coordinates**: hyperparam → metric relationships.
+- **Reports**: curated dashboards for stakeholders.
+- **Artifacts**: versioned datasets and models with lineage.
+- **Sweeps**: declarative hyperparameter search.
+
+Free tier covers academic / small commercial. Paid: $50-100 per seat / month for teams. The cost is rarely a blocker; the value is real.
+
+## MLflow: the open-source alternative
+
+MLflow in 5 lines:
+
+```python
+import mlflow
+
+mlflow.set_experiment("my-classifier")
+with mlflow.start_run():
+    mlflow.log_params({"lr": 1e-4, "batch_size": 32})
+    for epoch in range(epochs):
+        train_loss = train_one_epoch()
+        val_metrics = evaluate()
+        mlflow.log_metric("train_loss", train_loss, step=epoch)
+        for k, v in val_metrics.items():
+            mlflow.log_metric(k, v, step=epoch)
+    mlflow.log_artifact("model.pt")
+```
+
+Self-hostable. Free (infrastructure cost only). Integrates natively with Databricks.
+
+Less polished UI than W&B, but adequate. Better choice when self-hosting is required or you're already in the Databricks ecosystem.
+
+| When                                       | Use                                                |
+| ------------------------------------------ | -------------------------------------------------- |
+| Quick start, small team, SaaS OK           | W&B (free tier)                                    |
+| Self-hosted required (privacy, compliance) | MLflow                                             |
+| Already on Databricks                      | MLflow                                             |
+| Academic / research-heavy                  | W&B (free for academic)                            |
+| Massive scale, custom workflows            | Roll your own (S3 + structured logs) — last resort |
+
+## Reproducibility tiers
+
+| Tier                         | Means                          | How to achieve                                                                            |
+| ---------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- |
+| **Bit-exact**                | Every weight identical         | `torch.manual_seed`, `torch.use_deterministic_algorithms(True)`, single GPU, no async ops |
+| **Statistically equivalent** | Metrics within 0.1-0.5% on val | Logged seed + identical environment                                                       |
+| **Roughly equivalent**       | Metrics within 1-2%            | Logged hyperparams + data                                                                 |
+
+Bit-exact is slow and limiting; rarely needed in production. Statistically equivalent is the practical bar.
+
+Things that affect reproducibility even with logged seed:
+
+- **GPU model** (A100 vs H100): TF32 / FP32 produce different rounding.
+- **CUDA version**: minor numerical differences.
+- **PyTorch version**: ops change behaviour across versions.
+- **Number of workers** in DataLoader (affects ordering).
+- **Distributed setup** (DDP vs FSDP, number of GPUs).
+- **BF16 / FP16 / FP32** precision.
+
+Log all of these. When debugging a "I can't reproduce" issue, check one at a time.
+
+<AnalogyCallout>
+  Experiment tracking is the lab notebook for ML. Without it, you have results but no way to
+  recreate them, compare them, or trust them. With it, every run is a citable, comparable,
+  replicable artefact. The cost is minor — one-line logging calls. The value is the difference
+  between "we got 85% once" and "we know what produces 85% and can do it again."
+</AnalogyCallout>
+
+## Hyperparameter sweeps
+
+Search the hyperparameter space systematically:
+
+**W&B Sweeps** (declarative):
+
+```yaml
+method: bayes
+metric:
+  name: val_f1
+  goal: maximize
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.1
+  batch_size:
+    values: [16, 32, 64, 128]
+```
+
+Run: `wandb sweep config.yaml` then `wandb agent <sweep-id>` on each worker.
+
+**Optuna** (programmatic):
+
+```python
+import optuna
+
+def objective(trial):
+    lr = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
+    wd = trial.suggest_float("wd", 0.001, 0.1, log=True)
+    bs = trial.suggest_categorical("bs", [16, 32, 64, 128])
+    return train_and_evaluate(lr, wd, bs)
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=50)
+```
+
+Search strategies:
+
+| Strategy             | When                                                 |
+| -------------------- | ---------------------------------------------------- |
+| **Random**           | Surprisingly strong baseline; use 50-100 trials      |
+| **Grid**             | Only small discrete spaces (<5 dims)                 |
+| **Bayesian / TPE**   | Continuous spaces; ~50% fewer trials for same result |
+| **Hyperband / ASHA** | Expensive training; early-stops bad trials           |
+
+For LLM fine-tuning where each trial is 30 min - 6 hours: ASHA or Hyperband. For cheap tabular: random or Bayesian with 100 trials.
+
+**Don't sweep over too many dimensions at once.** Past 5 dimensions, search becomes ineffective. Fix some hyperparams to defaults, sweep the important ones.
+
+## Model registry: versioned artefacts
+
+A model registry stores trained models with:
+
+- Version IDs (semantic or auto-incrementing).
+- Metadata: training data version, hyperparams, metrics, lineage.
+- Promotion stages: dev → staging → production.
+- API access by version or stage.
+
+Options:
+
+| Registry                     | Best for                                  |
+| ---------------------------- | ----------------------------------------- |
+| **W&B Artifacts**            | Already on W&B                            |
+| **MLflow Model Registry**    | Already on MLflow / Databricks            |
+| **HuggingFace Hub**          | Public models or fine-tuned LLMs          |
+| **SageMaker Model Registry** | AWS-native                                |
+| **Vertex AI Model Registry** | GCP-native                                |
+| **S3 + naming convention**   | Minimal viable; semantic versioning paths |
+
+For most teams: use your tracking tool's built-in registry (W&B Artifacts or MLflow). Reach for SageMaker / Vertex if you're already on those clouds.
+
+**Never use `model_latest.pt`**. Always explicit versions; the meaning of "latest" drifts.
+
+<InlineQuiz
+  question="You're debugging a production model that performed differently than your training run reported. You check the registry: the model artefact is there. You check W&B: the run config is logged. What else do you most need to confirm?"
+  options={[
+    { text: "Whether the GPU was an A100 or H100." },
+    {
+      text: "Whether the deployed code is the same as the training code (same git SHA), and whether the data preprocessing is identical between training and inference.",
+      correct: true,
+    },
+    { text: "How many other users were on W&B at the same time." },
+    { text: "Whether the model is gzipped." },
+  ]}
+  explanation="The two most common sources of train-deploy gaps: (1) code diverged after training — different preprocessing, different output post-processing; (2) training-serving skew in features (covered in A8.7). Hardware and library versions matter less than ensuring the exact same code path runs at training and inference. Always log the git SHA at training and verify it matches the deployed code. Hardware affects bit-exactness, not the kind of large quality gap that prompts debugging."
+/>
+
+## Tagging and organisation
+
+After 100 runs, organisation matters. Tag conventions:
+
+- **Purpose**: `sweep`, `fine-tune`, `baseline`, `production-candidate`, `ablation`.
+- **Series**: `augmentation-study-2026-q3`.
+- **Owner**: who ran it.
+- **Dataset version**: `data-v3.2`.
+- **Model family**: `convnext-base`, `vit-l`.
+
+In W&B / MLflow, use the tagging API consistently. Document the tag taxonomy in your team wiki.
+
+## Comparison views
+
+Decisions come from comparing across runs, not from individual runs.
+
+| View                     | Use for                                              |
+| ------------------------ | ---------------------------------------------------- |
+| **Run table**            | Sort by metric; filter by tag                        |
+| **Parallel coordinates** | Multi-hyperparam patterns ("lr > 1e-3 always loses") |
+| **Scatter plot**         | One hyperparam vs. metric                            |
+| **Reports / dashboards** | Curated views for stakeholders                       |
+| **Diff view**            | Compare 2-3 runs across all metrics                  |
+
+**Run multiple seeds for important comparisons**. Variance across seeds is real (0.3-1% on most benchmarks). One trial per config doesn't tell you the underlying hyperparam matters; it tells you about randomness.
+
+For final candidate models: run 3-5 seeds; report mean ± std.
+
+<InlineQuiz
+  question="True or false: tracking experiments costs more time than it saves for small teams just starting with ML."
+  options={[
+    { text: "True — small teams should skip tracking until they have more runs to compare." },
+    {
+      text: "False — tracking pays for itself the first time you need to reproduce or debug. The cost is one-line logging calls; the savings are hours-to-days of investigation when something goes wrong.",
+      correct: true,
+    },
+    { text: "True if using W&B; false if using MLflow." },
+    { text: "False because the AWS bill is the only cost that matters." },
+  ]}
+  explanation="The cost of tracking is minimal — adding `wandb.log(...)` calls to existing training code. The cost of NOT tracking is finding out months later that you can't reproduce a model, can't compare two configs, or can't explain why a deployed model behaves differently than expected. Tracking is cheapest to add at the start; retrofitting later means losing months of history. Every team should start tracking from day one."
+/>
+
+## Closing for experiment tracking
+
+The discipline of tracking turns ML from "we got 85% once" into a reproducible, comparable, shippable process. The cost is one-line API calls; the value is days of debugging avoided downstream.
+
+For most teams in 2026: W&B for SaaS, MLflow for self-hosted, log seven essentials per run, use a model registry with explicit versions, tag aggressively, run multiple seeds for important comparisons.
+
+The next lesson moves from tracking to the data side: versioning datasets and managing features.

@@ -1,0 +1,483 @@
+---
+title: "Data versioning and feature stores"
+description: "Code without data isn't reproducible. The tooling for treating datasets as versioned artefacts (DVC, LakeFS) and managing features across training and serving (Feast, Tecton)."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: data-versioning-feature-stores
+lessonCode: "A8.3"
+estMinutes: 11
+prereqs:
+  - "A8.2 Experiment tracking and reproducibility"
+  - "A2.8 Feature engineering and selection"
+objectives:
+  - "Version datasets with DVC or LakeFS for ML reproducibility."
+  - "Identify when a feature store is justified and when it's overkill."
+  - "Prevent training-serving feature skew via shared feature definitions."
+pitfalls:
+  - "Storing datasets only on a shared drive. No versioning, no audit trail, eventually a model trained on data nobody can recover."
+  - "Building a feature store on day one. Most teams don't have the cross-team coordination problem it solves."
+  - "Treating data versioning as 'just git LFS.' Datasets too large for git-LFS need DVC or LakeFS."
+  - "Ignoring data lineage. Without knowing which raw data produced a feature, debugging is impossible."
+importantQuestions:
+  - question: "Why do you need data versioning beyond git?"
+    shortAnswer: |
+      Git is built for code (text, small files); datasets are large binaries (images, parquet, embeddings). Git-LFS is a half-measure. DVC, LakeFS, and similar tools handle data-scale storage + content-addressed versioning + integration with Git for metadata.
+    detailed: |
+      Git's design assumptions break down for ML data:
+
+      - **File size**: Git assumes diffable text. Large binaries (images, video, parquet) make repos slow and bloated.
+      - **Volume**: hundreds of GB of training data don't fit in a git repo.
+      - **Mutability**: data warehouses change continuously; git versioning model doesn't match.
+      - **Lineage**: ML needs "which raw events produced this feature?" — Git tracks files, not derivations.
+
+      Tooling options:
+
+      | Tool | Best for | Notes |
+      | ---- | -------- | ----- |
+      | **git-LFS** | <10 GB datasets | Stored in S3, references in git |
+      | **DVC** | Datasets, models, pipelines | Git-like CLI; works with S3 / GCS / Azure |
+      | **LakeFS** | Big data lakes | Git-like branching on data lakes |
+      | **Pachyderm** | Pipeline-driven versioning | Versions data + the pipeline that produced it |
+      | **Quilt** | Dataset packages | Versioned, discoverable data |
+      | **HuggingFace Datasets** | Public / community datasets | Hub-hosted, easy sharing |
+
+      Most ML teams in 2026 use one of: DVC, HuggingFace Datasets, or a versioned S3 / GCS bucket with strict naming conventions. Feature stores (Feast, Tecton) overlap but solve a different problem.
+    pitfalls:
+      - "DVC is a thin abstraction over cloud storage. It doesn't replace data lakes; it complements them with versioning."
+  - question: "What's DVC and how do you use it?"
+    shortAnswer: |
+      Data Version Control: git-like CLI for versioning large files. Stores content in cloud (S3, GCS), references in git. `dvc add data/`, `dvc push`. Works alongside git for the code.
+    detailed: |
+      DVC workflow:
+
+      ```bash
+      # Initialise (once per project)
+      git init
+      dvc init
+      dvc remote add -d storage s3://my-bucket/dvc-storage
+
+      # Add a dataset
+      dvc add data/train.parquet
+      git add data/train.parquet.dvc .gitignore
+      git commit -m "Add train dataset v1"
+      dvc push  # uploads to S3
+
+      # Modify and reversion
+      # ... update train.parquet ...
+      dvc add data/train.parquet
+      git commit -am "Update train dataset to v2"
+      dvc push
+
+      # Checkout an older version
+      git checkout <old_commit>
+      dvc pull
+      # data/train.parquet is now the old version
+      ```
+
+      DVC pipelines (`dvc.yaml`) can also define preprocessing steps; running the pipeline produces versioned intermediate artifacts.
+
+      Pros:
+      - Simple mental model (git-like).
+      - Cloud-agnostic.
+      - Free (open source).
+
+      Cons:
+      - Per-developer setup overhead.
+      - Less powerful than a data lake for large-scale aggregation.
+    pitfalls:
+      - "Don't add raw production logs to DVC. Use it for curated, labelled training datasets."
+  - question: "What's a feature store and when do you need one?"
+    shortAnswer: |
+      A feature store stores precomputed features in two synchronised places — offline (for training) and online (for low-latency serving). Prevents training-serving skew. Worth the investment when many models share features or when feature engineering is cross-team.
+    detailed: |
+      The problem a feature store solves:
+
+      Without a feature store, feature engineering happens twice:
+      1. In a Python notebook for training.
+      2. In a serving service for production.
+
+      The two implementations drift. Training-serving skew sneaks in.
+
+      A feature store:
+
+      - **Defines** features once (a spec / DSL).
+      - **Computes** them in batch (for training) and streaming / online (for serving).
+      - **Serves** them with low-latency lookup.
+      - **Versions** feature definitions.
+
+      Standard tools:
+
+      | Tool | Notes |
+      | ---- | ----- |
+      | **Feast** | Open source; most popular for self-hosted |
+      | **Tecton** | Commercial; built by Uber Michelangelo team |
+      | **Vertex AI Feature Store** | GCP managed |
+      | **SageMaker Feature Store** | AWS managed |
+      | **Hopsworks** | Open source + commercial |
+
+      When to use:
+      - **Multiple models share features** (e.g., recommendation + churn + LTV all use `user_30d_purchases`).
+      - **Online serving** requires sub-100ms feature lookup.
+      - **Feature engineering is cross-team** (data engineers + ML engineers).
+      - **Auditability / compliance** requires feature lineage.
+
+      When to skip:
+      - **Single-model team**: just version the dataset with DVC; compute features inline.
+      - **Batch-only inference**: no online serving need.
+      - **Tabular ML with a few features**: overkill.
+    pitfalls:
+      - "Feature stores have non-trivial operational cost. Adopt when the coordination problem exists, not before."
+  - question: "How do you prevent training-serving feature skew?"
+    shortAnswer: |
+      Single source of truth for feature definitions: either a feature store, or shared code library used in both training and serving. Test that the same input produces the same feature value in both pipelines.
+    detailed: |
+      Training-serving skew is the single most common silent failure in production ML.
+
+      Causes:
+      - Feature computed differently in training (pandas) vs. serving (production code).
+      - Different default values for missing data.
+      - Different timestamp logic (training: data from past; serving: data from now).
+      - Different feature scaling (training: stats from full training set; serving: stats from a sample).
+
+      Prevention:
+      - **Single source of truth**: feature store, or shared library with both training and serving as consumers.
+      - **Test feature parity**: for each feature, run identical input through both pipelines; assert equal output.
+      - **Log feature values at inference**: compare to feature values used at training (sample). Catch drift early.
+      - **Featurize raw data, not derived data, at serving time**: serving should compute features from the same raw inputs that training did, with the same code.
+
+      In practice: build the feature pipeline once (Python module, dbt SQL, feature store spec). Import / call it from both training and serving. Test that integration daily.
+
+      The full lesson on this is A8.7.
+    pitfalls:
+      - "Feature parity tests should run in CI on every code change to the feature pipeline."
+  - question: "What's data lineage and why does it matter?"
+    shortAnswer: |
+      Tracking which raw data, transformations, and code produced each derived artefact (feature, model, prediction). Essential for debugging, compliance, and audits.
+    detailed: |
+      Lineage links:
+
+      - **Raw data** (event logs, transactions) →
+      - **Cleaned data** (parquet snapshots) →
+      - **Features** (computed by feature pipeline) →
+      - **Training dataset** (joined features + labels) →
+      - **Model** (trained on the training dataset) →
+      - **Predictions** (model applied to production features).
+
+      Why it matters:
+      - **Debugging**: "this prediction looks wrong; which features fed it; which training data produced the model?"
+      - **Compliance**: GDPR / HIPAA require explaining how decisions were made.
+      - **Reproducibility**: rebuild a model end-to-end requires lineage.
+      - **Impact analysis**: "if we delete this raw event, what models / features break?"
+
+      Tools:
+      - **OpenLineage**: open standard for lineage metadata.
+      - **dbt**: SQL-based pipelines with built-in lineage.
+      - **Apache Atlas / Datahub**: enterprise lineage / catalog.
+      - **Feast**: feature lineage built in.
+      - **W&B Artifacts**: lineage between dataset and model artifacts.
+
+      For most teams: dbt for SQL pipelines + W&B Artifacts for the ML side covers needs.
+    pitfalls:
+      - "Manual lineage in spreadsheets always goes stale. Use tools that auto-generate from the pipeline definitions."
+  - question: "Should training data be immutable?"
+    shortAnswer: |
+      Yes for the version used in any deployed model. Mutable training data + retrained model = irreproducible history. Snapshot training data per training run; keep snapshots for as long as the model is in production.
+    detailed: |
+      The pattern:
+
+      ```
+      Production data warehouse  →  Snapshot (versioned)  →  Training  →  Model
+                       (always changing)        (immutable)        (run X)
+      ```
+
+      Each snapshot is a frozen version. Training run X is associated with snapshot at time t_X.
+
+      Why immutable:
+      - Reproducibility: rebuild model X requires the exact data it was trained on.
+      - Debugging: "model X is biased on group Y" — was Y in the training data?
+      - Compliance: regulators may require the training set for audit.
+
+      Implementation:
+      - **DVC**: snapshot via `dvc add` + commit + push.
+      - **Data lakes** (Iceberg, Delta, Hudi): snapshot via table version.
+      - **Versioned S3 bucket**: enable versioning; reference by version ID.
+
+      Retention: keep snapshots while the corresponding model is in production. After deprecation: keep for the audit window (often 7 years for regulated industries).
+
+      Storage cost: parquet datasets are typically 1-100 GB. Storing 12 monthly snapshots is cheap compared to compute.
+    pitfalls:
+      - "Don't snapshot raw event streams (too large). Snapshot the curated training-ready dataset."
+---
+
+<TldrCallout>
+  Data versioning treats datasets as first-class versioned artefacts — necessary for reproducibility
+  because code without data isn't enough. Use DVC (git-like, simple), LakeFS (data lake branching),
+  or versioned S3 with naming conventions. Feature stores (Feast, Tecton) solve a different problem:
+  managing shared features across training and serving. Adopt when multiple models share features or
+  online serving demands low-latency feature lookup; skip when you have a single model and inline
+  feature engineering.
+</TldrCallout>
+
+## Data versioning: code + data + model
+
+A reproducible ML system needs three versioned things:
+
+| Versioned | Tool                                            |
+| --------- | ----------------------------------------------- |
+| Code      | Git                                             |
+| Data      | DVC, LakeFS, HuggingFace Datasets, versioned S3 |
+| Model     | Tracking tool's registry (W&B, MLflow)          |
+
+Without data versioning, "I can't reproduce this model" is your default state.
+
+## DVC: git-like for data
+
+DVC is the most-used data-versioning tool for ML in 2026:
+
+```bash
+# Initial setup
+dvc init
+dvc remote add -d storage s3://my-bucket/dvc-storage
+
+# Version a dataset
+dvc add data/train.parquet
+git add data/train.parquet.dvc
+git commit -m "Add v1 training data"
+dvc push  # uploads actual data to S3
+
+# Switch versions
+git checkout <previous-commit>
+dvc pull  # downloads matching data
+```
+
+Strengths:
+
+- Simple mental model (git-like).
+- Cloud-agnostic (S3, GCS, Azure, on-prem).
+- Open source, free.
+
+Weaknesses:
+
+- Per-developer setup overhead.
+- Not a data lake — doesn't replace BigQuery, Snowflake, Iceberg.
+
+DVC pipelines (`dvc.yaml`) define preprocessing steps; running the pipeline produces versioned intermediate artifacts. Useful for reproducible feature engineering.
+
+## LakeFS and the data lake approach
+
+For teams with large data lakes (Iceberg, Delta, Hudi on S3 / GCS), **LakeFS** brings git-like branching to the lake itself:
+
+- **Branch** the data lake to experiment without affecting production.
+- **Commit** snapshot states.
+- **Tag** versions for reproducibility.
+- **Diff** between branches.
+
+Pros:
+
+- Operates at data-lake scale (petabytes).
+- Supports atomic operations across many files.
+- Branches isolate experiments.
+
+Cons:
+
+- Heavier infrastructure than DVC.
+- Newer tool; ecosystem still growing.
+
+Choose by scale:
+
+- **<100 GB datasets**: DVC.
+- **Multi-TB lakes**: LakeFS or table-format versioning (Iceberg / Delta directly).
+
+## HuggingFace Datasets
+
+For shared / public datasets:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("imdb", split="train")
+# Pulls from HuggingFace Hub; cached locally
+```
+
+For private datasets, push to Hub with permissions:
+
+```python
+ds.push_to_hub("my-org/my-private-dataset", private=True)
+```
+
+Pros:
+
+- Easy sharing across team.
+- Standard format (Apache Arrow, parquet).
+- Integration with `transformers` and other libraries.
+- Version controlled by commit hash on Hub.
+
+Cons:
+
+- Storage cost on Hub for very large datasets.
+- Privacy / compliance concerns for sensitive data (use private spaces or self-host).
+
+For research / public datasets: HuggingFace Hub is the standard. For internal proprietary data: DVC or versioned cloud storage.
+
+## Feature stores: what they actually do
+
+A feature store stores precomputed features in two synchronised places:
+
+```
+Source data → Feature pipeline → Offline store (training) → Model training
+                              └→ Online store  (serving)  → Production inference
+```
+
+The **same feature definition** produces features in both stores. Training-serving skew eliminated.
+
+Examples (2026):
+
+| Tool                         | Notes                                        |
+| ---------------------------- | -------------------------------------------- |
+| **Feast**                    | Open source; most popular self-hosted choice |
+| **Tecton**                   | Commercial; built by Uber Michelangelo team  |
+| **Vertex AI Feature Store**  | GCP managed                                  |
+| **SageMaker Feature Store**  | AWS managed                                  |
+| **Hopsworks**                | Open + commercial; mature                    |
+| **Databricks Feature Store** | Native to Databricks                         |
+
+A Feast definition:
+
+```python
+from feast import FeatureView, Field, FileSource
+from feast.types import Float64, Int64
+
+user_features = FeatureView(
+    name="user_features",
+    entities=[user],
+    schema=[
+        Field(name="purchases_30d", dtype=Int64),
+        Field(name="avg_order_value_30d", dtype=Float64),
+    ],
+    source=FileSource(path="user_features.parquet", timestamp_field="event_timestamp"),
+)
+```
+
+At training, retrieve point-in-time correct features. At serving, low-latency lookup of the same features.
+
+## When a feature store is worth it
+
+| Situation                                            | Worth a feature store?                 |
+| ---------------------------------------------------- | -------------------------------------- |
+| Single model, batch-only inference                   | No — overkill                          |
+| Multiple models, all batch                           | Maybe — versioned datasets may suffice |
+| Multiple models, mix of batch + online               | Yes                                    |
+| Cross-team feature engineering (data eng + ML)       | Yes                                    |
+| Compliance / audit requirements                      | Yes                                    |
+| Online inference, sub-100ms latency on many features | Yes                                    |
+| Three engineers, one model                           | No                                     |
+
+Most small / mid teams don't need a feature store. Versioned datasets with shared feature engineering code in a Python package is enough.
+
+When you do need it: the operational complexity (offline + online stores + sync infrastructure) is significant. Plan accordingly.
+
+<AnalogyCallout>
+  A feature store is like a shared inventory system across multiple stores. If your shop is small
+  and centralised, you don't need it — you just know what's on the shelves. When you have ten
+  branches across two regions all selling overlapping products, the inventory system stops being
+  optional. Same with features: small team, single model — skip it. Multiple teams, many models,
+  online serving — adopt it.
+</AnalogyCallout>
+
+## Data lineage
+
+Lineage tracks the chain from raw data to deployed prediction:
+
+```
+Raw events  →  Cleaned data  →  Features  →  Training set  →  Model  →  Predictions
+   (logs)       (parquet)      (computed)      (joined)     (trained)  (in production)
+```
+
+Why it matters:
+
+- **Debugging**: trace a wrong prediction back to its inputs.
+- **Compliance**: GDPR, HIPAA require explaining decisions.
+- **Reproducibility**: rebuild end-to-end requires lineage.
+- **Impact analysis**: deleting an upstream data source — what breaks?
+
+Tools:
+
+- **OpenLineage**: open standard for lineage metadata.
+- **dbt**: SQL-based data pipelines with auto-generated lineage.
+- **Apache Atlas, Datahub**: enterprise data catalogs.
+- **W&B Artifacts**: lineage between datasets and models within ML workflows.
+
+For most teams: dbt (SQL pipelines) + W&B Artifacts (ML artifacts) covers it. Enterprise catalog only when compliance demands.
+
+## Immutable training data
+
+Production data warehouses change continuously. For any model in production, you need the frozen training data that produced it.
+
+```
+Production warehouse  →  Versioned snapshot (immutable)  →  Training  →  Model
+   (always changing)                                                       (run X)
+```
+
+Tag each snapshot:
+
+- **Iceberg / Delta**: native table versioning by timestamp or snapshot ID.
+- **DVC**: `dvc add` snapshots; git commit references the version.
+- **Versioned S3**: enable bucket versioning; reference by version ID.
+
+Retention: keep snapshots while the corresponding model is in production. After deprecation: keep for the audit window (often 7 years in regulated industries).
+
+A common 2026 pattern:
+
+1. Daily extract from production warehouse to `s3://data/snapshots/2026-06-15/`.
+2. Train model X on `snapshots/2026-06-15/`.
+3. Register model X with reference to snapshot path.
+4. Audit / reproducibility: pull `snapshots/2026-06-15/` and retrain.
+
+<InlineQuiz
+  question="Your team trained a fraud model on 'last 90 days of transactions' three months ago. The model is in production. A regulator asks for the training data. What's the right setup to have in place?"
+  options={[
+    { text: "Pull 'last 90 days from production' today and hand over." },
+    {
+      text: "Provide the immutable snapshot used at training (e.g., `snapshots/2026-03-15/`) — same data the model was trained on. This is why you take snapshots in the first place.",
+      correct: true,
+    },
+    { text: "Apologize; data is unavailable." },
+    { text: "Retrain the model and submit the new training data." },
+  ]}
+  explanation="Production data is mutable; 'last 90 days today' is not the data the model was trained on. The snapshot system gives you the immutable training data tied to the deployed model. This is exactly why data versioning matters for compliance. Without snapshots, regulatory or audit requests are answered with guesses. Retraining doesn't help — you need the data the *original* model used."
+/>
+
+## The pragmatic minimum
+
+For a small team in 2026:
+
+1. **Snapshot training data** to a versioned S3 path per training run.
+2. **DVC** or **HuggingFace Datasets** for curated datasets shared across the team.
+3. **Shared Python module** for feature engineering used by training and serving (skip feature store).
+4. **W&B Artifacts** for lineage from snapshot to model.
+
+That's it. No feature store. No data lake versioning. Reproducibility achieved.
+
+When you grow: add LakeFS or Iceberg for big-data; add Feast / Tecton when feature coordination becomes painful.
+
+<InlineQuiz
+  question="A 10-person ML team is building a customer-LTV model. They already have a Snowflake warehouse with cleaned data. They're not online-serving — predictions go to a dashboard daily. Should they adopt a feature store?"
+  options={[
+    { text: "Yes — every modern ML team needs one." },
+    {
+      text: "Not yet. They have one model, batch-only inference, and a warehouse handles their feature engineering. Feature stores solve cross-team / online-serving problems they don't have. Revisit when multiple models share features or online serving becomes a need.",
+      correct: true,
+    },
+    { text: "Yes — required for compliance." },
+    { text: "No, but they should buy Databricks instead." },
+  ]}
+  explanation="Feature stores are valuable when (a) multiple models share features, (b) online serving needs sub-100ms lookup, or (c) feature engineering crosses team boundaries. None apply here. A single batch-LTV model with warehouse-based features is well-served by SQL + a snapshot pattern. Feature stores have real operational overhead; adopt when the coordination problem exists, not pre-emptively."
+/>
+
+## Closing for data versioning
+
+Data versioning is a precondition for reproducibility. DVC for small projects; LakeFS / Iceberg for large; HuggingFace Datasets for shared. Feature stores are a different concern — adopt only when their specific problems (shared features, online serving) exist.
+
+The next lesson moves from data and tracking to the model deployment step: packaging and serving.

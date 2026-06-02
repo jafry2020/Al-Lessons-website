@@ -1,0 +1,515 @@
+---
+title: "Capstone walkthrough: hybrid CV + NLP support triage"
+description: "A second end-to-end walkthrough: a support ticket triage system that combines text understanding (LLM + embeddings) and image understanding (VLM) to route tickets, suggest responses, and identify high-priority issues."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: capstone
+moduleLabel: "Capstone · End-to-end ML system design"
+lesson: walkthrough-support-triage
+lessonCode: "A9.3"
+estMinutes: 17
+prereqs:
+  - "A9.2 Capstone walkthrough: fraud detection"
+  - "A6.6 Semantic search and retrieval (RAG)"
+  - "A7.6 Vision-language models: CLIP, SigLIP, LLaVA, GPT-4V"
+objectives:
+  - "Design a multimodal ML system using the 7-step framework."
+  - "Combine LLM API, fine-tuned encoder, embedding retrieval, and VLM in one production pipeline."
+  - "Reason about cost trade-offs across multiple model components."
+pitfalls:
+  - "Defaulting to GPT-4o for everything. Many sub-tasks are cheaper with fine-tuned models or embeddings."
+  - "Building everything in one monolithic LLM call. Decompose into stages with clear contracts; each can be evaluated and replaced independently."
+  - "Treating multimodal as 'just call a VLM.' Often a CLIP-based classifier handles image sub-tasks at 100× lower cost."
+  - "Ignoring tail-case behaviour. Multimodal pipelines have many components; failure modes multiply."
+importantQuestions:
+  - question: "What's the problem framing?"
+    shortAnswer: |
+      Triage 10k incoming support tickets per day. Each has text (the user's message) and often images (screenshots, photos). Output: category (billing/technical/account/etc.), priority (low/medium/high), draft response (for routine cases), and routing to the right team / agent.
+    detailed: |
+      The detailed framing:
+
+      **Business context**: SaaS company; 10k support tickets/day. Currently triaged by humans (1-2 minutes each = 100-200 hours of agent time per day). Goal: automate routine triage; surface high-priority issues; suggest draft responses for routine inquiries.
+
+      **The decisions / outputs per ticket**:
+      - **Category** (8 classes: billing, technical, account, integration, feature_request, bug_report, refund, other).
+      - **Priority** (low / medium / high — based on urgency, customer tier, sentiment).
+      - **Draft response** (for routine categories: billing FAQ, common technical issues). Agent reviews and sends.
+      - **Routing**: assigns to the right team queue.
+
+      **Constraints**:
+      - Latency: <30 seconds (acceptable since user already submitted).
+      - Throughput: 10k/day = ~7/min average; peaks at 50/min.
+      - Cost budget: <$0.05 per ticket.
+      - Quality: agent review remains; ML is decision support, not autonomous.
+      - Privacy: customer data on-premises preferred; no sending PII to public APIs without redaction.
+
+      **Why ML**: scale (1000s of tickets/day), repetitive categorisation, structured outputs amenable to ML.
+
+      **What's NOT in scope**: autonomous responses (agent always reviews). Complex multi-turn conversation (just initial triage).
+    pitfalls:
+      - "Don't frame as 'replace agents.' Frame as 'support agents — automate triage, surface priorities, suggest drafts.' Agents stay in loop."
+  - question: "What are the success metrics?"
+    shortAnswer: |
+      Per task: classification F1 (per category), priority accuracy (especially recall on 'high'), draft acceptance rate (% drafts agent uses with minimal edits). Plus operational: median time-to-route, agent satisfaction score.
+    detailed: |
+      Multi-task system → multi-metric.
+
+      **Per ML task**:
+      - **Category**: macro F1 across 8 classes; per-class F1; confusion matrix.
+      - **Priority**: precision / recall on 'high' (most critical — missing one is bad); accuracy on 'low/medium'.
+      - **Draft response**: agent acceptance rate (sent without edits, with minor edits, rewritten, dismissed). LLM-as-judge with human-validated rubric on a sample.
+      - **Image understanding** (when image present): per-task F1 (e.g., "is this a screenshot of an error message?").
+
+      **Operational**:
+      - Time-to-triage (target: <30 sec).
+      - Cost per ticket.
+      - Throughput (tickets / agent / day).
+      - Agent satisfaction (quarterly survey).
+
+      **Business KPI**:
+      - Tickets resolved per agent per day.
+      - Customer satisfaction (CSAT).
+      - High-priority issue response time.
+
+      Ladder: ML metric → operational metric → business KPI. Each must correlate with the next. If draft acceptance is high but CSAT drops, the drafts may be polite but unhelpful.
+    pitfalls:
+      - "Draft acceptance rate alone is misleading. Agents may accept polite-sounding bad drafts. Sample agent-accepted drafts for human quality review."
+  - question: "What data do you have / need?"
+    shortAnswer: |
+      Historical tickets with text + images + agent-assigned categories + agent responses + outcomes (CSAT). 50k-500k labelled tickets typical for a SaaS. Images often diverse (screenshots, photos, mobile/desktop).
+    detailed: |
+      **Data sources**:
+      - Ticket text (user message + agent response + threading).
+      - Attached images / screenshots.
+      - Agent-assigned categories (labels for category model).
+      - Agent-assigned priority (labels for priority model).
+      - Agent's draft response (training data for response generator).
+      - Customer metadata: tier, account age, recent activity.
+      - Outcome: CSAT score, resolution time.
+
+      **Volume**: 50k-500k labelled tickets for a mid-sized SaaS (years of accumulated data).
+
+      **Data quality concerns**:
+      - Category labels: agent inconsistency (different agents pick different categories for similar tickets). Use majority vote or curated subset for training.
+      - Priority labels: subjective; outcomes (CSAT) provide a secondary signal.
+      - Privacy: tickets contain PII (names, emails, payment info). Redact before training.
+      - Image quality: screenshots have legible text; photos may be blurry. OCR sometimes useful.
+
+      **Lineage**:
+      - Tickets immutable once closed; safe for training.
+      - Versioned snapshots monthly for training cohort.
+
+      **Compliance**:
+      - GDPR: right to deletion; remove ticket from training corpus on user request.
+      - Data residency: train on-prem or in correct region.
+    pitfalls:
+      - "Agent-assigned labels are noisy. Don't expect more than 80-85% accuracy ceiling; agents themselves disagree on edge cases."
+  - question: "What's the model architecture?"
+    shortAnswer: |
+      Decomposed pipeline: (1) Fine-tuned ModernBERT for category classification; (2) Fine-tuned encoder + outcome features for priority; (3) RAG retrieval over historical resolved tickets + LLM generation for draft response; (4) VLM (Claude vision or LLaVA) for image-text combined understanding when images present.
+    detailed: |
+      Pipeline architecture:
+
+      ```
+      Ticket arrives (text + maybe image)
+              ↓
+      ┌─────────────────────────────────────────┐
+      │ Preprocessing:                           │
+      │  - PII redaction                         │
+      │  - Image: extract via SigLIP encoder    │
+      │  - Text: clean, tokenize                 │
+      └─────────────────────────────────────────┘
+              ↓
+      ┌─────────────────────────────────────────┐
+      │ Stage 1: Category classification        │
+      │  Fine-tuned ModernBERT (text only)       │
+      │  Output: category + confidence           │
+      └─────────────────────────────────────────┘
+              ↓
+      ┌─────────────────────────────────────────┐
+      │ Stage 2: Priority classification         │
+      │  Fine-tuned encoder + customer features  │
+      │  Output: priority + confidence           │
+      └─────────────────────────────────────────┘
+              ↓
+      ┌─────────────────────────────────────────┐
+      │ Stage 3 (if image): VLM image analysis  │
+      │  Claude vision or LLaVA                 │
+      │  Output: structured image description    │
+      └─────────────────────────────────────────┘
+              ↓
+      ┌─────────────────────────────────────────┐
+      │ Stage 4: Draft response                  │
+      │  RAG: retrieve top-5 similar resolved   │
+      │       tickets by embedding similarity    │
+      │  Generate: GPT-4o-mini with retrieved   │
+      │           context + structured output    │
+      └─────────────────────────────────────────┘
+              ↓
+      Route to appropriate team queue.
+      ```
+
+      **Why decomposed**:
+      - Each stage has clear contract → easier to evaluate / replace.
+      - Cheaper models on easier sub-tasks.
+      - Cost: ~$0.01 per ticket (mostly from RAG + GPT-4o-mini).
+      - Replaceable: e.g., upgrade GPT-4o-mini to GPT-4o for VIP customers.
+
+      **Why not monolithic VLM**:
+      - GPT-4V on every ticket: ~$0.05-0.10 per ticket = $500-1000/day = $15k-30k/month. Hits cost budget.
+      - Decomposed pipeline does the same for $100/day.
+      - Decomposed also gives per-stage observability.
+    pitfalls:
+      - "Don't decompose endlessly. Each component adds latency and operational complexity. 4-5 stages is the right balance for this kind of pipeline."
+  - question: "How do you evaluate this multi-component system?"
+    shortAnswer: |
+      Per-stage metrics in CI (category F1, priority F1, image extraction F1, draft quality via LLM-as-judge). End-to-end metrics on a golden set (agent simulated acceptance). Production sampling for human review of 50-100 tickets/week.
+    detailed: |
+      Layered evaluation:
+
+      **Per-stage CI metrics**:
+      - Stage 1 (category): macro F1 on held-out test set; regression suite of 200 known-hard cases.
+      - Stage 2 (priority): F1 on high-priority class (most important); cost-weighted accuracy.
+      - Stage 3 (image): F1 on labelled image subtasks; manual inspection of 30 examples.
+      - Stage 4 (draft): LLM-as-judge with rubric (helpful, accurate, professional, appropriate length); human-validated correlation > 0.7.
+
+      **End-to-end golden set**:
+      - 200 curated tickets with: human-expert categorisation, priority, ideal-draft.
+      - Run pipeline; compare each stage; report end-to-end metrics.
+      - Block CI on regressions.
+
+      **Production sampling**:
+      - 1% of tickets sampled for offline review by senior agents.
+      - Tag failures by failure type (wrong category, wrong priority, bad draft, image misread).
+      - Failures accrue to the golden set; system improves over time.
+
+      **Agent feedback loop**:
+      - Track which drafts are sent (accepted), edited heavily, or dismissed.
+      - High dismissal rate per category → that category's drafts need retraining.
+
+      **Slice metrics**:
+      - Per customer tier (VIP vs free).
+      - Per region (language, locale).
+      - Per ticket source (mobile, web, email).
+    pitfalls:
+      - "End-to-end accuracy ≤ product of per-stage accuracies. If each stage is 90%, end-to-end is ~65%. Aim higher per stage."
+  - question: "How do you serve, monitor, and operate this?"
+    shortAnswer: |
+      vLLM for self-hosted LLM (if cost demands); GPT-4o-mini API for prototype scale. BentoML for orchestrating multi-stage pipeline. Per-stage latency + cost monitoring. Quarterly retraining of fine-tuned components.
+    detailed: |
+      **Serving architecture**:
+
+      | Stage | Stack | Latency |
+      | ----- | ----- | ------- |
+      | Category | ModernBERT on Triton (single GPU shared) | ~30ms |
+      | Priority | Same Triton instance | ~30ms |
+      | Image | SigLIP encoder + VLM API (Claude vision) | ~2-5s when image present |
+      | RAG retrieve | sentence-transformers + pgvector | ~50ms |
+      | Draft generate | GPT-4o-mini API | ~3-8s |
+      | Total p99 | | ~10s (with image), ~5s (text only) |
+
+      Acceptable within 30-second budget.
+
+      **Cost** (per ticket):
+      - Category + Priority encoders: <$0.001.
+      - SigLIP + VLM (when image): ~$0.01.
+      - RAG retrieval: <$0.0005.
+      - GPT-4o-mini draft: ~$0.005.
+      - **Total: ~$0.01-0.02 per ticket** (within budget).
+
+      **Monitoring**:
+      - Per-stage latency p50/p99.
+      - Per-stage error rates.
+      - End-to-end success rate.
+      - Cost per ticket.
+      - Per-category prediction distribution drift.
+      - Draft acceptance rate (rolling weekly).
+
+      **Alerts**:
+      - Page: end-to-end success rate < 95% for 10 min.
+      - Slack: cost per ticket up 30%; draft acceptance dropping.
+      - Weekly digest: per-component health.
+
+      **Retraining cadence**:
+      - Category classifier: quarterly (or when accuracy drops).
+      - Priority classifier: monthly (more sensitive to drift).
+      - Draft generator: no retraining (uses RAG; updating the corpus updates behaviour).
+      - Embeddings: re-embed quarterly if model upgraded; otherwise stable.
+
+      **Rollback**:
+      - Each stage versioned independently.
+      - Per-stage canary deployment.
+    pitfalls:
+      - "Multi-stage pipelines have cascading failures. Build per-stage health checks; degrade gracefully (e.g., skip draft generation if RAG fails; still triage)."
+---
+
+<TldrCallout>
+  A hybrid CV + NLP support triage system decomposes into stages: fine-tuned encoder for category,
+  encoder + features for priority, VLM for images, RAG + GPT-4o-mini for draft response. The
+  decomposition keeps cost manageable (~$0.01/ticket vs $0.05+ for monolithic VLM). The 7-step
+  framework adapts to multimodal complexity by emphasising clear per-stage contracts, evaluation,
+  and observability.
+</TldrCallout>
+
+## The framing
+
+A SaaS company processes 10k support tickets per day. Currently triaged by humans (~2 min each = 200 hours of agent time daily). Goal: automate triage, surface high-priority, suggest drafts for routine inquiries.
+
+Constraints:
+
+- <30 seconds latency per ticket (already submitted; not real-time UX).
+- <$0.05 per ticket cost.
+- Agent reviews all outputs — ML is decision support, not autonomous.
+- Privacy: PII redaction before sending text to external APIs.
+
+## Metrics
+
+- **Category**: macro F1 across 8 categories; per-class F1.
+- **Priority**: recall on 'high' (missing one is bad); accuracy on low/medium.
+- **Draft acceptance**: % drafts accepted by agent with minimal edits.
+- **Image understanding**: per-task F1.
+- **Operational**: time-to-triage, cost per ticket, tickets resolved per agent.
+- **Business KPI**: CSAT, high-priority response time.
+
+## Data
+
+50k-500k historical tickets with text + images + agent labels + responses + outcomes.
+
+Data quality concerns:
+
+- Agent label noise (different agents pick different categories).
+- Subjective priority (use outcomes like CSAT as secondary signal).
+- PII redaction required before training.
+- Image quality varies (screenshots clean; photos blurry).
+
+## Pipeline architecture
+
+```
+Ticket arrives (text + maybe image)
+        ↓
+Preprocessing (PII redaction; image encoding; tokenisation)
+        ↓
+Stage 1: Category classification (fine-tuned ModernBERT)
+        ↓
+Stage 2: Priority classification (encoder + customer features)
+        ↓
+Stage 3 (if image): VLM image analysis (Claude vision)
+        ↓
+Stage 4: Draft response (RAG + GPT-4o-mini)
+        ↓
+Route to team queue
+```
+
+Why decomposed:
+
+- Cheaper models on easier sub-tasks.
+- Each stage independently evaluable and replaceable.
+- Per-stage observability.
+- Cost ~$0.01/ticket vs. $0.05-0.10 for monolithic GPT-4V.
+
+<AnalogyCallout>
+  A monolithic VLM is like asking a single senior consultant to do every task. A decomposed pipeline
+  is a team — junior specialists for routine work, senior for hard cases. Total cost lower; quality
+  often higher because each specialist is sharper at their narrow task.
+</AnalogyCallout>
+
+## Per-stage details
+
+### Stage 1: Category classification
+
+- **Model**: fine-tuned ModernBERT-base on 50-500k historical tickets.
+- **Input**: ticket text (after PII redaction).
+- **Output**: category (8 classes) + confidence.
+- **Latency**: ~30ms on Triton.
+- **Cost**: ~$0.0001 per ticket.
+- **Quality**: macro F1 ~0.85 (limited by agent label inconsistency).
+
+### Stage 2: Priority classification
+
+- **Model**: same encoder backbone + customer metadata (account tier, recent activity, ticket length, sentiment).
+- **Input**: ticket text + customer features.
+- **Output**: priority (low / medium / high) + confidence.
+- **Cost-weighted**: missing a 'high' is worse than over-classifying.
+- **Latency**: ~30ms.
+
+### Stage 3: Image analysis (when image present)
+
+- **Model**: Claude 3.5 Sonnet vision (or LLaVA self-hosted at higher volume).
+- **Prompt**: "Describe what's shown in this support ticket image. Identify if it's a screenshot of an error, a photo of hardware, a product photo. Extract any visible error text."
+- **Output**: structured JSON with type + extracted text.
+- **Latency**: ~2-5 seconds.
+- **Cost**: ~$0.005-0.015 per image.
+
+### Stage 4: Draft response
+
+- **Retrieval**: embed ticket text with sentence-transformer; retrieve top-5 similar resolved tickets from pgvector.
+- **Generation**: GPT-4o-mini with prompt:
+
+```
+You are a customer support agent. Draft a response to this ticket.
+
+Use the resolution patterns from these similar past tickets as guidance:
+[Top 5 retrieved tickets with their resolutions]
+
+Current ticket:
+[Text + image description if present]
+
+Draft your response. Keep it under 200 words. Match the company's professional, helpful tone. If unsure, leave a note for the agent.
+```
+
+- **Output**: draft text + confidence (low confidence → agent edits more).
+- **Latency**: ~3-8 seconds.
+- **Cost**: ~$0.005 per draft.
+
+## Evaluation strategy
+
+**Per-stage CI**:
+
+- Category: F1 on held-out test; 200-case regression suite.
+- Priority: F1 on 'high'; cost-weighted accuracy.
+- Image: F1 on labelled subset; manual sample.
+- Draft: LLM-as-judge with rubric (helpfulness, accuracy, professionalism); human-validated correlation > 0.7.
+
+**End-to-end golden set**: 200 curated tickets with expert categorisation, priority, ideal draft. Run full pipeline; compare per-stage.
+
+**Production sampling**: 1% of tickets reviewed weekly by senior agents. Failures tagged by mode (wrong category, wrong priority, bad draft, image misread).
+
+**Agent feedback loop**: track draft acceptance / edits / dismissal. High dismissal per category → retrain that area.
+
+## Cost breakdown
+
+Per-ticket cost:
+
+| Stage                                 | Cost                   |
+| ------------------------------------- | ---------------------- |
+| Category encoder                      | ~$0.0001               |
+| Priority encoder + features           | ~$0.0001               |
+| Image (when present, ~40% of tickets) | ~$0.005 (amortised)    |
+| RAG retrieval                         | ~$0.0005               |
+| Draft generation (GPT-4o-mini)        | ~$0.005                |
+| **Total average**                     | **~$0.011 per ticket** |
+
+At 10k/day: ~$110/day = ~$3,300/month. Well under budget.
+
+Compare to monolithic GPT-4V on every ticket: ~$0.05-0.10/ticket × 10k = $500-1,000/day = $15-30k/month. The decomposed pipeline saves $12k-27k/month.
+
+## Operations
+
+**Serving stack**:
+
+- Triton for category + priority encoders (shared single GPU).
+- Anthropic / OpenAI APIs for VLM and LLM.
+- pgvector for RAG.
+- BentoML orchestrates the multi-stage pipeline.
+
+**Monitoring**:
+
+- Per-stage latency p50/p99.
+- Per-stage error rate.
+- End-to-end success.
+- Cost per ticket.
+- Per-category prediction distribution drift.
+- Draft acceptance rate (rolling weekly).
+
+**Alerts**:
+
+- Page: end-to-end success < 95% for 10 min.
+- Slack: cost per ticket up 30%; draft acceptance trending down.
+- Weekly digest: per-stage health, per-category metrics.
+
+**Retraining**:
+
+- Category: quarterly (or on accuracy drop).
+- Priority: monthly (drift-sensitive).
+- Drafts: no model retraining; updating RAG corpus + prompt template updates behaviour.
+
+**Graceful degradation**:
+
+- If RAG fails: skip drafts; still triage.
+- If VLM fails: skip image analysis; flag image manually-reviewed.
+- If category encoder fails: route to general queue for human triage.
+
+System keeps working with degraded quality rather than failing entirely.
+
+## Risks and mitigations
+
+| Risk                                          | Mitigation                                                  |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| LLM hallucinated draft                        | Agent always reviews; flag low-confidence drafts            |
+| PII leakage to API                            | Redaction layer; audit logs; on-prem fallback for sensitive |
+| Embedding drift (RAG quality decay)           | Re-embed quarterly; monitor retrieval relevance             |
+| Cost spike on API                             | Per-ticket cost alerts; routing rules cap usage             |
+| Vendor outage (OpenAI / Anthropic down)       | Fallback chain to other provider; circuit breakers          |
+| Agent dissatisfaction (bad drafts annoy)      | Track satisfaction; iterate prompts based on edit patterns  |
+| Bias (priority correlates with customer tier) | Per-segment audit quarterly                                 |
+
+## Iteration plan
+
+- **v0** (week 0-6): ship category classifier + simple priority rules. No drafts yet. Demonstrate triage value.
+- **v1** (week 6-12): add fine-tuned priority + RAG + GPT-4o-mini drafts. Measure draft acceptance.
+- **v2** (week 12-20): add VLM for images on >30% of tickets. Per-customer-tier routing logic.
+- **v3** (week 20-32): per-category prompt tuning; specialised models for high-volume categories.
+- **Ongoing**: quarterly retraining; monthly review of failure modes; cost optimisation.
+
+<InlineQuiz
+  question="Six months in, draft acceptance rate has dropped from 65% to 48%. End-to-end latency and per-stage metrics look fine. What's the right diagnostic?"
+  options={[
+    { text: "Replace GPT-4o-mini with GPT-4o for better quality." },
+    {
+      text: "Sample 50 rejected / heavily-edited drafts. Categorise the failure mode (off-topic, factually wrong, wrong tone, missing customer-specific info). Address the dominant failure mode — often it's that the RAG corpus needs refreshing, or the prompt has drifted from current product reality.",
+      correct: true,
+    },
+    { text: "Disable drafts; revert to category-only triage." },
+    { text: "Hire more agents to compensate." },
+  ]}
+  explanation="Rejecting / editing drafts is the user-facing signal that something is degrading. Sample-and-categorise diagnoses the actual failure mode. Common findings at 6 months in: RAG corpus is stale (new product features not represented in retrieved examples); prompt is wrong for new product (e.g., feature was renamed); user behaviour shifted (different categories dominate now). The fix varies — refresh RAG corpus, update prompt, retrain category classifier. Upgrading to GPT-4o is expensive and may not address the root cause. The diagnostic discipline (sample, categorise, address) is what separates mature ML systems from black boxes."
+/>
+
+## What this walkthrough shows
+
+A multimodal ML system using the 7-step framework:
+
+1. **Problem framing**: triage decision support; 10k/day; agent reviews all outputs.
+2. **Metrics**: per-task (category F1, priority F1, draft acceptance) + operational + business.
+3. **Data**: historical tickets + agent labels + outcomes; PII redaction.
+4. **Modelling**: decomposed pipeline (encoder + encoder + VLM + RAG+LLM); cheaper than monolithic.
+5. **Evaluation**: per-stage CI + golden set + production sample + agent feedback loop.
+6. **Serving**: Triton + APIs + pgvector + BentoML; graceful degradation.
+7. **Risk**: hallucination, PII leakage, drift, vendor outage — each with mitigation.
+
+The framework applied to a problem dramatically different from fraud detection. Same structure; different choices at each step.
+
+## Track A closing
+
+Track A — ML Engineer Path — has covered:
+
+- **A0**: Foundations (what AI / ML is; key math; data; metrics).
+- **A1**: Math & stats deeper.
+- **A2**: Supervised learning (linear, trees, ensembles, SVMs, kNN, feature engineering).
+- **A3**: Unsupervised learning (clustering, PCA, t-SNE, autoencoders, anomaly).
+- **A4**: Neural networks (perceptron, MLP, backprop, losses, optimisers, init, training, debugging).
+- **A5**: Deep architectures (CNNs, RNNs, residuals, attention, transformer, modern LLM choices, scaling laws, pretraining).
+- **A6**: NLP (tokenisation, embeddings, classification, NER, RAG, LLM APIs, eval).
+- **A7**: Computer vision (augmentation, classification, detection, segmentation, VLMs, SSL features, deployment).
+- **A8**: MLOps (tracking, data versioning, serving, monitoring, CI/CD, skew, cost).
+- **A9 Capstone**: system design framework + 2 walkthroughs.
+
+You now have the foundation to ship ML systems in production in 2026. The patterns generalise across architecture trends; the framework adapts to new modelling approaches.
+
+Track B (GenAI Builder) is the dedicated path for builders focused on LLMs, RAG, fine-tuning, agents, and multimodal generation. It overlaps Track A in some places and goes deeper in others.
+
+<InlineQuiz
+  question="Which of these would be the LEAST important thing to design carefully at the start of a new ML project?"
+  options={[
+    { text: "Evaluation infrastructure — golden set, slice metrics, regression suite." },
+    {
+      text: "Specific model architecture (e.g., ResNet-50 vs EfficientNet-B3) for an image classifier where DINOv2 or ConvNeXt-Base are both reasonable picks.",
+      correct: true,
+    },
+    { text: "Problem framing — what decision the system supports." },
+    { text: "Monitoring — what to log, what to alert on." },
+  ]}
+  explanation="Architecture choice at the boundary of two reasonable options is the LEAST important thing to design carefully — both will give similar results, and you can swap later if needed. Problem framing, evaluation, and monitoring are the durable scaffolding that determines whether the system stays trustworthy. This is the meta-lesson of Track A: the model is the easy part; the infrastructure around it is the work."
+/>
+
+The capstone closes Track A. The next step in your learning is hands-on — build something, fail, iterate, ship.

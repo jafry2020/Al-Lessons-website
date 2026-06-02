@@ -1,0 +1,497 @@
+---
+title: "Model packaging and serving"
+description: "Turn a model file into a production endpoint. Containers, serving frameworks (BentoML, Triton, vLLM), managed platforms (Modal, Replicate), and the choices that determine whether you ship in an afternoon or a quarter."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: mlops
+moduleLabel: "Module 8 · MLOps & Deployment"
+lesson: model-packaging-serving
+lessonCode: "A8.4"
+estMinutes: 14
+prereqs:
+  - "A8.2 Experiment tracking and reproducibility"
+  - "A7.8 Computer vision deployment and inference optimisation"
+objectives:
+  - "Package a model into a Docker container with a thin serving wrapper."
+  - "Pick between in-house serving (BentoML, Triton, vLLM) and managed platforms (Modal, Replicate, SageMaker)."
+  - "Design serving for the right latency / throughput / cost trade-off."
+pitfalls:
+  - "Putting heavy Python imports at request time. Cold start matters; preload everything at boot."
+  - "Skipping health checks. Without /health, your orchestrator can't tell when a pod is broken."
+  - "Building auto-scaling on naive metrics (CPU only). For ML services, queue depth or GPU utilisation is the right signal."
+  - "Treating serving as just `flask run`. Production serving needs concurrency, batching, observability, graceful shutdown."
+importantQuestions:
+  - question: "What's the standard 2026 serving stack?"
+    shortAnswer: |
+      Container (Docker) + serving framework (BentoML / Triton / vLLM / FastAPI) + orchestrator (Kubernetes / Modal / Replicate) + observability (Prometheus / Datadog). Stack components vary by team capacity and traffic.
+    detailed: |
+      The components:
+
+      **Container**: Docker is universal. Build a slim image with the model + serving code. Avoid kitchen-sink base images.
+
+      **Serving framework**:
+      - **FastAPI**: minimal Python wrapper; good for prototyping or simple endpoints.
+      - **BentoML**: ML-aware; handles batching, versioning, easy deployment.
+      - **Triton Inference Server** (NVIDIA): high-throughput, multi-model, supports many backends (TensorRT, PyTorch, ONNX); industry standard for serious CV / NLP serving.
+      - **vLLM**: specialised for LLMs; continuous batching, PagedAttention; the standard for LLM serving in 2026.
+      - **TGI** (HuggingFace Text Generation Inference): alternative to vLLM for HF models.
+      - **TorchServe**: PyTorch-native; less common than alternatives.
+
+      **Orchestrator**:
+      - **Kubernetes** (with KServe or custom Deployments): the heavyweight standard.
+      - **Modal / Replicate / Beam**: serverless GPU; pay-per-use.
+      - **SageMaker / Vertex / Azure ML**: cloud-managed.
+      - **HuggingFace Inference Endpoints**: one-click for HF models.
+
+      **Observability**:
+      - **Prometheus / Grafana**: metrics + dashboards (self-hosted).
+      - **Datadog**: managed, integrated.
+      - **OpenTelemetry**: standard for tracing.
+
+      For small teams in 2026: BentoML or vLLM on Modal / Replicate. Pay-per-use, minimal ops.
+
+      For large teams: Triton or vLLM on Kubernetes with KServe. More ops; lower per-request cost at scale.
+    pitfalls:
+      - "Don't pick the heaviest stack day one. BentoML on Modal can ship in an afternoon; Kubernetes + Triton takes weeks of setup."
+  - question: "Containers: what to put in your Dockerfile?"
+    shortAnswer: |
+      Base from a slim Python or CUDA image, install dependencies in a layer, copy code, copy model (or download at startup), expose port, run the serving framework. Use multi-stage builds to keep production image small.
+    detailed: |
+      A typical 2026 Dockerfile for a CV model:
+
+      ```dockerfile
+      FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+      # System deps
+      RUN apt-get update && apt-get install -y python3.11 python3-pip && rm -rf /var/lib/apt/lists/*
+
+      WORKDIR /app
+
+      # Install Python deps first (layer caching)
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+
+      # Copy code
+      COPY src/ /app/src/
+
+      # Either: copy model into image (faster cold start, larger image)
+      COPY models/model.onnx /app/models/
+
+      # Or: download at startup (smaller image, slower cold start)
+      # ENV MODEL_URL=s3://...
+      # ENTRYPOINT ["python", "-m", "src.serve"]
+
+      EXPOSE 8000
+
+      CMD ["python", "-m", "src.serve"]
+      ```
+
+      Multi-stage builds for smaller images:
+
+      ```dockerfile
+      FROM python:3.11 AS builder
+      RUN pip install --target=/install onnxruntime-gpu
+
+      FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+      COPY --from=builder /install /usr/lib/python3.11/site-packages
+      ...
+      ```
+
+      Optimisations:
+      - Pin versions in requirements.txt.
+      - Use `.dockerignore` to exclude unneeded files.
+      - Prefer slim base images (alpine isn't good for ML — use slim-debian or ubuntu).
+      - For GPU: use NVIDIA's CUDA base images, matching the CUDA version of your deployment hardware.
+    pitfalls:
+      - "Don't bake in dev tools (Jupyter, debuggers) in the production image. Slimmer image, fewer security surface area."
+  - question: "What does BentoML do?"
+    shortAnswer: |
+      ML-specific framework that handles model packaging (bento format), batching, versioning, and serving. Wraps FastAPI underneath with ML-aware enhancements. Easy ramp from notebook to production.
+    detailed: |
+      A BentoML service:
+
+      ```python
+      import bentoml
+      from bentoml.io import JSON, Image, Text
+
+      classifier = bentoml.pytorch.get("my_classifier:latest").to_runner()
+
+      svc = bentoml.Service("my-classifier", runners=[classifier])
+
+      @svc.api(input=Image(), output=JSON())
+      async def predict(image):
+          # Preprocess
+          tensor = preprocess(image)
+          # Inference (BentoML handles batching automatically)
+          result = await classifier.async_run(tensor)
+          # Postprocess
+          return {"class": result.argmax().item(), "confidence": result.max().item()}
+      ```
+
+      Build a "bento" (versioned bundle):
+
+      ```bash
+      bentoml build  # creates a versioned bento
+      bentoml containerize my-classifier:latest  # creates Docker image
+      ```
+
+      Deploy: `bentoml deploy` to BentoCloud, or push image to your registry and deploy via Kubernetes / Modal / etc.
+
+      What BentoML adds vs raw FastAPI:
+      - Automatic micro-batching of concurrent requests (improves GPU utilisation).
+      - Model versioning + registry.
+      - Inference adapters (PyTorch, TensorFlow, ONNX, etc.) with proper async handling.
+      - One-command containerisation.
+      - Built-in metrics endpoint.
+
+      For most non-trivial ML serving: BentoML over FastAPI.
+    pitfalls:
+      - "BentoML's `pytorch.save_model` wraps the model; understand the artefact structure if you'll inspect outside BentoML."
+  - question: "When should you use Triton vs vLLM vs Modal?"
+    shortAnswer: |
+      Triton: high-throughput multi-model serving on your own infra. vLLM: LLM serving specifically (continuous batching, PagedAttention). Modal / Replicate: serverless GPU for pay-per-use; ideal for sporadic or growing traffic.
+    detailed: |
+      | Tool | Type | Best for |
+      | ---- | ---- | -------- |
+      | **Triton Inference Server** | Self-hosted, multi-model | High-throughput CV / NLP; many models on shared GPU; complex production |
+      | **vLLM** | Self-hosted LLM | Single-model LLM serving; throughput-optimised; OpenAI-compatible API |
+      | **TGI** (HuggingFace) | Self-hosted LLM | Alternative to vLLM for HuggingFace models |
+      | **SGLang** | Self-hosted LLM | High-performance structured outputs; programmable prompts |
+      | **Modal** | Serverless GPU | Pay-per-use; trivial deployment from Python |
+      | **Replicate** | Serverless GPU | Model marketplace + custom; managed |
+      | **RunPod / Lambda Labs / vast.ai** | Per-hour GPU | Cheaper than hyperscalers for sustained workloads |
+      | **SageMaker / Vertex / Azure ML** | Managed cloud | Integrated with rest of cloud platform; heavy |
+      | **HuggingFace Inference Endpoints** | Managed | One-click HF model deployment |
+      | **KServe** | K8s-native | Kubernetes-based teams; multi-model |
+
+      Decision factors:
+      - **Volume**: low → managed; high → self-hosted.
+      - **Latency**: low → tight self-hosted control.
+      - **Ops capacity**: low → Modal / Replicate; high → Kubernetes + Triton / vLLM.
+      - **Cost-sensitive at scale**: self-hosted on commodity GPUs.
+      - **Compliance**: self-hosted in your VPC.
+
+      In 2026: Modal / Replicate for prototyping and growth-stage; Triton / vLLM on K8s for scale.
+    pitfalls:
+      - "Don't pre-emptively migrate from Modal to Kubernetes. The switch costs weeks; do it when cost / control justify it."
+  - question: "How do you handle batching for throughput?"
+    shortAnswer: |
+      Continuous (a.k.a. dynamic) batching: queue incoming requests; flush a batch when full or timeout. Triton, vLLM, BentoML all support this. For LLMs: vLLM's continuous batching with PagedAttention is the standard.
+    detailed: |
+      Single inference: GPU runs at ~10% utilisation. Batched inference: 60-80% utilisation. Throughput 3-10× higher.
+
+      Static batching: client sends a batch of N. Wastes time waiting if requests trickle in.
+
+      **Continuous (dynamic) batching**: serving framework holds incoming requests in a queue. Flushes the batch when either:
+      - Batch size hits N (e.g., 32).
+      - Timeout (e.g., 20 ms) elapses.
+
+      Triton, BentoML, vLLM all implement this. For LLMs, vLLM's continuous batching is particularly important — it batches at the token level, not the request level (PagedAttention enables this).
+
+      Configuration:
+      - **Max batch size**: limited by GPU memory; tune via benchmarking.
+      - **Timeout**: trade-off between throughput (longer wait = bigger batches) and tail latency (longer wait = worse p99).
+      - **Preferred batch sizes**: Triton can prefer specific sizes (8, 16, 32) for optimal kernel selection.
+
+      Production guidance:
+      - Small models (CV classification): batch 32-128, timeout 10-20 ms.
+      - Large LLMs (vLLM): continuous batching; tune `max_num_seqs`.
+      - Real-time UX: smaller batches, shorter timeouts.
+    pitfalls:
+      - "Don't batch too aggressively for real-time UX. p99 latency suffers as batch wait time increases."
+  - question: "What's the cold-start problem and how do you mitigate it?"
+    shortAnswer: |
+      First request to a new container takes seconds-to-minutes longer than subsequent (loading model, JIT compile, GPU warm-up). Mitigate by: preload at boot, keep-warm pools, model caching, smaller models, snapshot containers (Modal / Cloudflare).
+    detailed: |
+      Cold-start sources:
+      - **Container start**: pulling image, starting process. 1-30s depending on image size.
+      - **Library imports**: PyTorch, transformers can take 5-15s to import.
+      - **Model loading**: large models from disk → GPU. 1-30s.
+      - **JIT compilation**: first inference triggers PyTorch / TensorRT graph compilation. 1-10s.
+      - **GPU warm-up**: first compute often slower than steady state.
+
+      Mitigations:
+      - **Preload at boot**: load model + warm up in the container's startup phase, not on first request.
+      - **Health check** that returns only after warm-up complete.
+      - **Keep-warm pools**: maintain N idle replicas; auto-scaling to zero adds cold-start cost.
+      - **Smaller images** for faster container start.
+      - **Model caching layer**: keep model files on local NVMe; faster than S3 fetch.
+      - **Modal / Cloudflare Workers AI**: snapshot containers post-warm-up; restore from snapshot for near-instant cold start.
+
+      For LLMs specifically: vLLM with prefix caching reduces effective cold start for shared system prompts.
+    pitfalls:
+      - "Auto-scale to zero saves money but adds cold-start latency. For latency-sensitive endpoints, keep at least one replica warm."
+---
+
+<TldrCallout>
+  Model serving in 2026 has settled into a recognisable stack: Docker container + serving framework
+  (BentoML, Triton, vLLM, or FastAPI) + orchestrator (Modal / Replicate / Kubernetes) +
+  observability. Pick the right serving framework for the model type (vLLM for LLMs, Triton for
+  multi-model, BentoML for general). Use continuous batching for throughput. Mitigate cold starts
+  with preloading and keep-warm pools. For most teams starting out: BentoML or vLLM on Modal /
+  Replicate — ship in an afternoon, scale later.
+</TldrCallout>
+
+## The serving stack
+
+A production-grade ML serving system has four layers:
+
+```
+Client (HTTP / gRPC)
+        ↓
+Load balancer / orchestrator (Kubernetes, Modal, etc.)
+        ↓
+Container (Docker)
+        ↓
+Serving framework (FastAPI, BentoML, Triton, vLLM)
+        ↓
+Model (PyTorch, ONNX, TensorRT)
+```
+
+Each layer has choices. Most decisions come down to: **how much ops capacity do you have, and how much traffic do you serve?**
+
+## Container basics
+
+Every serving deployment is a Docker container. A minimal Dockerfile:
+
+```dockerfile
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y python3.11 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ /app/src/
+COPY models/model.onnx /app/models/
+
+EXPOSE 8000
+CMD ["python", "-m", "src.serve"]
+```
+
+Optimisation principles:
+
+- **Pin versions** in requirements.txt for reproducibility.
+- **Slim base images** (debian-slim, distroless when possible).
+- **Multi-stage builds** to keep production image small.
+- **Layer caching**: install deps before copying source (deps change rarely; source changes often).
+- **Use `.dockerignore`** to exclude tests, docs, dev configs.
+- **Don't bake dev tools** (Jupyter, debuggers) into production images.
+
+Image size matters: small images pull / start faster. CV models with PyTorch + CUDA: typically 3-6 GB. LLM serving with vLLM: 8-12 GB.
+
+## Serving frameworks
+
+| Framework                   | Type                         | When to use                                                |
+| --------------------------- | ---------------------------- | ---------------------------------------------------------- |
+| **FastAPI**                 | General-purpose Python       | Prototyping, simple endpoints, no ML-specific needs        |
+| **BentoML**                 | ML-aware                     | Most production ML serving; batching + versioning built in |
+| **Triton Inference Server** | Multi-model, high-throughput | CV / NLP at scale; multiple models on shared GPUs          |
+| **vLLM**                    | LLM-specific                 | LLM serving in 2026; continuous batching, PagedAttention   |
+| **TGI (HuggingFace)**       | LLM serving                  | Alternative to vLLM for HF models                          |
+| **SGLang**                  | LLM serving                  | High-performance structured outputs / programmable prompts |
+| **TorchServe**              | PyTorch-native               | Less popular than alternatives in 2026                     |
+
+### BentoML
+
+ML-aware wrapper that handles batching, versioning, and packaging:
+
+```python
+import bentoml
+from bentoml.io import JSON, Image
+
+classifier = bentoml.pytorch.get("my_classifier:latest").to_runner()
+svc = bentoml.Service("my-classifier", runners=[classifier])
+
+@svc.api(input=Image(), output=JSON())
+async def predict(image):
+    tensor = preprocess(image)
+    result = await classifier.async_run(tensor)
+    return {"class": result.argmax().item()}
+```
+
+Build a versioned bento: `bentoml build`. Containerise: `bentoml containerize`.
+
+For most production CV / NLP serving: BentoML over plain FastAPI.
+
+### vLLM for LLMs
+
+The 2026 standard for LLM serving:
+
+```bash
+vllm serve meta-llama/Llama-3-8B-Instruct \
+    --tensor-parallel-size 1 \
+    --max-model-len 8192 \
+    --gpu-memory-utilization 0.9
+```
+
+Exposes an OpenAI-compatible API. Continuous batching at token level, PagedAttention for memory efficiency, prefix caching for repeated prompts.
+
+For self-hosted LLMs: vLLM is the default. TGI is the runner-up; SGLang for structured-output-heavy workloads.
+
+### Triton for multi-model
+
+When you have many models sharing GPU resources:
+
+- Models registered in a model repository.
+- Triton handles routing, batching, scheduling.
+- Supports ONNX, TensorRT, PyTorch, custom Python backends.
+- Built for production scale by NVIDIA.
+
+Operational overhead higher than BentoML; payoff is throughput and multi-model density.
+
+## Orchestrators: where containers run
+
+| Orchestrator                        | Type                  | Best for                                     |
+| ----------------------------------- | --------------------- | -------------------------------------------- |
+| **Modal**                           | Serverless GPU        | Pay-per-use; Python-native; quick deployment |
+| **Replicate**                       | Serverless GPU        | Model marketplace + custom; HF / Cog-based   |
+| **RunPod**                          | Per-hour GPU          | Cheaper sustained workloads                  |
+| **Beam, fal**                       | Serverless GPU        | Alternatives in this space                   |
+| **HuggingFace Inference Endpoints** | Managed               | One-click HF model deployment                |
+| **Kubernetes + KServe**             | Self-managed          | Large teams; full control                    |
+| **SageMaker / Vertex / Azure ML**   | Managed cloud         | Cloud-native enterprise                      |
+| **AWS Fargate / GCP Cloud Run**     | Serverless containers | CPU-only or low-GPU workloads                |
+
+For small teams in 2026: **Modal or Replicate**. Deploy in minutes; pay for usage; no infra to manage.
+
+For scale (1M+ daily requests, multi-team): Kubernetes + Triton / vLLM. Higher ops cost; lower per-request cost.
+
+## Continuous batching
+
+GPU compute is most efficient at high batch sizes. Continuous batching maximises utilisation:
+
+```
+Time:   t=0       t=10ms    t=20ms    t=30ms
+Queue:  [req1]    [req1,    [batch    [empty]
+                   req2,    of 4
+                   req3,    flushed
+                   req4]    → GPU]
+```
+
+The serving framework holds requests in a queue, flushes when batch full OR timeout hit.
+
+Configuration:
+
+- **Max batch size**: tune via benchmarking (memory limited).
+- **Timeout**: trade-off — longer = bigger batches (throughput); shorter = lower p99 latency.
+
+For LLMs, **vLLM's continuous batching is at the token level** (not request level). PagedAttention enables this — different requests at different stages of generation share a single GPU pass.
+
+<AnalogyCallout>
+  Continuous batching is like a bus that waits up to one minute or for ten people, whichever comes
+  first. Without it, every passenger takes a taxi (one request per GPU pass) — wasteful. With it,
+  you carry more passengers per trip without making anyone wait too long.
+</AnalogyCallout>
+
+## Cold starts: the silent UX killer
+
+First request to a fresh container can take 5-60 seconds. Causes:
+
+- **Container start**: 1-30s.
+- **Python imports**: 5-15s.
+- **Model loading**: 1-30s.
+- **JIT compile**: 1-10s on first inference.
+- **GPU warm-up**: ~1s.
+
+Mitigations:
+
+- **Preload at boot**: load model in container startup, not on first request.
+- **Health check** returns 200 only after warm-up.
+- **Keep-warm pools**: minimum N replicas always running.
+- **Snapshot containers** (Modal, Cloudflare): restore from post-warm-up snapshot in ms.
+- **Smaller models** (distillation, quantisation).
+- **Local model cache** on NVMe SSD; faster than S3 fetch.
+
+For real-time UX endpoints: never auto-scale to zero. The cold-start hit is worse than the savings.
+
+For batch / async work: auto-scale to zero is fine; cold start is a non-issue.
+
+## Health checks and graceful shutdown
+
+Production-grade containers expose:
+
+- **`/health`**: returns 200 when model loaded and ready. K8s / Modal use this for routing.
+- **`/metrics`** (Prometheus format): exposes per-endpoint counts, latency histograms, GPU utilisation.
+- **Graceful shutdown**: on SIGTERM, drain in-flight requests for N seconds before exiting.
+
+Without these, your orchestrator can't route traffic correctly, monitor performance, or roll out updates safely.
+
+```python
+# FastAPI example
+@app.get("/health")
+async def health():
+    if model is None or not model_ready:
+        return JSONResponse(status_code=503, content={"status": "not ready"})
+    return {"status": "healthy"}
+```
+
+## Auto-scaling signals
+
+For ML workloads, naive CPU-based auto-scaling fails (GPU does the work; CPU stays low):
+
+| Signal              | When useful                                 |
+| ------------------- | ------------------------------------------- |
+| CPU utilisation     | Rarely for GPU services                     |
+| GPU utilisation     | Direct measure of saturation                |
+| Queue depth         | Request rate exceeds capacity               |
+| p99 latency         | Latency SLA violated                        |
+| Concurrent requests | Coarse but reliable                         |
+| Custom metrics      | Domain-specific (e.g., tokens/sec for LLMs) |
+
+KServe and Modal support multi-signal auto-scaling. For Kubernetes: HPA with custom metrics from Prometheus.
+
+<InlineQuiz
+  question="You're deploying a fine-tuned ConvNeXt classifier. Current setup: FastAPI + Docker on a Kubernetes cluster. Latency p99 is 250ms, GPU utilisation is 15%. What's the single highest-impact change?"
+  options={[
+    { text: "Switch to a larger GPU." },
+    {
+      text: "Add continuous batching (via BentoML or Triton). Low GPU utilisation = the GPU is doing one inference at a time. Batching 32 concurrent requests can raise utilisation to 70%+ and bring p99 down via better throughput.",
+      correct: true,
+    },
+    { text: "Migrate to Kubernetes." },
+    { text: "Rewrite the model in TensorRT." },
+  ]}
+  explanation="15% GPU utilisation is the diagnostic: the GPU is starving. Continuous batching is precisely the fix — group concurrent requests into batches, run one GPU pass per batch. BentoML / Triton implement this. After batching: 70%+ utilisation, much higher throughput, often better p99 because of more efficient compute. Larger GPU doesn't help when current GPU is idle. TensorRT speeds up individual inference but doesn't solve the underutilisation."
+/>
+
+## When to migrate from managed to self-hosted
+
+Most teams start with Modal / Replicate. Migrate to Kubernetes when:
+
+- **Cost crosses break-even**: typically ~$5k-10k/month on managed.
+- **Latency SLAs tighten** beyond what serverless can deliver.
+- **Need multi-model density** on shared GPUs (Triton excels here).
+- **Compliance requires** your-VPC-only.
+- **Ops team grows** to support it.
+
+Migration is significant work (weeks to months). Don't do it pre-emptively.
+
+<InlineQuiz
+  question="Your startup is shipping its first ML feature. Volume: 1k requests/day. Team: 2 ML engineers, no dedicated DevOps. Recommended deployment approach?"
+  options={[
+    { text: "Stand up a Kubernetes cluster with Triton, KServe, and HPA from day one." },
+    {
+      text: "BentoML + Modal (or Replicate). Deploy in an afternoon; pay ~$10-30/month for that traffic; revisit infrastructure when traffic grows 100×.",
+      correct: true,
+    },
+    { text: "Write everything in raw Flask on a single VPS." },
+    { text: "Buy SageMaker." },
+  ]}
+  explanation="1k req/day, 2 MLE, no DevOps = serverless GPU is the right answer. Modal / Replicate let you go from notebook to production in hours. BentoML adds production polish (batching, metrics, versioning). Total cost: tens of dollars per month. Kubernetes + Triton is for teams at 100× the traffic with dedicated infra capacity. Flask alone misses batching, observability, etc. SageMaker is overkill for the scale and adds vendor lock-in."
+/>
+
+## Closing for serving
+
+Model serving in 2026 has a settled stack at each scale tier:
+
+- **Prototyping / low volume**: BentoML on Modal / Replicate.
+- **Production at moderate scale**: BentoML / Triton / vLLM on managed K8s (EKS, GKE).
+- **Production at scale**: Triton / vLLM on self-managed K8s with KServe.
+
+The serving framework matches the workload (vLLM for LLMs, Triton for multi-model). Continuous batching for throughput; preloading and keep-warm pools for cold-start latency. Health checks and graceful shutdown for production-grade behaviour.
+
+The next lesson covers what to do once the model is serving: monitoring and drift detection.
