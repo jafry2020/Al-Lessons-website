@@ -1,0 +1,401 @@
+---
+title: "Image segmentation: semantic, instance, and SAM"
+description: "Predict at the pixel level — which pixels belong to which class, and which pixels belong to which specific object instance. Plus SAM, the foundation model that changed segmentation annotation forever."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: image-segmentation
+lessonCode: "A7.5"
+estMinutes: 13
+prereqs:
+  - "A7.4 Object detection: YOLO, DETR, RT-DETR"
+  - "A5.3 Residual connections and the depth revolution"
+objectives:
+  - "Distinguish semantic, instance, and panoptic segmentation by what they predict per pixel."
+  - "Pick between U-Net (specialised), Mask2Former (general), and SAM (zero-shot) for a segmentation task."
+  - "Evaluate segmentation with mean IoU and per-class IoU; understand why pixel accuracy is misleading."
+pitfalls:
+  - "Reporting pixel accuracy for segmentation. 95% of pixels are background; useless metric for the foreground classes that matter."
+  - "Confusing SAM (promptable, class-agnostic) with semantic / instance segmentation (class-aware). Different problems; different tools."
+  - "Building from scratch when SAM or a pretrained Mask2Former can be fine-tuned. Pretraining matters even more for segmentation than classification."
+  - "Treating segmentation masks as crisp edges. Production segmentation usually has edge fuzziness; post-process if you need crisp outputs."
+importantQuestions:
+  - question: "What's the difference between semantic, instance, and panoptic segmentation?"
+    shortAnswer: |
+      Semantic: each pixel gets one class label, no object instances ('car', 'road', 'sky'). Instance: each pixel labelled with class + instance ID ('car_1', 'car_2'). Panoptic: combines both — every pixel gets class + instance (stuff like 'sky' has no instance; things like 'car' have instances).
+    detailed: |
+      The three flavours:
+
+      **Semantic segmentation**: pixel → class. All pixels of the same class merge.
+
+      Image of two cars: both cars get the 'car' label; you can't tell them apart.
+
+      **Instance segmentation**: pixel → (class, instance_id). Each object instance has its own mask.
+
+      Same two cars: each gets a distinct mask. Useful for counting, tracking, manipulation.
+
+      **Panoptic segmentation**: combines semantic + instance. Every pixel labelled with (class, instance_id). For "stuff" classes (sky, grass, road), instance_id is the same per class. For "thing" classes (car, person), each instance is distinct.
+
+      Choice depends on use case:
+      - Counting people in a crowd → instance.
+      - Sky / horizon detection → semantic.
+      - Full scene parsing (autonomous driving) → panoptic.
+
+      Modern architectures (Mask2Former) handle all three with the same model.
+    pitfalls:
+      - "Don't confuse with 'object detection' (boxes) — segmentation produces pixel masks, which are more precise."
+  - question: "What's the standard 2026 model for semantic / instance segmentation?"
+    shortAnswer: |
+      Mask2Former (Cheng et al., 2022) or SegFormer (Xie et al., 2021) for semantic; Mask2Former for instance / panoptic. Both transformer-based, both pretrained checkpoints available, both in HuggingFace.
+    detailed: |
+      The 2026 segmentation lineup:
+
+      | Model | Year | Best for | Notes |
+      | ----- | ---- | -------- | ----- |
+      | U-Net | 2015 | Medical imaging | Still dominant in domain-specific work |
+      | Mask R-CNN | 2017 | Instance segmentation baseline | Still used; mature |
+      | DeepLab v3+ | 2018 | Semantic, fine boundaries | Older but solid |
+      | SegFormer | 2021 | Semantic, efficient transformer | Simple, fast |
+      | Mask2Former | 2022 | Semantic / instance / panoptic, all-in-one | SOTA general purpose |
+      | OneFormer | 2023 | Universal segmentation | Mask2Former evolution |
+      | SAM / SAM 2 | 2023 / 2024 | Promptable, zero-shot | Different problem (class-agnostic) |
+      | Grounded-SAM | 2023 | Open-vocab promptable | Combines Grounding DINO + SAM |
+
+      Default 2026 picks:
+      - Semantic: SegFormer (fast) or Mask2Former (SOTA quality).
+      - Instance: Mask2Former.
+      - Panoptic: Mask2Former.
+      - Promptable / zero-shot: SAM 2.
+      - Open-vocab: Grounded-SAM.
+
+      Specialised domains (medical, satellite, microscopy): U-Net architectures still dominate; train domain-specific.
+    pitfalls:
+      - "Mask R-CNN is old but still ships in production. Don't migrate just for newness; measure quality and latency first."
+  - question: "What's the Segment Anything Model (SAM) and why does it matter?"
+    shortAnswer: |
+      SAM (Meta 2023, SAM 2 in 2024) is a promptable segmentation model: input image + prompt (point, box, or mask) → output a high-quality segmentation mask. Trained on 1B+ masks. Works zero-shot on anything. Changed annotation workflows.
+    detailed: |
+      SAM architecture: image encoder (ViT) + prompt encoder + mask decoder. Trained on the SA-1B dataset (1.1 billion masks across 11M images).
+
+      How to use:
+      - **Input**: an image + a prompt (one or more points, a box, or a coarse mask).
+      - **Output**: a high-quality segmentation mask for what was prompted.
+
+      Game-changing for annotation:
+      - Annotators click once → SAM produces the mask.
+      - 10× speedup on segmentation labelling.
+      - Powers tools like Label Studio, Roboflow, CVAT.
+
+      Production uses:
+      - **Annotation tools** (the original killer use case).
+      - **Auto-segment everything in an image** ("mask everything mode").
+      - **Building block in pipelines**: detect → SAM segments each detected box.
+      - **Interactive image editing** (e.g., remove background by clicking).
+      - **Medical / satellite / microscopy** with domain-specific prompts.
+
+      SAM 2 (2024) extends to video: track object masks through frames.
+
+      Important: SAM is class-agnostic. It produces masks but doesn't label them ("this is a car"). For class-aware segmentation, combine with a classifier or use Mask2Former.
+    pitfalls:
+      - "SAM is huge (ViT-H is 2.5B params). For real-time deployment, use SAM-Edge or FastSAM."
+  - question: "How do you evaluate segmentation?"
+    shortAnswer: |
+      Mean IoU (mIoU) across classes for semantic; mask AP for instance (similar to detection mAP but with mask IoU instead of box IoU). Per-class metrics for diagnosis. Avoid pixel accuracy — dominated by background.
+    detailed: |
+      **Semantic segmentation**:
+
+      - **IoU per class**: |intersection| / |union| between predicted and ground-truth masks.
+      - **Mean IoU (mIoU)**: average IoU across classes. Standard headline.
+      - **Per-class IoU**: identify weak classes.
+      - **Pixel accuracy**: useless on its own — 95% accuracy on a foreground task is "always predict background."
+
+      **Instance segmentation**:
+
+      - **Mask AP**: like detection mAP but matches masks via IoU.
+      - **Mask AP@[0.5:0.95]**: COCO standard.
+      - Same precision/recall analysis as detection.
+
+      **Panoptic segmentation**:
+
+      - **PQ (Panoptic Quality)**: combines segmentation quality (SQ) and recognition quality (RQ).
+      - Per-class PQ for diagnosis.
+
+      Standard benchmarks: COCO, Cityscapes, ADE20K. Numbers vary widely by dataset difficulty.
+
+      Tools: `torchmetrics.JaccardIndex` for IoU; HuggingFace `evaluate.load("mean_iou")`; `pycocotools` for mask AP.
+    pitfalls:
+      - "IoU heavily penalises small mistakes on thin objects (poles, wires). Use boundary IoU or panoptic quality for these cases."
+  - question: "When should you fine-tune vs. use SAM?"
+    shortAnswer: |
+      Use SAM for class-agnostic / zero-shot / interactive segmentation, or as an annotation tool. Fine-tune a Mask2Former when you need class-aware predictions for a fixed set of categories and have labelled data.
+    detailed: |
+      | Situation | Approach |
+      | --------- | -------- |
+      | Annotate a new dataset | Use SAM for click-based mask generation; speedup 10× |
+      | Class-aware segmentation, fixed classes, labelled data | Fine-tune Mask2Former |
+      | "Mask everything" pipeline | SAM in "mask everything" mode + downstream classifier |
+      | Detect-then-segment | Detector (YOLO / DETR) + SAM for each box → cleaner masks |
+      | Open-vocab segmentation | Grounded-SAM (Grounding DINO + SAM) |
+      | Medical / specialised domain | Fine-tune U-Net or domain-pretrained Mask2Former |
+      | Real-time semantic | SegFormer-small with TensorRT |
+      | Real-time interactive | SAM 2 (designed for this) |
+
+      Combined pattern: SAM for annotation → train Mask2Former for production inference.
+
+      SAM alone often isn't enough for production — you need to *label* the masks, which means classifier on top or zero-shot CLIP.
+    pitfalls:
+      - "SAM's masks can be 'over-segmented' (multiple masks for one thing) or 'under-segmented'. Tune prompts for your use case."
+  - question: "What's U-Net and why does it survive?"
+    shortAnswer: |
+      U-Net (Ronneberger et al., 2015) is the encoder-decoder with skip connections that dominates medical imaging. It's smaller, simpler, trains on less data than transformer alternatives — perfect for specialised domains with limited labelled data.
+    detailed: |
+      U-Net architecture: encoder (CNN downsampling) → bottleneck → decoder (upsampling) with skip connections at each scale.
+
+      Why it survives in 2026:
+      - **Small data**: medical, satellite, microscopy often have <1000 labelled images. U-Net trains; large transformers overfit.
+      - **Domain-specific**: medical U-Nets are pretrained on medical data; transfer is excellent within the domain.
+      - **Mature ecosystem**: nnU-Net (Isensee et al., 2021) is a self-configuring U-Net that handles dataset specifics automatically. Gold standard for medical segmentation.
+      - **Compute-efficient**: ~10-40M parameters; runs on modest hardware.
+
+      For general segmentation tasks (Cityscapes, ADE20K, COCO), Mask2Former / OneFormer beat U-Net. For medical / specialised, nnU-Net often still wins.
+
+      Also: **U-Net is the backbone of diffusion models** (Stable Diffusion, FLUX). It denoises noisy images, predicting noise at each scale. Same architecture, different objective.
+
+      For Track A purposes: U-Net is the right choice for small-data domain-specific segmentation; Mask2Former / SAM for everything else.
+    pitfalls:
+      - "Don't dismiss U-Net as 'old.' It's the standard in medical imaging in 2026 for good reasons (data scarcity, domain specificity)."
+---
+
+<TldrCallout>
+  Segmentation predicts per-pixel labels: semantic (which class), instance (which specific object),
+  panoptic (both). The 2026 picks: Mask2Former for general semantic / instance / panoptic, U-Net for
+  medical / specialised small-data, SAM 2 for promptable / zero-shot. SAM revolutionised annotation
+  — masks-by-click reduced labelling cost 10×. Evaluate with mIoU (semantic) or mask AP (instance);
+  never pixel accuracy.
+</TldrCallout>
+
+## Three flavours of segmentation
+
+```
+Original          Semantic          Instance          Panoptic
+[2 cats]    →    [cat / bg]    →    [cat_1, cat_2]    →    [cat_1, cat_2, sky-stuff]
+```
+
+**Semantic**: every pixel gets one class label. Cars merge; sky is a region; no distinction between individuals.
+
+**Instance**: every pixel gets a class AND an instance ID. Different cars distinguished; can count them.
+
+**Panoptic**: combines both. "Things" (cars, people) get instance IDs; "stuff" (sky, grass) is treated as one region per class.
+
+Which to use:
+
+- Sky / road / horizon detection → semantic.
+- Counting / tracking / per-object reasoning → instance.
+- Full scene parsing → panoptic.
+
+Most modern frameworks (Mask2Former, OneFormer) handle all three with one model.
+
+## The 2026 segmentation models
+
+| Model               | Type                           | When                                       |
+| ------------------- | ------------------------------ | ------------------------------------------ |
+| **Mask2Former**     | Semantic / instance / panoptic | General purpose; SOTA quality              |
+| **SegFormer**       | Semantic, efficient            | Fast inference, simpler than Mask2Former   |
+| **U-Net / nnU-Net** | Semantic                       | Medical, satellite, microscopy; small data |
+| **SAM 2**           | Promptable, class-agnostic     | Annotation, interactive, zero-shot         |
+| **Grounded-SAM**    | Open-vocab, promptable         | Find + segment by text description         |
+| **DeepLab v3+**     | Semantic                       | Older but solid; some legacy systems       |
+| **Mask R-CNN**      | Instance segmentation          | Older but mature; production-tested        |
+
+For new general-purpose projects: Mask2Former (HuggingFace `facebook/mask2former-swin-base-coco-instance`).
+
+For specialised small-data: nnU-Net.
+
+For annotation tooling: SAM 2.
+
+## SAM: the annotation revolution
+
+The Segment Anything Model (Meta, 2023; SAM 2 in 2024) is a foundation model for segmentation. Given:
+
+- An image, and
+- A prompt (point, box, or coarse mask),
+
+it returns a high-quality segmentation mask for what was prompted.
+
+The model:
+
+```
+Image → ViT image encoder → embedding
+Prompt → prompt encoder → embedding
+Decoder → mask
+```
+
+Trained on 1.1 billion masks across 11M images. The largest segmentation dataset ever.
+
+Why it changed everything:
+
+- **Annotation cost dropped 10×.** Annotators click once on an object; SAM produces the mask. Tools like Label Studio, Roboflow, CVAT all integrate SAM.
+- **Zero-shot segmentation.** Works on anything — including domains SAM never saw — at decent quality.
+- **Building block.** Detect with YOLO → segment each detected box with SAM. Cleaner masks than detection alone.
+
+Important: **SAM is class-agnostic**. It produces masks but doesn't label them. For "is this a car?", combine with a classifier or CLIP zero-shot.
+
+SAM 2 extends to video: track an object's mask through frames. Enables interactive video editing.
+
+<AnalogyCallout>
+  SAM is like a precision laser-cutter for image regions. Point at any object, get a perfect
+  outline. Doesn't know what the object is — that's a separate job. But the cutting itself is free,
+  zero-shot, and works on almost anything.
+</AnalogyCallout>
+
+## The promptable paradigm
+
+Promptable segmentation generalises beyond SAM:
+
+**Grounding DINO + SAM (Grounded-SAM)**:
+
+```
+Text prompt "tractor in field" → Grounding DINO → bounding box(es)
+                                            ↓
+                                          SAM → high-quality mask(s)
+```
+
+Combined: open-vocabulary segmentation. Specify what to find with natural language; get pixel-precise masks.
+
+**OneFormer**, **OneFormer**: training-time prompt about task (semantic / instance / panoptic) instead of training separate models.
+
+In 2026 these promptable approaches are eating fixed-class segmentation for many use cases.
+
+## Mask2Former: the general-purpose default
+
+Mask2Former (Cheng et al., 2022) unified semantic, instance, and panoptic segmentation in one architecture:
+
+- Transformer-based.
+- Object queries (like DETR) but for masks instead of boxes.
+- One pretrained checkpoint can fine-tune for any segmentation task.
+
+HuggingFace usage:
+
+```python
+from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
+
+processor = Mask2FormerImageProcessor.from_pretrained("facebook/mask2former-swin-large-coco-instance")
+model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-coco-instance")
+
+inputs = processor(images=image, return_tensors="pt")
+outputs = model(**inputs)
+
+# Post-process to masks
+instance_seg = processor.post_process_instance_segmentation(outputs, target_sizes=[image.size[::-1]])[0]
+```
+
+Fine-tune on your data via standard HuggingFace Trainer or custom loop. Typically 10-50 epochs with low lr.
+
+## Evaluation: mIoU and mask AP
+
+**Semantic**: Mean IoU across classes.
+
+```python
+import torchmetrics
+metric = torchmetrics.JaccardIndex(task="multiclass", num_classes=NUM_CLASSES, average="macro")
+mIoU = metric(predictions, targets)
+```
+
+Per-class IoU is essential. mIoU of 0.5 could be (0.9, 0.1, 0.5) across three classes — one is great, one is broken.
+
+**Instance**: Mask AP (analogous to box AP for detection).
+
+```python
+# Via pycocotools
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
+coco_eval = COCOeval(gt_coco, pred_coco, "segm")  # segm for mask
+coco_eval.evaluate()
+coco_eval.accumulate()
+coco_eval.summarize()
+```
+
+mAP@[0.5:0.95] using mask IoU instead of box IoU.
+
+**Panoptic**: Panoptic Quality (PQ) combines segmentation quality (SQ) and recognition quality (RQ).
+
+Standard benchmarks:
+
+| Dataset    | Task     | SOTA     |
+| ---------- | -------- | -------- |
+| Cityscapes | Semantic | mIoU ~85 |
+| ADE20K     | Semantic | mIoU ~57 |
+| COCO       | Instance | mAP ~55  |
+| COCO       | Panoptic | PQ ~55   |
+
+Domain-specific benchmarks vary wildly.
+
+## Common failure modes
+
+| Symptom                                      | Likely cause                   | Fix                                                 |
+| -------------------------------------------- | ------------------------------ | --------------------------------------------------- |
+| mIoU good overall, terrible on small classes | Class imbalance + IoU's nature | Class-balanced loss; focal loss                     |
+| Fuzzy mask edges                             | Boundary modeling weak         | Boundary-aware loss (Dice + boundary); post-process |
+| Holes in masks                               | Insufficient receptive field   | Larger encoder; dilated convolutions                |
+| Fragmented small objects                     | Single-scale processing        | Multi-scale features (FPN, ASPP)                    |
+| Inconsistent across frames (video)           | Per-frame processing           | Temporal smoothing; SAM 2 for video                 |
+| Production worse than benchmark              | Distribution shift             | Production-augmented training                       |
+
+## Cost and latency
+
+For real-time segmentation:
+
+| Approach                         | Latency             | Quality              |
+| -------------------------------- | ------------------- | -------------------- |
+| SegFormer-B0 (TensorRT, 512x512) | 10-20ms             | Lower                |
+| Mask2Former-Swin-Tiny (224x224)  | 30-50ms             | Mid                  |
+| Mask2Former-Swin-Base (512x512)  | 100-200ms           | High                 |
+| SAM ViT-H                        | 500ms-1s per prompt | Highest              |
+| FastSAM                          | 50-100ms            | Good for interactive |
+
+For real-time: SegFormer or Mask2Former with smaller backbone + TensorRT. For interactive annotation: SAM (mobile / lightweight variants exist).
+
+<InlineQuiz
+  question="You're building an annotation tool for satellite imagery. Users will click on objects (buildings, vehicles, vegetation) and the tool should produce instance masks. What's the most appropriate stack?"
+  options={[
+    { text: "Train a custom Mask2Former from scratch for buildings, vehicles, vegetation." },
+    {
+      text: "Integrate SAM 2 — users click, SAM produces masks. Add a small classifier on top for labels. Build labelled dataset from accumulated annotations; later train a domain-specific model.",
+      correct: true,
+    },
+    { text: "GPT-4V on every click." },
+    { text: "Hardcode masks via traditional CV (edge detection)." },
+  ]}
+  explanation="This is exactly SAM's killer use case. Click → mask in <1s, works on arbitrary satellite imagery, no training needed up front. Labels come from a tiny separate classifier. The accumulated annotations later become training data for a domain-specific Mask2Former. This is the 2026 annotation paradigm. Training from scratch is what you do AFTER you have labelled data; SAM gets you that data fast."
+/>
+
+## Domain-specific: medical and satellite
+
+For specialised domains:
+
+- **Medical** (CT, MRI, histopathology, microscopy): nnU-Net is the gold standard. Self-configuring; handles dataset-specific preprocessing automatically. Often pretrained on domain-specific data (e.g., MONAI for medical).
+- **Satellite / aerial**: U-Net or DeepLab variants; pretraining on aerial datasets (xView, SpaceNet) matters.
+- **Microscopy**: U-Net dominates; Cellpose for cell segmentation specifically.
+
+These domains have smaller data (often <1000 images), specialised input characteristics (multi-channel, non-RGB), and require domain expertise in preprocessing.
+
+<InlineQuiz
+  question="You have 500 medical CT scans for kidney tumor segmentation. Which model should you start with?"
+  options={[
+    { text: "Mask2Former from COCO weights." },
+    {
+      text: "nnU-Net — self-configuring, handles medical data preprocessing, pretrained on similar tasks. Designed exactly for this regime.",
+      correct: true,
+    },
+    { text: "SAM 2 zero-shot." },
+    { text: "Train a custom transformer from scratch." },
+  ]}
+  explanation="500 medical CTs is small-data territory; nnU-Net dominates this regime in 2026. It handles 3D volumes, intensity normalisation, patch-based training, and class imbalance specific to medical imaging. COCO-pretrained Mask2Former is for natural images; transfer to medical is mediocre. SAM zero-shot can help annotate but isn't a final model; custom from scratch fails. nnU-Net + domain pretraining is the canonical medical segmentation recipe."
+/>
+
+## Closing for segmentation
+
+Segmentation in 2026 has settled into: Mask2Former for general purpose, nnU-Net for medical / specialised, SAM 2 for promptable / annotation. The promptable paradigm (SAM, Grounded-SAM, Grounding DINO + SAM) is increasingly the way to handle open-vocabulary or label-scarce tasks.
+
+The next lesson moves from per-image prediction to multimodal understanding: vision-language models that align images with text.

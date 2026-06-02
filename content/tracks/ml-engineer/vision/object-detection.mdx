@@ -1,0 +1,396 @@
+---
+title: "Object detection: YOLO, DETR, RT-DETR"
+description: "Find and localise objects in images. The two architectural families (anchor-based YOLO and DETR-style transformers), the 2026 production picks, and the engineering around mAP, NMS, and real-time deployment."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: object-detection
+lessonCode: "A7.4"
+estMinutes: 14
+prereqs:
+  - "A7.3 Image classification with pretrained backbones"
+  - "A5.4 The attention mechanism"
+objectives:
+  - "Train and evaluate an object detector using Ultralytics YOLO or HuggingFace DETR."
+  - "Pick between YOLO (real-time CNN) and DETR (transformer, higher quality)."
+  - "Interpret mAP, IoU, and per-class metrics correctly."
+pitfalls:
+  - "Reporting only mAP@0.5. Modern benchmarks use mAP@[0.5:0.95] (averaged over IoU thresholds); they differ a lot for small / poorly-localised objects."
+  - "Skipping per-class evaluation. mAP averages can hide complete failure on small or rare classes."
+  - "Choosing YOLO when DETR fits the use case. YOLO is fast; DETR is often higher-quality and simpler conceptually."
+  - "Forgetting NMS in production. Detectors output redundant boxes; without NMS, downstream code drowns in duplicates."
+importantQuestions:
+  - question: "What's the difference between YOLO and DETR families?"
+    shortAnswer: |
+      YOLO: CNN-based, anchor-based, predicts boxes from a grid of cells with non-maximum suppression. Real-time, mature. DETR: transformer-based, end-to-end set prediction (no anchors, no NMS). Higher quality but historically slower; RT-DETR closed the latency gap.
+    detailed: |
+      **YOLO family** (Joseph Redmon's original, 2016; now Ultralytics YOLO-v8 / v11 in 2026). Architecture: CNN backbone → multi-scale heads → predict (cx, cy, w, h, class) per grid cell. Multiple boxes per cell (anchors). Post-processing: NMS to remove duplicates.
+
+      Properties:
+      - **Fast.** Real-time on GPU (>60 FPS at 640x640); mobile-friendly variants.
+      - **Mature.** Ultralytics provides easy training / deployment.
+      - **Anchor-based.** Pre-defined box shapes; tune for your domain.
+
+      **DETR family** (Carion et al., 2020). Architecture: backbone → transformer encoder → transformer decoder with N object queries → predict N (class, box) pairs. Loss: bipartite matching (each prediction matched 1:1 with a ground-truth). No NMS.
+
+      Properties:
+      - **End-to-end.** No anchors, no NMS, no fancy post-processing.
+      - **Higher quality** historically — esp. for crowded scenes.
+      - **Slower** until RT-DETR (2023) brought DETR to real-time.
+
+      Modern variants: **RT-DETR** (Baidu 2023, real-time DETR), **DINO-DETR** (improved training), **Co-DETR** (cross-supervision).
+
+      In 2026 production: YOLO for real-time edge deployments; RT-DETR for high-quality real-time; classical DETR / DINO for offline batch.
+    pitfalls:
+      - "DETR took 10× the training time of YOLO originally. DINO-DETR and modern variants closed the gap."
+  - question: "Which YOLO version in 2026?"
+    shortAnswer: |
+      Ultralytics YOLO-v8 or v11. They're maintained, well-documented, with clean Python API. Older YOLO-v3/v4/v5 still work but lack the modern training tricks. Don't use Joseph Redmon's original Darknet.
+    detailed: |
+      The YOLO ecosystem fragmented around 2020 when Joseph Redmon stopped maintaining it. Various groups produced "YOLO-v5" through "v11":
+
+      | Version | Maintainer | Year | Notes |
+      | ------- | ---------- | ---- | ----- |
+      | YOLO-v3 | Joseph Redmon | 2018 | Original; historically important |
+      | YOLO-v4 | Bochkovskiy et al. | 2020 | Open-source successor |
+      | YOLO-v5 | Ultralytics | 2020 | First Ultralytics-maintained; Python-native |
+      | YOLO-v7 | Wang et al. | 2022 | Strong quality, less polished |
+      | YOLO-v8 | Ultralytics | 2023 | Polished, easy API, supports detection / segmentation / pose |
+      | YOLO-v9 | Wang et al. | 2024 | Quality-focused |
+      | YOLO-v10 | Ao Wang et al. | 2024 | NMS-free YOLO |
+      | YOLO-v11 | Ultralytics | 2024 | Latest Ultralytics; current default |
+      | YOLO-v12 / YOLOX / RTMDet | Various | 2024-2026 | Niche variants |
+
+      Practical 2026 default: **Ultralytics YOLO-v11** for ease of use; **YOLO-v10** if you want NMS-free.
+
+      Sizes within a version: n (nano), s (small), m (medium), l (large), x (extra large). Trade compute for quality. YOLO-v11n is ~5M params; YOLO-v11x is ~70M.
+    pitfalls:
+      - "Different YOLO versions have incompatible config formats. Stick to one version per project."
+  - question: "What is mAP and how should you read it?"
+    shortAnswer: |
+      Mean Average Precision: for each class, compute precision-recall curve over confidence thresholds, take the area under it (AP). Average across classes. mAP@0.5 uses IoU threshold 0.5 for "correct" boxes; mAP@[0.5:0.95] averages over IoU 0.5 to 0.95.
+    detailed: |
+      Computing AP for one class:
+
+      1. Sort all predicted boxes by confidence (descending).
+      2. For each box, check if it matches a ground-truth box (IoU >= threshold). If so, true positive; else false positive.
+      3. As you scan down the sorted list, compute precision and recall at each point.
+      4. AP = area under the precision-recall curve.
+
+      mAP averages this across all classes.
+
+      Thresholds:
+      - **mAP@0.5** (Pascal VOC convention): a prediction matches a GT if IoU >= 0.5. Lenient.
+      - **mAP@[0.5:0.95]** (COCO convention): average mAP over thresholds 0.5, 0.55, 0.6, ..., 0.95. Stricter; rewards precise localisation.
+
+      A model with mAP@0.5 = 0.8 might have mAP@[0.5:0.95] = 0.5 — meaning it detects objects but the boxes aren't tight.
+
+      Always specify which mAP you're reporting. Modern benchmarks (COCO) use mAP@[0.5:0.95]; older VOC results use mAP@0.5.
+
+      Per-class AP matters too. A 0.5 average mAP could be 0.9 on common classes and 0.1 on rare ones.
+    pitfalls:
+      - "Detectors trained on COCO have ~50-55% mAP@[0.5:0.95]; this isn't bad — COCO is hard. Compare like-for-like."
+  - question: "What is NMS and when does it matter?"
+    shortAnswer: |
+      Non-Maximum Suppression: detectors output many overlapping boxes for the same object. NMS keeps the highest-confidence box and removes lower-confidence boxes that overlap it (IoU above threshold). Without NMS, downstream code sees duplicates.
+    detailed: |
+      Standard NMS:
+
+      1. Sort all predictions by confidence.
+      2. Take the highest-confidence box; output it.
+      3. Remove all other predictions with IoU > threshold (default 0.5).
+      4. Repeat from step 2 until no predictions remain.
+
+      Result: at most one box per "true" object (assuming non-overlapping objects).
+
+      For overlapping objects (crowded scenes, occlusion), NMS is too aggressive; uses soft-NMS or learned NMS instead.
+
+      **DETR doesn't need NMS** because its bipartite matching loss enforces one-to-one prediction-to-GT assignment. End-to-end.
+
+      In Ultralytics YOLO, NMS is automatic during inference. In raw PyTorch / training, you implement it via `torchvision.ops.nms`.
+
+      NMS hyperparameters:
+      - IoU threshold (default 0.5): lower → more aggressive de-duplication.
+      - Confidence threshold (default 0.25): below this, drop predictions entirely.
+    pitfalls:
+      - "NMS is class-aware in standard implementations. Two different-class predictions overlapping aren't suppressed."
+  - question: "When should you use a Vision-Language Model for detection?"
+    shortAnswer: |
+      For zero-shot / open-vocabulary detection (Grounding DINO, OWL-ViT, YOLO-World): "find all instances of [arbitrary description]" without training. Slower than YOLO. Useful for rapid prototyping, novel categories, or one-off extractions.
+    detailed: |
+      Traditional detectors (YOLO, DETR) detect a fixed set of classes from training. Add a class → retrain.
+
+      Open-vocabulary detectors take a text prompt and find matching objects:
+
+      ```python
+      # Pseudocode for Grounding DINO
+      boxes, scores = model.predict(image, text_prompt="green tractor in field")
+      ```
+
+      Examples:
+      - **Grounding DINO** (Liu et al., 2023): text-conditioned detection.
+      - **OWL-ViT / OWLv2** (Google 2022/2023): open-vocab detection from CLIP-style training.
+      - **YOLO-World** (Tencent, 2024): YOLO-speed + open-vocab.
+      - **GPT-4V / Claude vision**: very general but slow; for one-off extractions.
+
+      When useful:
+      - **Prototyping**: validate a detection task before labelling data.
+      - **Novel categories** without training data ("find rare wildlife species in trail-cam images").
+      - **One-off extractions** where building a custom detector isn't worth it.
+      - **Open-vocab production**: e.g., e-commerce "find all [user query] in product photos".
+
+      When fine-tuned YOLO wins:
+      - Fixed class set, known in advance.
+      - Real-time deployment.
+      - You have labelled data and care about quality on specific classes.
+    pitfalls:
+      - "Open-vocab detection is slower and less precise than fine-tuned. Use for prototyping; switch to fine-tune for production at scale."
+  - question: "How do you evaluate detectors in production?"
+    shortAnswer: |
+      mAP for headline; per-class precision/recall for diagnosis; manual review of failure cases for systematic issues; latency / throughput / model size for deployment fit.
+    detailed: |
+      Production detector evaluation:
+
+      **Headline metrics**:
+      - mAP@[0.5:0.95] (COCO style) — overall quality.
+      - mAP per class — identify weak classes.
+
+      **Operating-point metrics**:
+      - Precision and recall at production confidence threshold (e.g., 0.5).
+      - F1 per class.
+
+      **Diagnostic**:
+      - Per-class precision-recall curves.
+      - Per-image failure modes (manual review of 50-100 high-confidence false positives + missed detections).
+      - Per-slice metrics (lighting condition, distance, occlusion level).
+
+      **Deployment**:
+      - Latency (p50, p99) at target resolution.
+      - Throughput (img/sec) for batch processing.
+      - Model size (MB) for deployment constraints.
+
+      Tools:
+      - **FiftyOne**: visualisation and slicing of detection results.
+      - **Weights & Biases**: tracking metrics across runs.
+      - **Roboflow Universe**: standard datasets + evaluation.
+      - **COCO eval API**: official COCO metric computation.
+
+      Production failure modes hide in slices. Always slice by metadata.
+    pitfalls:
+      - "Detector mAP often drops 10-20 points when you move from clean academic data to messy production. Domain adaptation matters."
+---
+
+<TldrCallout>
+  Object detection in 2026 has two practical families: YOLO (CNN, anchor-based, real-time;
+  Ultralytics YOLO-v11 is the polished default) and DETR (transformer, end-to-end, no NMS; RT-DETR
+  brought it to real-time). Use YOLO for edge / real-time / mature tooling; DETR / RT-DETR for high
+  quality and end-to-end simplicity. For open-vocabulary or rapid prototyping, Grounding DINO and
+  YOLO-World let you detect arbitrary text-described objects without training.
+</TldrCallout>
+
+## The two families
+
+**YOLO** (You Only Look Once, Redmon et al., 2016 → Ultralytics YOLO-v8/v11 in 2026):
+
+- Single forward pass through CNN backbone → multi-scale prediction heads → output (cx, cy, w, h, class) per grid cell with multiple anchors.
+- Post-processing: NMS to deduplicate overlapping boxes.
+- Real-time on GPU (60+ FPS at 640×640); mobile-friendly with smaller variants.
+- Mature ecosystem, Python-native, well-supported.
+
+**DETR** (Detection Transformer, Carion et al., 2020):
+
+- Backbone → transformer encoder → transformer decoder with N "object queries" → output N (class, box) pairs.
+- Bipartite matching loss: each prediction matched 1:1 with a ground-truth object.
+- No anchors, no NMS — end-to-end.
+- Originally slow to train; modern variants (DINO-DETR, RT-DETR) closed the gap.
+
+Modern picks:
+
+- **Ultralytics YOLO-v11**: real-time, easy, mature.
+- **RT-DETR**: real-time DETR; higher quality than YOLO on COCO at similar latency.
+- **DINO-DETR / Co-DETR / Grounding DINO**: high quality, slower; open-vocab variant available.
+
+## The Ultralytics YOLO recipe
+
+```python
+from ultralytics import YOLO
+
+# Load pretrained
+model = YOLO("yolo11n.pt")  # nano variant; or yolo11s/m/l/x
+
+# Train on custom data (COCO-format dataset)
+model.train(
+    data="path/to/data.yaml",
+    epochs=100,
+    imgsz=640,
+    batch=16,
+    device=0,
+)
+
+# Inference
+results = model("path/to/image.jpg")
+results[0].boxes  # bounding boxes with confidence and class
+```
+
+That's a working detector. `data.yaml` specifies class names and paths to train/val image folders + label files.
+
+Ultralytics handles augmentation, NMS, evaluation, export to ONNX / TensorRT / CoreML — out of the box. For most production detection work in 2026, you don't write more than this.
+
+## DETR via HuggingFace
+
+```python
+from transformers import DetrImageProcessor, DetrForObjectDetection
+
+processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
+
+inputs = processor(images=image, return_tensors="pt")
+outputs = model(**inputs)
+
+# Post-process to bounding boxes
+target_sizes = torch.tensor([image.size[::-1]])
+results = processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.5)[0]
+```
+
+Pretrained on COCO; fine-tune on your data via the standard HuggingFace Trainer.
+
+For real-time DETR variants:
+
+```python
+from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
+model = RTDetrForObjectDetection.from_pretrained("PekingU/rtdetr_r50vd_coco_o365")
+```
+
+Quality comparable to YOLO at similar speed; cleaner architecture.
+
+## mAP: what it actually means
+
+Mean Average Precision is the standard detection metric. Steps:
+
+1. **For each class**: collect all predictions across the dataset; sort by confidence descending.
+2. **Compute precision-recall curve**: as you scan down, each prediction is either a true positive (matches a GT box with IoU >= threshold) or false positive.
+3. **AP = area under the PR curve**.
+4. **mAP = mean of AP across all classes**.
+
+Thresholds:
+
+- **mAP@0.5** (Pascal VOC, older standard): IoU >= 0.5 counts as a hit. Lenient.
+- **mAP@[0.5:0.95]** (COCO, current standard): average mAP over IoU thresholds 0.5, 0.55, 0.6, ..., 0.95. Stricter — rewards precise localisation.
+
+A model with mAP@0.5 = 0.80 might have mAP@[0.5:0.95] = 0.50 — meaning it detects objects but boxes aren't tightly fit.
+
+| Benchmark        | Standard       | Typical SOTA           |
+| ---------------- | -------------- | ---------------------- |
+| COCO 2017        | mAP@[0.5:0.95] | ~55-65% (large models) |
+| Pascal VOC       | mAP@0.5        | ~85-90%                |
+| LVIS (long-tail) | mAP@[0.5:0.95] | ~40-50% (very hard)    |
+
+Always specify which mAP you report.
+
+<AnalogyCallout>
+  Detection is "find and locate" rather than "identify." A classifier says "this image contains a
+  cat." A detector says "this image contains a cat in this 200×200 pixel region, this dog in that
+  150×300 region." mAP measures both 'did I find the right things' (precision) and 'did I localise
+  them tightly' (IoU).
+</AnalogyCallout>
+
+## NMS: the standard post-processor
+
+Detectors output many redundant boxes for the same object. Non-Maximum Suppression keeps the best, removes overlapping duplicates:
+
+```python
+import torchvision.ops as ops
+
+# boxes: [N, 4] (x1, y1, x2, y2)
+# scores: [N]
+# iou_threshold: 0.5
+keep_indices = ops.nms(boxes, scores, iou_threshold=0.5)
+final_boxes = boxes[keep_indices]
+final_scores = scores[keep_indices]
+```
+
+YOLO / Ultralytics applies NMS automatically. DETR's bipartite matching eliminates the need (each prediction is uniquely matched to a GT).
+
+Soft-NMS and learned-NMS handle crowded scenes better (e.g., people in dense crowds where standard NMS suppresses true detections). Both are available as drop-in replacements.
+
+## When to use Vision-Language Detectors
+
+For zero-shot / open-vocabulary detection:
+
+- **Grounding DINO** (Liu et al., 2023): "find all [arbitrary text]" — bounding boxes for any text description.
+- **OWL-ViT / OWLv2** (Google): CLIP-style open-vocab detection.
+- **YOLO-World** (Tencent, 2024): YOLO-speed + open-vocab.
+- **GPT-4V / Claude vision**: very general but slow; one-off use.
+
+When to use:
+
+- Prototyping a detection task without labelled data.
+- Detecting novel / evolving categories.
+- One-off extractions ("find all images containing red trucks in this archive").
+
+When to use fine-tuned YOLO / DETR:
+
+- Production with known fixed classes.
+- Real-time / latency-critical.
+- High volume.
+
+<InlineQuiz
+  question="You're building a real-time door-frame detector for an industrial inspection system. 100 FPS required on edge hardware. Which approach should you start with?"
+  options={[
+    { text: "Grounding DINO with prompt 'door frame'." },
+    {
+      text: "Fine-tune Ultralytics YOLO-v11n on labelled door-frame images. Export to TensorRT for edge deployment. 100+ FPS achievable on Jetson-class hardware.",
+      correct: true,
+    },
+    { text: "GPT-4V on each frame." },
+    { text: "DETR-large from HuggingFace." },
+  ]}
+  explanation="100 FPS on edge is YOLO-v11n territory. Fine-tune on your domain data, export to TensorRT (or ONNX → TensorRT), serve. Grounding DINO is open-vocab but slower (single-digit FPS even on big GPU). GPT-4V is 1-2s per frame, useless for real-time. DETR-large is too heavy for edge. The 'fine-tune small YOLO + edge compile' recipe is the canonical real-time detection pattern."
+/>
+
+## Common failure modes
+
+| Symptom                                             | Likely cause             | Fix                                                          |
+| --------------------------------------------------- | ------------------------ | ------------------------------------------------------------ |
+| mAP@0.5 great, @[0.5:0.95] bad                      | Localisation imprecise   | Train longer; better backbone; stronger regression loss      |
+| High recall, low precision                          | Too many false positives | Raise confidence threshold; train with hard negatives        |
+| Low recall, high precision                          | Missing detections       | Lower threshold; data augmentation; train on harder examples |
+| Per-class mAP varies wildly                         | Class imbalance          | Class-balanced sampling; focal loss                          |
+| Works on train images, fails on production          | Domain shift             | Production augmentation; domain adaptation                   |
+| Detects objects that aren't there in crowded scenes | NMS too aggressive       | Soft-NMS; tune IoU threshold                                 |
+
+Diagnose by per-class breakdown, manual error inspection, and slice metrics.
+
+## Deployment
+
+For real-time deployment:
+
+1. **Export** to ONNX (`model.export(format='onnx')` in Ultralytics).
+2. **Compile** with TensorRT (NVIDIA), OpenVINO (Intel), or CoreML (Apple).
+3. **Quantise** to INT8 with calibration (or FP16 / BF16 for safer).
+4. **Batch** when latency allows.
+
+A quantised YOLO-v11s in TensorRT serves ~200-400 FPS on a single T4 GPU. YOLO-v11n on a Jetson Orin Nano: 50-100 FPS. Sufficient for most real-time use.
+
+Detailed in A7.8.
+
+<InlineQuiz
+  question="You report COCO mAP@0.5 = 0.65 for your model and the team is unimpressed. Your manager points out that another team got 0.85 on a different dataset. What's the most useful comparison?"
+  options={[
+    { text: "Theirs is clearly better — 0.85 > 0.65." },
+    {
+      text: "mAP depends heavily on dataset difficulty. COCO is harder than e.g. Pascal VOC; their 0.85 might be VOC, your 0.65 might be COCO. Compare with the same dataset and same metric (mAP@0.5 vs mAP@[0.5:0.95]) before judging.",
+      correct: true,
+    },
+    { text: "Switch architectures to match theirs." },
+    { text: "Train longer to bridge the gap." },
+  ]}
+  explanation="mAP is dataset-relative. COCO mAP@0.5 of 0.65 is roughly SOTA for many object types; COCO mAP@[0.5:0.95] of 0.55 is roughly SOTA. Pascal VOC mAP@0.5 of 0.85 might be a much smaller model on a much easier dataset. Always compare like-for-like (same dataset, same metric). Cross-dataset mAP comparisons are misleading. This is one of the most common errors in detector reporting."
+/>
+
+## Closing for detection
+
+YOLO and DETR cover the production detection landscape. YOLO for real-time, DETR for end-to-end simplicity, RT-DETR for the best of both. For open-vocab or prototyping, Grounding DINO / YOLO-World. The interesting engineering work is in data, augmentation, deployment optimisation — model choice is mostly settled.
+
+The next lesson moves from bounding boxes to pixel-level prediction: segmentation, including the Segment Anything Model that changed the landscape.

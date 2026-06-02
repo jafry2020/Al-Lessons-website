@@ -1,0 +1,377 @@
+---
+title: "Image preprocessing and augmentation"
+description: "The cheapest way to make a vision model robust: feed it many synthetic variations of every training image. The augmentation stack in 2026 — RandAugment, Mixup, CutMix — and the normalisation everyone gets wrong."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: image-preprocessing-augmentation
+lessonCode: "A7.2"
+estMinutes: 12
+prereqs:
+  - "A7.1 The 2026 computer vision landscape"
+  - "A4.6 Initialization, normalization, and regularization"
+objectives:
+  - "Apply the standard augmentation pipeline (resize, crop, flip, colour jitter, RandAugment, Mixup, CutMix)."
+  - "Distinguish train-time augmentation from test-time augmentation; use the right one for the goal."
+  - "Match normalisation statistics to the model: ImageNet means / stds for ImageNet-pretrained; CLIP / DINOv2-specific for those backbones."
+pitfalls:
+  - "Using wrong normalisation. ImageNet means [0.485, 0.456, 0.406] / stds [0.229, 0.224, 0.225] are the default; CLIP / DINOv2 use different values."
+  - "Augmenting at test time and expecting the same result as training. Use test-time augmentation deliberately, not by accident."
+  - "Heavy augmentation on small datasets. Often hurts; the model never sees a clean example."
+  - "Mixup + CutMix on classification with class-balanced training. Re-weighting interacts badly with mixing labels."
+importantQuestions:
+  - question: "What's the standard augmentation pipeline in 2026?"
+    shortAnswer: |
+      Resize → random crop → horizontal flip → colour jitter → RandAugment → Mixup / CutMix → normalise. Different pipelines for train (heavy augmentation) and test (just resize + centre crop + normalise).
+    detailed: |
+      The 2026 default training pipeline (PyTorch torchvision.transforms.v2):
+
+      ```python
+      import torchvision.transforms.v2 as T
+      train_transforms = T.Compose([
+          T.RandomResizedCrop(224, scale=(0.8, 1.0)),
+          T.RandomHorizontalFlip(),
+          T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+          T.RandAugment(num_ops=2, magnitude=9),
+          T.ToTensor(),
+          T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet
+          T.RandomErasing(p=0.25),
+      ])
+
+      # Apply Mixup / CutMix in the data loader collate or training loop
+      ```
+
+      Test pipeline (no augmentation):
+
+      ```python
+      test_transforms = T.Compose([
+          T.Resize(256),
+          T.CenterCrop(224),
+          T.ToTensor(),
+          T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+      ])
+      ```
+
+      For Albumentations, the equivalents are largely the same names with slightly different APIs. Both work; pick one.
+
+      Strong augmentation is essential for ViTs (which lack CNN's inductive bias) and helpful for CNNs. Modern recipes are essentially required for SOTA quality.
+    pitfalls:
+      - "Don't forget to convert PIL to tensor BEFORE normalise. ToTensor() does the scale 0-255 → 0-1; Normalise expects 0-1."
+  - question: "What is RandAugment?"
+    shortAnswer: |
+      A simple, automated augmentation: pick N (typically 2) random transforms from a fixed list of ~15 augmentations, apply each at a fixed magnitude. No search; no per-image tuning. Replaces older AutoAugment which used reinforcement learning.
+    detailed: |
+      RandAugment (Cubuk et al., 2020) simplified AutoAugment to two hyperparameters: N (number of transforms to apply per image) and M (magnitude, 0-30).
+
+      The augmentation list (a few of ~15): Identity, AutoContrast, Equalize, Rotate, Solarize, Color, Posterize, Contrast, Brightness, Sharpness, ShearX, ShearY, TranslateX, TranslateY.
+
+      For each image:
+      1. Pick N random augmentations from the list.
+      2. Apply each at magnitude M.
+
+      Why it's better than ad-hoc augmentation: removes hyperparameter search and produces consistently strong recipes across datasets. N=2, M=9 is the canonical setting.
+
+      In timm: `timm.data.transforms_factory.create_transform(...)` includes RandAugment by default for SOTA recipes.
+
+      Sometimes called "manual auto-augmentation."
+    pitfalls:
+      - "RandAugment's transforms can produce out-of-distribution images for niche domains (medical, satellite). May need a curated subset."
+  - question: "What are Mixup and CutMix?"
+    shortAnswer: |
+      Mixup: blend two images and their labels linearly. CutMix: paste a rectangular region from image B into image A, mix labels proportional to area. Both regularise by encouraging the model to make smooth decisions between classes.
+    detailed: |
+      **Mixup** (Zhang et al., 2017):
+
+      x_new = λ · x_A + (1-λ) · x_B
+      y_new = λ · y_A + (1-λ) · y_B
+
+      where λ is sampled from a Beta distribution (typically α=0.2, giving λ heavily favouring one image or the other).
+
+      The model trains on convex combinations of pairs. Implicit regularisation; works well for classification.
+
+      **CutMix** (Yun et al., 2019):
+
+      Sample a rectangular region in image A; replace with the corresponding region from image B. Label mixed proportional to area:
+
+      y_new = λ · y_A + (1-λ) · y_B, where λ = 1 - (area_B / total_area).
+
+      The model sees a Frankenstein image. Encourages learning local features (not just whole-image gestalt). Often combined randomly with Mixup.
+
+      Implementation: timm and torchvision both include `Mixup` and `Cutmix` transforms. Apply per-batch in the data loader.
+
+      Quality gain: +1-3% top-1 on ImageNet for strong baselines. Standard in SOTA recipes.
+    pitfalls:
+      - "Mixed labels break standard cross-entropy assumptions. Use 'soft cross-entropy' / KL-divergence loss instead of hard label cross-entropy."
+  - question: "Why does normalisation matter so much?"
+    shortAnswer: |
+      Pretrained models were trained with specific input distributions. Using different normalisation at inference shifts inputs to a regime the model didn't see, degrading accuracy by 5-20% silently.
+    detailed: |
+      Normalisation maps pixel values from [0, 1] (after ToTensor) to a roughly zero-mean, unit-variance distribution.
+
+      Standard values:
+
+      | Source | Mean | Std |
+      | ------ | ---- | --- |
+      | ImageNet (default for most CNNs and ViTs) | [0.485, 0.456, 0.406] | [0.229, 0.224, 0.225] |
+      | CLIP (OpenAI) | [0.481, 0.458, 0.408] | [0.269, 0.261, 0.276] |
+      | DINOv2 | [0.485, 0.456, 0.406] | [0.229, 0.224, 0.225] (ImageNet) |
+      | OpenAI CLIP via HuggingFace | Same as CLIP above |
+
+      Get this wrong and your accuracy drops. The model expects specific input distribution; it gets a different one.
+
+      Check the model card. timm and HuggingFace processor objects bake in the correct normalisation; use them.
+
+      Quick check: print `model.default_cfg` (timm) or look at the preprocessor (HuggingFace). Match.
+    pitfalls:
+      - "Channel ordering matters: PyTorch / timm use RGB; some OpenCV pipelines use BGR. Convert before normalise."
+  - question: "When is augmentation harmful?"
+    shortAnswer: |
+      On tiny datasets where the model never sees clean examples; on tasks where augmented variants are semantically different from real images (medical, OCR-on-orientation-sensitive text); when augmentation magnitudes are too aggressive for the data domain.
+    detailed: |
+      Cases where heavy augmentation backfires:
+
+      - **Tiny data (<500 images per class).** Aggressive augmentation means the model never sees a clean version; useful signal swamped by noise.
+      - **OCR or text recognition.** Rotation, perspective transforms change semantic meaning ("6" rotated 180° becomes "9").
+      - **Medical imaging.** Random colour jitter on radiology images may push out of meaningful distribution.
+      - **Domain-specific recognition.** Random horizontal flip is wrong for tasks where left/right matters (handedness, mirror text).
+      - **Already-clean industrial data.** Augmentation models noise that isn't present in deployment.
+
+      Diagnostic: run with NO augmentation and full augmentation. If full augmentation is much worse, augmentation is hurting.
+
+      Compromise: use a curated subset of augmentations matched to your domain.
+    pitfalls:
+      - "Mixup and CutMix break the label-image alignment. For tasks where label depends on the whole image structure (medical), they can hurt."
+  - question: "What's test-time augmentation (TTA)?"
+    shortAnswer: |
+      Apply augmentation at inference, average predictions across versions. Adds latency but improves accuracy by 0.5-2%. Common in Kaggle / benchmarks; rare in latency-sensitive production.
+    detailed: |
+      TTA: instead of single forward pass on the original image, run on N augmented versions (e.g., original + 4 random crops + horizontal flip), then average the logits.
+
+      Pros:
+      - Small accuracy boost (0.5-2% on ImageNet-style benchmarks).
+      - Free if you have compute headroom.
+
+      Cons:
+      - N× inference cost.
+      - N× latency.
+
+      Use cases:
+      - Benchmarks where 0.5% matters.
+      - Critical decisions (medical) where ensemble reliability is worth latency.
+
+      Skip for:
+      - Real-time applications.
+      - Any case where you want one deterministic prediction.
+
+      Modern alternative: ensemble distinct models (different seeds, different architectures). Larger gain, similar cost.
+    pitfalls:
+      - "Naive TTA can make calibration worse — averaged logits change the probability distribution."
+---
+
+<TldrCallout>
+  Augmentation is the cheapest way to make CV models robust. The 2026 default training stack: resize
+  → random crop → flip → colour jitter → RandAugment → Mixup/CutMix → normalise. Test pipeline is
+  just resize + centre crop + normalise. Use ImageNet normalisation for ImageNet-pretrained models;
+  check model cards for CLIP / DINOv2 / others. Get normalisation right; everything else is tuning.
+</TldrCallout>
+
+## The default training pipeline
+
+A modern PyTorch training pipeline with torchvision.transforms.v2:
+
+```python
+import torchvision.transforms.v2 as T
+
+train_tf = T.Compose([
+    T.RandomResizedCrop(224, scale=(0.8, 1.0)),
+    T.RandomHorizontalFlip(),
+    T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+    T.RandAugment(num_ops=2, magnitude=9),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    T.RandomErasing(p=0.25),
+])
+
+test_tf = T.Compose([
+    T.Resize(256),
+    T.CenterCrop(224),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+```
+
+Plus Mixup / CutMix applied in the data loader collate (per-batch, not per-image).
+
+This is the recipe used in modern timm benchmarks, with minor tuning. It produces ~84-86% ImageNet top-1 with a vanilla ViT-B/16.
+
+## What each step does
+
+| Step                   | Effect                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `RandomResizedCrop`    | Random scale + crop. Models learn scale-invariance and partial views.                                |
+| `RandomHorizontalFlip` | Free 2× data; correct for most natural images.                                                       |
+| `ColorJitter`          | Robustness to lighting / camera variation.                                                           |
+| `RandAugment`          | Apply N random transforms from a curated list. Strong implicit augmentation without per-task tuning. |
+| `Normalize`            | Map to model's expected distribution.                                                                |
+| `RandomErasing`        | Mask random patches. Encourages learning multiple features.                                          |
+| `Mixup` / `CutMix`     | Mix images and labels; smooth decision boundaries.                                                   |
+
+For ViTs specifically, augmentation is essential — without it, ViTs underfit by ~5-10% on ImageNet vs. with full augmentation. CNNs benefit too but tolerate less aggressive recipes.
+
+<AnalogyCallout>
+  Augmentation is like teaching a student with not just textbooks but also worn copies, photocopies,
+  scribbled-on copies, partial copies, and mirror-image copies. They learn to read the content
+  regardless of the medium. Without this, they overfit to the specific textbook (the clean training
+  image) and fail on novel presentations.
+</AnalogyCallout>
+
+## Normalisation: the silent quality killer
+
+Pretrained models expect inputs in a specific distribution. Standard values:
+
+| Backbone                       | Mean                              | Std                   |
+| ------------------------------ | --------------------------------- | --------------------- |
+| ImageNet (most CNNs, ViTs)     | [0.485, 0.456, 0.406]             | [0.229, 0.224, 0.225] |
+| CLIP / SigLIP                  | [0.481, 0.458, 0.408]             | [0.269, 0.261, 0.276] |
+| DINOv2                         | ImageNet defaults (same as above) |
+| EfficientNet (Google original) | [0.5, 0.5, 0.5]                   | [0.5, 0.5, 0.5]       |
+
+Mismatched normalisation → silent quality drop of 5-20%. The model still runs; outputs look plausible; accuracy is lower than it should be.
+
+How to get it right:
+
+- **timm**: `model.default_cfg['mean']` and `model.default_cfg['std']` give the correct values.
+- **HuggingFace**: use the processor object — `AutoImageProcessor.from_pretrained(model_name)`. It bakes in the right normalisation.
+- **From scratch with new model**: read the model card.
+
+Don't guess; check.
+
+## RandAugment in detail
+
+RandAugment (Cubuk et al., 2020) replaced the older AutoAugment (which used reinforcement learning to search for good augmentations). The simpler approach works almost as well:
+
+- Pick N augmentations from a list of ~15.
+- Apply each at magnitude M.
+
+Defaults: N=2, M=9. The transformations include rotate, shear, translate, colour adjustments (brightness, contrast, saturation, sharpness), posterise, solarise, equalise.
+
+In code:
+
+```python
+import torchvision.transforms.v2 as T
+randaug = T.RandAugment(num_ops=2, magnitude=9, num_magnitude_bins=31)
+```
+
+For a domain where some transforms are inappropriate (e.g., rotation for text recognition), use a custom list — pick the relevant subset.
+
+## Mixup and CutMix
+
+Both work by mixing two training examples and their labels:
+
+**Mixup** (Zhang et al., 2017):
+
+```
+x_new = λ·x_A + (1-λ)·x_B
+y_new = λ·y_A + (1-λ)·y_B
+λ ~ Beta(α, α), α typically 0.2
+```
+
+**CutMix** (Yun et al., 2019):
+
+```
+Sample a rectangle in image A; replace with corresponding rectangle from B.
+y_new = λ·y_A + (1-λ)·y_B, where λ = 1 - (area_B / total_area).
+```
+
+Quality gain: each adds 0.5-1.5% on ImageNet; together (or random per-batch) +1-3%. Standard in SOTA recipes.
+
+Implementation: torchvision provides `MixUp` and `CutMix` transforms; timm bundles them in the training loop. Apply at the batch level after normalisation.
+
+**Loss**: use "soft cross-entropy" (KL divergence to mixed label) instead of hard-label cross-entropy. Built into timm and many other libraries.
+
+## Test-time augmentation
+
+TTA: run inference on multiple augmented versions of the image, average predictions.
+
+```python
+predictions = []
+for aug in [identity, horizontal_flip, crop_1, crop_2, ...]:
+    augmented = aug(image)
+    predictions.append(model(augmented).softmax(dim=-1))
+final = torch.stack(predictions).mean(dim=0)
+```
+
+Pros: ~0.5-2% accuracy boost on benchmarks.
+
+Cons: N× inference cost; N× latency.
+
+When to use: high-stakes decisions where reliability beats latency (medical, legal, content moderation appeals). Avoid for real-time UX.
+
+Modern alternative: ensemble of distinct fine-tuned models (different seeds, different backbones). Slightly bigger gain for similar cost — and arguably cleaner than TTA.
+
+<InlineQuiz
+  question="You fine-tune a pretrained ViT-B/16 on a custom dataset. Training accuracy is 95%, validation is 70%. You haven't used Mixup, CutMix, RandAugment, or random erasing — just resize and flip. What's the most useful change?"
+  options={[
+    { text: "Switch to a smaller model." },
+    {
+      text: "Add strong augmentation: RandAugment + Mixup + CutMix + RandomErasing. ViTs especially need heavy augmentation to generalise.",
+      correct: true,
+    },
+    { text: "Lower the learning rate." },
+    { text: "Train for more epochs." },
+  ]}
+  explanation="25-point train/val gap is severe overfitting. ViTs lack CNN's inductive bias and rely heavily on augmentation to generalise. The modern recipe (RandAugment + Mixup + CutMix + RandomErasing) typically closes 10-15 points of overfit gap. More epochs or a smaller model don't address the underlying overfit; lowering lr might help marginally. Augmentation is the right primary lever for ViT overfit."
+/>
+
+## Albumentations vs torchvision.transforms.v2
+
+Two main libraries:
+
+| Library                       | Pros                                                                                | Cons                      |
+| ----------------------------- | ----------------------------------------------------------------------------------- | ------------------------- |
+| **torchvision.transforms.v2** | Built-in to PyTorch; supports MixUp, CutMix; new GPU acceleration                   | Slightly fewer transforms |
+| **Albumentations**            | Larger transform list; faster (Cython / NumPy); image-mask support for segmentation | External dependency       |
+
+For most classification work: torchvision.transforms.v2 is fine.
+
+For segmentation, detection (need joint image-mask / image-bbox transforms): Albumentations is typically smoother. Or use the dataset class to handle joint transforms with torchvision.transforms.v2.
+
+## Data loader patterns
+
+For high throughput:
+
+```python
+loader = DataLoader(
+    dataset,
+    batch_size=128,
+    num_workers=4 * num_gpus,  # rule of thumb
+    pin_memory=True,           # async copy to GPU
+    prefetch_factor=2,
+    persistent_workers=True,   # avoid worker reinit
+)
+```
+
+`num_workers` matters: too few → GPU starvation. Too many → context switching overhead, memory pressure. 4× number of GPUs is a reasonable start.
+
+For maximum throughput on GPU: move augmentation to GPU (Kornia library), use webdataset / tfdata-style streaming for large datasets. Most teams don't need this.
+
+<InlineQuiz
+  question="You load a pretrained ViT-L from CLIP and want to fine-tune it on your data. You normalise with ImageNet means [0.485, 0.456, 0.406] / stds [0.229, 0.224, 0.225]. The model trains but converges slowly and final accuracy is 6% below baselines from the same checkpoint. What's the most likely cause?"
+  options={[
+    { text: "Learning rate too high." },
+    {
+      text: "CLIP uses different normalisation statistics (mean ~[0.48, 0.46, 0.41], std ~[0.27, 0.26, 0.28]). Using ImageNet stats shifts inputs to a regime CLIP wasn't trained on.",
+      correct: true,
+    },
+    { text: "Too much augmentation." },
+    { text: "Need to freeze the backbone." },
+  ]}
+  explanation="A 6% gap from baseline with everything else right is a textbook normalisation bug. CLIP's training data and statistics are not exactly ImageNet's. Using HuggingFace's `CLIPImageProcessor` (or the right manual stats) eliminates this — model sees inputs in the distribution it was trained on. This is one of the most common silent bugs in fine-tuning foundation models."
+/>
+
+## Closing for augmentation
+
+Augmentation is unglamorous but high-leverage. A great backbone with weak augmentation can underperform a mediocre backbone with strong augmentation, especially on small data. In 2026 the standard recipe (RandAugment + Mixup + CutMix + RandomErasing) is essentially required for SOTA quality.
+
+The next lesson takes the next step: fine-tuning pretrained backbones for classification — the most common production CV task.

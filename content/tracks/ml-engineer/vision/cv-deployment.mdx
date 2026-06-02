@@ -1,0 +1,525 @@
+---
+title: "Computer vision deployment and inference optimisation"
+description: "Turning a trained vision model into a fast, cheap production service. ONNX, TensorRT, quantisation, batching, and the edge / mobile / GPU choices that decide whether you ship at $100/month or $10,000/month."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: cv-deployment
+lessonCode: "A7.8"
+estMinutes: 14
+prereqs:
+  - "A7.3 Image classification with pretrained backbones"
+  - "A4.7 The training stack: schedules, mixed precision, distributed"
+objectives:
+  - "Export a PyTorch vision model to ONNX and run it via ONNX Runtime."
+  - "Apply INT8 quantisation with calibration; quantify the quality-vs-speedup trade-off."
+  - "Pick the right inference stack for the target: cloud GPU, edge (Jetson), mobile (CoreML / TFLite), browser (WebGPU)."
+pitfalls:
+  - "Skipping quantisation calibration. Post-training quantisation without representative calibration data drops accuracy 5-20%."
+  - "Benchmarking on the wrong hardware. Latency varies dramatically between A100, T4, Jetson, mobile NPU; report what you actually deploy on."
+  - "Choosing batch size by 'feels fast.' Optimal batch size depends on memory, model, and request distribution. Measure."
+  - "Ignoring p99 latency. Production users see worst-case; reporting only p50 hides spikes."
+importantQuestions:
+  - question: "What's ONNX and why use it?"
+    shortAnswer: |
+      ONNX (Open Neural Network Exchange) is a portable model format. Export a PyTorch / TensorFlow model to ONNX; run it via ONNX Runtime on any platform (CPU, GPU, mobile, browser) without the original framework.
+    detailed: |
+      ONNX = a format + a runtime ecosystem:
+
+      **Format**: a serialised graph of operations + weights. Framework-agnostic.
+
+      **ONNX Runtime**: cross-platform inference engine. Optimised execution providers for CUDA, TensorRT, OpenVINO, CoreML, DirectML, web, etc.
+
+      Why ONNX:
+      - **Portability**: train in PyTorch; deploy without PyTorch dependency.
+      - **Speed**: ONNX Runtime is often 1.5-3× faster than PyTorch inference (graph optimisations, kernel fusion).
+      - **Deployment flexibility**: same model file runs on diverse hardware.
+      - **Hardware-vendor compatibility**: vendor-specific accelerators (TensorRT, OpenVINO, CoreML) all support ONNX input.
+
+      Export:
+
+      ```python
+      import torch
+      model.eval()
+      dummy_input = torch.randn(1, 3, 224, 224)
+      torch.onnx.export(
+          model, dummy_input, "model.onnx",
+          input_names=["input"], output_names=["output"],
+          dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
+          opset_version=17,
+      )
+      ```
+
+      Inference:
+
+      ```python
+      import onnxruntime as ort
+      session = ort.InferenceSession("model.onnx", providers=["CUDAExecutionProvider"])
+      output = session.run(None, {"input": input_array})
+      ```
+
+      In 2026, ONNX is the de facto standard for CV deployment.
+    pitfalls:
+      - "Some PyTorch operations don't export cleanly to ONNX. Test export early; check the exported graph."
+  - question: "What is quantisation and how much does it speed things up?"
+    shortAnswer: |
+      Convert model weights from FP32 (32-bit float) to lower precision: FP16, BF16, INT8, INT4. INT8 typically gives 2-4× speedup and 4× memory reduction on CPU/GPU. Quality drops 1-3% with good calibration; up to 10% without.
+    detailed: |
+      Quantisation maps high-precision weights to lower-precision representations:
+
+      | Precision | Bytes per weight | Speedup | Quality cost |
+      | --------- | ---------------- | ------- | ------------ |
+      | FP32 | 4 | 1× (baseline) | 0 |
+      | FP16 | 2 | 1.5-2× | Negligible |
+      | BF16 | 2 | 1.5-2× | Negligible |
+      | INT8 | 1 | 2-4× | 1-3% with calibration |
+      | INT4 | 0.5 | 3-6× | 3-10% (research / LLM-specific tooling) |
+
+      Two flavours:
+
+      **Post-Training Quantisation (PTQ)**: quantise a trained model. Need calibration data (~100-1000 representative inputs) to set scales correctly.
+
+      **Quantisation-Aware Training (QAT)**: train with simulated quantisation. More accurate; more expensive.
+
+      For most CV: PTQ to INT8 with calibration is the production default. PTQ tools:
+      - ONNX Runtime: built-in quantisation.
+      - TensorRT: end-to-end with calibration cache.
+      - OpenVINO: similar.
+
+      INT4 / 2-bit quantisation is more developed for LLMs than for vision; vision usually stops at INT8.
+    pitfalls:
+      - "Don't quantise BatchNorm / sensitive layers without care. Some implementations selectively keep them at FP32."
+  - question: "What's TensorRT and when do you use it?"
+    shortAnswer: |
+      NVIDIA's high-performance inference engine. Compiles a model (typically from ONNX) into a TensorRT engine optimised for a specific GPU. 2-10× faster than PyTorch / ONNX Runtime on NVIDIA hardware.
+    detailed: |
+      TensorRT performs aggressive optimisations:
+      - **Kernel fusion**: combine adjacent operations into single GPU kernels.
+      - **Layer auto-tuning**: pick the fastest kernel implementation for the specific GPU.
+      - **Precision calibration**: INT8 with calibration; FP16 selectively.
+      - **Dynamic shape handling**: builds engines for ranges of input sizes.
+
+      Trade-offs:
+      - **GPU-specific**: an engine built for A100 won't run on T4. Build per target.
+      - **One-time compile cost**: 30 seconds to a few minutes per engine.
+      - **NVIDIA-only**: useless on AMD / Apple / Intel hardware.
+
+      For NVIDIA GPU deployment:
+      - **Quick path**: ONNX → ONNX Runtime with CUDAExecutionProvider. 1.5-2× speedup over PyTorch.
+      - **Maximum speedup**: ONNX → TensorRT. 2-10× speedup over PyTorch.
+
+      Latency-critical (real-time detection, AR, autonomous): TensorRT.
+      Convenience-first (varied hardware, prototyping): ONNX Runtime.
+
+      Modern alternative: **torch.compile** (PyTorch 2.x). Compile PyTorch model in-process; 1.5-2× speedup without the export pipeline. Easier; not always as fast as TensorRT.
+    pitfalls:
+      - "TensorRT engines are not portable across CUDA driver / TensorRT versions. Rebuild on the production hardware."
+  - question: "How do you deploy to mobile / edge?"
+    shortAnswer: |
+      iOS: CoreML (export via coremltools). Android: TFLite or ONNX Runtime Mobile. Embedded (Jetson, Coral, ESP32): vendor-specific runtime (TensorRT for Jetson, EdgeTPU for Coral, TFLite Micro for tiny). Different toolchain per target.
+    detailed: |
+      The mobile / edge landscape in 2026:
+
+      | Target | Runtime | Best toolchain |
+      | ------ | ------- | -------------- |
+      | iOS / macOS | CoreML | coremltools (PyTorch → CoreML) |
+      | Android | TFLite, ONNX Runtime Mobile, MediaPipe | TFLite is most mature; ONNX Runtime Mobile growing |
+      | NVIDIA Jetson | TensorRT | Same as cloud TensorRT |
+      | Google Coral | EdgeTPU | TFLite quantised to INT8 |
+      | Apple Neural Engine | CoreML | Special INT8 / weight-compressed formats |
+      | Web browsers | ONNX Runtime Web, transformers.js | WebGPU / WebAssembly backends |
+      | Raspberry Pi | ONNX Runtime CPU, TFLite | CPU-only; quantise aggressively |
+      | Microcontrollers | TFLite Micro | KB-scale model only |
+
+      Patterns:
+      - **iOS**: PyTorch → ONNX → CoreML, or PyTorch → CoreML directly via coremltools.
+      - **Android**: TFLite is the most mature path; PyTorch → TFLite via various converters; or use ONNX Runtime Mobile.
+      - **Web**: increasingly viable via WebGPU. transformers.js runs many models in browser.
+
+      Mobile-specific tips:
+      - **Quantise to INT8 always** for mobile. FP32 wastes battery and memory.
+      - **Pick small models**: MobileNet, EfficientNet-Lite, MobileViT.
+      - **Profile on the actual device**, not in a simulator.
+      - **Cache model warmup**: first inference is much slower; preload.
+    pitfalls:
+      - "Mobile inference engines have very different operator support. Test your model's specific ops; common ones work, exotic ones don't."
+  - question: "How do you batch inference for throughput?"
+    shortAnswer: |
+      Send multiple inputs per forward pass. GPU compute is much more efficient at higher batch sizes (utilises tensor cores, amortises overhead). Trade-off: latency per individual request goes up. Tune for your latency budget.
+    detailed: |
+      Single inference: 1 image → forward pass. GPU is mostly idle.
+
+      Batched inference: N images → one forward pass. GPU runs at higher utilisation.
+
+      Typical throughput vs. batch size for a CNN:
+
+      | Batch size | Latency (ms) | Throughput (img/s) |
+      | ---------- | ------------ | ------------------ |
+      | 1 | 15 | 67 |
+      | 8 | 25 | 320 |
+      | 32 | 60 | 533 |
+      | 128 | 200 | 640 |
+
+      Diminishing returns past some batch size (typically 32-128 for CV models).
+
+      Production patterns:
+
+      **Static batch size**: model expects fixed batch. Pad with dummy inputs if traffic is uneven.
+
+      **Dynamic batch size**: model accepts variable batch. ONNX, TensorRT, and PyTorch all support this.
+
+      **Continuous batching / queue-based batching**: group incoming requests into batches in real time. Wait up to N ms or until batch is full, whichever first. Common in inference servers (Triton, BentoML).
+
+      For real-time (per-user) UX, batch sizes 1-8 with low latency.
+
+      For background / batch processing, batch sizes 64-256 for maximum throughput.
+    pitfalls:
+      - "Waiting too long to fill a batch hurts tail latency. Set timeout sensibly (e.g., 20ms max wait)."
+  - question: "What's the 2026 production inference stack?"
+    shortAnswer: |
+      For cloud GPU: PyTorch → ONNX → TensorRT (or ONNX Runtime) + BentoML / Triton / Modal as the serving layer. For mobile: CoreML (iOS) or TFLite (Android). For browser: ONNX Runtime Web or transformers.js. Monitor with Datadog / W&B / vendor tools.
+    detailed: |
+      The production CV inference stack in 2026:
+
+      **Model export**:
+      - PyTorch → ONNX (universal portable).
+      - Or PyTorch → CoreML / TFLite for mobile.
+      - Or PyTorch + torch.compile for in-process speedup.
+
+      **Inference engine**:
+      - **NVIDIA cloud**: TensorRT, ONNX Runtime + CUDA EP, vLLM (for VLMs).
+      - **CPU**: ONNX Runtime + OpenVINO (Intel) or default backend.
+      - **Apple**: CoreML.
+      - **Edge GPU (Jetson)**: TensorRT.
+      - **Edge TPU / NPU**: EdgeTPU, TFLite, vendor-specific.
+      - **Browser**: ONNX Runtime Web, WebGPU.
+
+      **Serving layer**:
+      - **Triton Inference Server** (NVIDIA): high-throughput, multi-model, dynamic batching. Robust.
+      - **BentoML**: Python-native, easy to ship.
+      - **TorchServe**: PyTorch-native.
+      - **Modal / Replicate / RunPod**: managed GPU inference.
+      - **AWS SageMaker, GCP Vertex, Azure ML**: cloud platforms.
+
+      **Monitoring**:
+      - Latency p50 / p99 per endpoint.
+      - Throughput (requests/sec).
+      - GPU utilisation.
+      - Prediction distribution (drift detection).
+      - Per-class accuracy on sampled production data.
+
+      Most teams use 4-6 of these. The exact mix depends on hardware target and team capacity.
+    pitfalls:
+      - "Don't deploy on managed services without cost monitoring. GPU instances scale up quickly; surprise bills are common."
+---
+
+<TldrCallout>
+  Vision model deployment in 2026: export to ONNX (universal) or framework-specific format (CoreML /
+  TFLite for mobile). Optimise with TensorRT (NVIDIA), OpenVINO (Intel), or platform-native runtime.
+  Quantise to INT8 for 2-4× speedup. Batch when latency allows. Pick the inference stack matching
+  your hardware target — cloud GPU, edge, mobile, browser all have different optimal paths. Monitor
+  p99 latency, GPU utilisation, and quality drift.
+</TldrCallout>
+
+## The deployment pipeline
+
+A trained vision model becomes a production service via roughly this pipeline:
+
+```
+PyTorch model
+    ↓
+Export (ONNX, CoreML, TFLite, etc.)
+    ↓
+Optimise (TensorRT, OpenVINO, etc.)
+    ↓
+Quantise (INT8, FP16)
+    ↓
+Containerise / serve (Triton, BentoML, Modal, etc.)
+    ↓
+Monitor (latency, accuracy, drift)
+```
+
+Each step has multiple choices; pick by target hardware and use case.
+
+## Export: ONNX as the universal format
+
+ONNX (Open Neural Network Exchange) is the de facto portable format. Most paths go through it.
+
+```python
+import torch
+
+model.eval()
+dummy_input = torch.randn(1, 3, 224, 224)
+
+torch.onnx.export(
+    model,
+    dummy_input,
+    "model.onnx",
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_axes={
+        "input": {0: "batch_size"},
+        "output": {0: "batch_size"},
+    },
+    opset_version=17,
+)
+```
+
+Inference:
+
+```python
+import onnxruntime as ort
+import numpy as np
+
+session = ort.InferenceSession(
+    "model.onnx",
+    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],  # tries in order
+)
+input_array = np.random.randn(1, 3, 224, 224).astype(np.float32)
+output = session.run(None, {"input": input_array})
+```
+
+ONNX Runtime is typically 1.5-3× faster than PyTorch inference (graph optimisations, kernel fusion). For most CV deployment in 2026, this is the baseline.
+
+For maximum NVIDIA GPU performance: compile the ONNX model to TensorRT engine.
+
+## Quantisation: free 2-4× speedup
+
+Reduce model precision from FP32 to FP16 / BF16 / INT8 / INT4.
+
+| Precision               | Speedup | Memory cut | Quality cost                           |
+| ----------------------- | ------- | ---------- | -------------------------------------- |
+| FP32                    | 1×      | 1×         | 0                                      |
+| FP16                    | 1.5-2×  | 2×         | Negligible                             |
+| BF16                    | 1.5-2×  | 2×         | Negligible (better than FP16 for some) |
+| INT8 (with calibration) | 2-4×    | 4×         | 1-3% accuracy drop                     |
+| INT4 (vision rare)      | 3-6×    | 8×         | 3-10% drop                             |
+
+**Post-Training Quantisation (PTQ)** with INT8 is the production default. You need calibration data (100-1000 representative inputs) to set the right scaling factors:
+
+```python
+# ONNX Runtime quantisation example
+from onnxruntime.quantization import quantize_static, CalibrationDataReader
+
+class MyCalibrationReader(CalibrationDataReader):
+    def __init__(self, calibration_data):
+        self.data = iter(calibration_data)
+    def get_next(self):
+        try:
+            x = next(self.data)
+            return {"input": x}
+        except StopIteration:
+            return None
+
+quantize_static(
+    "model.onnx",
+    "model_int8.onnx",
+    MyCalibrationReader(calibration_loader),
+)
+```
+
+INT8 quantisation typically loses 1-3% top-1 accuracy with proper calibration. Without calibration (dynamic quantisation), the drop can be 5-20%.
+
+**Quantisation-Aware Training (QAT)** trains with simulated quantisation; more accurate but requires retraining. Worth the effort for edge / mobile where every percent matters.
+
+<AnalogyCallout>
+  Quantisation is like compressing a photo from RAW to JPEG. The 80% file-size reduction barely
+  changes visual quality if done with good defaults; done carelessly, you get visible artefacts.
+  Same for models: with calibration, the small quality drop is worth the 4× speedup; without, the
+  model's predictions degrade in subtle ways.
+</AnalogyCallout>
+
+## TensorRT: NVIDIA's peak performance
+
+For NVIDIA GPU deployment, TensorRT compiles ONNX models to highly optimised engines:
+
+```bash
+trtexec \
+    --onnx=model.onnx \
+    --saveEngine=model.trt \
+    --fp16 \
+    --workspace=4096
+```
+
+In Python:
+
+```python
+import tensorrt as trt
+# Build / load engine; run via TensorRT API or torch_tensorrt
+```
+
+Performance: TensorRT typically gets 2-10× speedup over PyTorch on NVIDIA hardware.
+
+Drawbacks:
+
+- Engine compilation is hardware-specific (A100 engine doesn't run on T4).
+- Each engine takes 30s-5min to build.
+- Driver / TensorRT version compatibility matters.
+
+Modern alternative: **torch.compile()** (PyTorch 2.x) compiles the PyTorch model in-process. Easier; 1.5-2× speedup without leaving PyTorch.
+
+| Approach               | Speedup | Complexity | Portability  |
+| ---------------------- | ------- | ---------- | ------------ |
+| PyTorch eager          | 1×      | Lowest     | Any hardware |
+| torch.compile          | 1.5-2×  | Low        | Any hardware |
+| ONNX Runtime + CUDA EP | 2×      | Medium     | NVIDIA       |
+| TensorRT               | 2-10×   | High       | NVIDIA only  |
+
+For most teams: ONNX Runtime + TensorRT EP is the sweet spot. TensorRT directly is for max-latency-critical applications.
+
+## Inference servers
+
+Production CV serving uses an inference server, not a Python script. The mature options:
+
+| Server                                    | Best for                         | Notes                                                 |
+| ----------------------------------------- | -------------------------------- | ----------------------------------------------------- |
+| **NVIDIA Triton Inference Server**        | High throughput, multi-model     | Industry standard; dynamic batching, model versioning |
+| **BentoML**                               | Python-friendly, easy deployment | Less performance-focused but easier ops               |
+| **TorchServe**                            | PyTorch-native                   | Simpler than Triton; PyTorch ecosystem                |
+| **Modal / Replicate / RunPod**            | Managed GPU; pay-per-use         | No infra; great for prototyping or sporadic workloads |
+| **HuggingFace Inference Endpoints**       | One-click deployment             | Tied to HuggingFace models                            |
+| **AWS SageMaker / GCP Vertex / Azure ML** | Enterprise, integrated           | Heavyweight; vendor lock-in                           |
+
+For most teams in 2026: Triton if you need maximum throughput; BentoML if you want easy Python deployment; managed (Modal / Replicate) for low-ops.
+
+## Mobile and edge
+
+Different toolchain per target:
+
+**iOS (CoreML)**:
+
+```python
+import coremltools as ct
+mlmodel = ct.convert(pytorch_model, inputs=[...])
+mlmodel.save("model.mlpackage")
+```
+
+Quantise to INT8 or 4-bit weight compression (CoreML 7+) for Apple Neural Engine acceleration.
+
+**Android (TFLite)**:
+
+```python
+import tensorflow as tf
+converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_dir)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_model = converter.convert()
+```
+
+INT8 quantisation; works on CPU, GPU, NNAPI.
+
+**NVIDIA Jetson**:
+Use TensorRT, same as cloud. Edge-class GPU.
+
+**Browser (WebGPU)**:
+
+```javascript
+import * as ort from "onnxruntime-web";
+const session = await ort.InferenceSession.create("model.onnx", { executionProviders: ["webgpu"] });
+```
+
+WebGPU support is increasingly viable; transformers.js runs many models in browser.
+
+For mobile: always quantise to INT8 (or 4-bit). Always profile on the actual device, not simulator.
+
+## Batching for throughput
+
+GPUs are most efficient at high batch sizes. For background / batch processing, batching is free throughput:
+
+```
+Batch 1:   15ms latency, 67 img/sec
+Batch 8:   25ms latency, 320 img/sec
+Batch 32:  60ms latency, 533 img/sec
+Batch 128: 200ms latency, 640 img/sec
+```
+
+Diminishing returns past 32-128 batch size. Memory limit eventually binds.
+
+Production patterns:
+
+- **Static batch**: model takes fixed batch (pad with zeros if needed). Simple.
+- **Dynamic batch**: model accepts variable batch. ONNX, TensorRT support this.
+- **Continuous batching / queue-based**: group incoming requests in real-time. Wait up to N ms or until batch full. Inference servers (Triton) implement this.
+
+For real-time UX: batch 1-8, low latency.
+
+For background processing: batch 64-256, max throughput.
+
+<InlineQuiz
+  question="You deploy a fine-tuned ConvNeXt-Tiny via PyTorch directly on AWS, p99 latency is 150ms, cost is $500/month. You need to reduce both latency and cost. What's the most impactful optimisation order?"
+  options={[
+    { text: "Switch to a smaller model first." },
+    {
+      text: "Export to ONNX, run via ONNX Runtime + CUDA EP for 1.5-2× speedup; quantise to INT8 with calibration for another 2× speedup; then evaluate. Often gets you to 50ms latency at 30% the cost without changing model architecture.",
+      correct: true,
+    },
+    { text: "Train a custom architecture from scratch." },
+    { text: "Add more GPUs to spread load." },
+  ]}
+  explanation="ONNX Runtime + INT8 quantisation typically delivers 4-8× speedup combined, with 1-3% accuracy cost. That's the high-leverage optimisation BEFORE changing model architecture. Adding GPUs increases cost. Custom architectures are months of work. The optimisation order: optimise serving (ONNX + quantisation + batching) → then consider smaller model → then consider architecture changes."
+/>
+
+## Monitoring in production
+
+Beyond the model itself, monitor:
+
+- **Latency**: p50, p95, p99 per endpoint. Alert on regressions.
+- **Throughput**: requests/sec; GPU utilisation; queue depth.
+- **Cost**: $/request; $/day; per-endpoint breakdown.
+- **Accuracy**: sampled predictions reviewed manually; drift detection on prediction distribution.
+- **Errors**: timeout rate; OOM rate; provider failure rate.
+
+Tools:
+
+- **Datadog, Prometheus, CloudWatch**: general infra metrics.
+- **Weights & Biases / Arize / WhyLabs**: ML-specific monitoring.
+- **NVIDIA Triton metrics endpoint**: GPU-specific.
+- **OpenTelemetry**: standard for distributed tracing.
+
+Alert thresholds based on SLOs: e.g., p99 latency > 200ms for 5 minutes triggers PagerDuty.
+
+## Distillation for edge
+
+When a great model is too large for production:
+
+1. Train / use a large model (DINOv2-L, ConvNeXt-Large, ViT-H).
+2. Generate predictions on lots of unlabelled data.
+3. Train a small model (MobileNetV3, EfficientNet-Lite, ViT-S) on these predictions as soft labels.
+4. Deploy the small model.
+
+The small model typically retains 95-99% of the large model's quality at 10-100× the throughput.
+
+Standard in CV — the canonical "prototype large, deploy small" pattern.
+
+<InlineQuiz
+  question="You need to deploy a vision model on an iPhone for offline use (no API calls). Requirements: <100ms inference, <50 MB model, runs on iPhone 13+. What's the right stack?"
+  options={[
+    { text: "Send each image to OpenAI GPT-4V via the network." },
+    {
+      text: "Train MobileNetV3 or EfficientNet-Lite on your task; export to CoreML; quantise to INT8 or 4-bit weight compression; deploy to iOS via CoreML framework. Runs on Apple Neural Engine.",
+      correct: true,
+    },
+    { text: "Deploy a 500MB ConvNeXt-Large via CoreML." },
+    { text: "Run PyTorch directly on iOS." },
+  ]}
+  explanation="Offline mobile = no API. Small architecture (MobileNetV3, EfficientNet-Lite, MobileViT) + CoreML + aggressive quantisation. Apple Neural Engine accelerates supported CoreML models; tens of milliseconds per inference is achievable. 500MB model won't fit and runs slowly. PyTorch isn't a viable iOS runtime — must convert to CoreML or ONNX. OpenAI API requires network."
+/>
+
+## Closing for deployment
+
+CV deployment in 2026 has settled into recognisable patterns:
+
+- **Cloud GPU**: PyTorch → ONNX → TensorRT (max perf) or ONNX Runtime (convenience).
+- **Mobile**: PyTorch → CoreML (iOS) / TFLite (Android), quantised.
+- **Edge**: TensorRT on Jetson; TFLite on Coral; vendor-specific on others.
+- **Browser**: ONNX Runtime Web / transformers.js.
+
+Quantise to INT8 with calibration as default. Batch for throughput when latency permits. Monitor p99 latency and cost continuously.
+
+## Closing for Module 7
+
+This module has covered: the 2026 CV landscape (A7.1), augmentation (A7.2), classification (A7.3), detection (A7.4), segmentation (A7.5), VLMs (A7.6), self-supervised features (A7.7), and now deployment (A7.8).
+
+The pattern across all of them: foundation models (DINOv2, CLIP, SAM) and pretrained backbones (ConvNeXt, ViT) eat most of the work. The interesting engineering is in data, evaluation, deployment, and integration — not from-scratch architecture or training.
+
+The next module (A8 MLOps) covers the cross-modality production operations: monitoring, retraining, distribution shift, deployment pipelines, regulatory and ethical considerations. The capstone synthesises Track A into a single end-to-end ML system design.

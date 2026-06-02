@@ -1,0 +1,293 @@
+---
+title: "The 2026 computer vision landscape"
+description: "What a CV engineer's toolkit looks like in 2026. Foundation models eat most of the work; classical CV still matters where it matters. Framing the rest of the module."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: cv-landscape
+lessonCode: "A7.1"
+estMinutes: 10
+prereqs:
+  - "A5.1 Convolutional neural networks"
+  - "A5.8 Pretraining and transfer learning"
+objectives:
+  - "Map CV tasks (classification, detection, segmentation, retrieval) to the right tool in 2026."
+  - "Distinguish foundation-model use (CLIP, DINOv2, SAM) from task-specific fine-tuning."
+  - "Decide between CNN and ViT backbones for a project based on data scale, deployment target, and task."
+pitfalls:
+  - "Treating ViT as universally better than CNN. ViT needs scale; ConvNeXt or EfficientNet wins on small-data and edge deployment."
+  - "Training from scratch when a pretrained backbone exists. ImageNet pretraining is almost free; pretrained CLIP / DINOv2 features are even better starting points."
+  - "Underestimating data work. Annotation, augmentation, and balanced datasets matter more than model choice for most production CV."
+  - "Reaching for a Vision-Language Model on every problem. They're brilliant generalists; a fine-tuned 50M-param model is 100× cheaper for a fixed task."
+importantQuestions:
+  - question: "What does a CV engineer actually do in 2026?"
+    shortAnswer: |
+      Mostly fine-tune pretrained backbones, build annotation and augmentation pipelines, run evaluation, and deploy on the right hardware. Few people train CV models from scratch; foundation models (CLIP, DINOv2, SAM) eat more of the work each year.
+    detailed: |
+      The 2026 CV engineer's work, roughly:
+
+      1. **Data acquisition + annotation.** Where the real cost is. Labelling images, building taxonomies, dealing with edge cases.
+      2. **Augmentation pipelines.** Make limited data train robust models.
+      3. **Fine-tuning pretrained backbones.** ConvNeXt / ViT / EfficientNet on your task.
+      4. **Evaluation infrastructure.** Per-class metrics, robustness tests, slice analysis.
+      5. **Deployment optimisation.** Quantisation, ONNX / TensorRT, edge compilation.
+      6. **Foundation-model integration.** CLIP for retrieval, SAM for masks, DINOv2 for features.
+      7. **Building VLM-powered features.** Where they're worth the latency / cost.
+      8. **Actual model architecture work.** Almost exclusively at frontier labs.
+
+      The skills that matter: data engineering, augmentation, fine-tuning, evaluation, deployment. Architecture research is a research role.
+    pitfalls:
+      - "Junior CV engineers often overrate the model and underrate the data. Reverse the ratio."
+  - question: "Which CV tasks are 'nearly solved' in 2026?"
+    shortAnswer: |
+      Classification, detection, semantic / instance segmentation, OCR, face recognition, object tracking. All have strong pretrained baselines (ConvNeXt, YOLO-v8+, SAM, Tesseract / TrOCR) that work out of the box for most general cases.
+    detailed: |
+      Strong pretrained baselines exist for:
+
+      | Task | 2026 default |
+      | ---- | ------------ |
+      | Image classification | Fine-tune ConvNeXt / ViT / EfficientNet from ImageNet pretrain |
+      | Object detection | YOLO-v8+ / RT-DETR / DETR family |
+      | Semantic segmentation | Mask2Former, SegFormer |
+      | Instance segmentation | Mask R-CNN (still!), Mask2Former |
+      | Promptable segmentation | SAM (Segment Anything Model) — zero-shot |
+      | OCR | TrOCR, PaddleOCR, Tesseract |
+      | Face detection / recognition | InsightFace, MediaPipe |
+      | Image embeddings | CLIP, DINOv2 |
+      | Visual question answering | LLaVA, GPT-4V, Claude vision |
+
+      What's NOT solved:
+      - **Robustness** to distribution shift (style, weather, lighting changes).
+      - **Long-tail** recognition (rare classes with few examples).
+      - **3D scene understanding** at production reliability.
+      - **Truly fine-grained** classification (medical imaging subspecialties; specific bird species).
+      - **Adversarial robustness** — most production models are still fragile.
+
+      The trend: most general CV is increasingly "call a foundation model"; the hard part is the long tail and the specific.
+    pitfalls:
+      - "'Nearly solved' is dangerous. Production systems still need evaluation, monitoring, and fallbacks."
+  - question: "CNN or ViT?"
+    shortAnswer: |
+      For most production work in 2026, ConvNeXt (modernised CNN) or Vision Transformer with strong augmentation. CNN wins on small data and edge deployment; ViT wins at large data and benefits from foundation-model pretraining (DINOv2, SigLIP, MAE).
+    detailed: |
+      | Regime | Winner | Why |
+      | ------ | ------ | --- |
+      | < 10k labeled images | CNN (ConvNeXt, EfficientNet) | Inductive bias helps |
+      | 10k - 100k | Either (ConvNeXt or ViT-S/B) | Tied; pick by deployment |
+      | > 100k or pretrained at scale | ViT (DINOv2, SigLIP backbones) | Scales further |
+      | Edge / mobile | CNN (MobileNet, EfficientNet-Lite) | Faster on small devices |
+      | Real-time detection | CNN (YOLO family) | Speed |
+      | Multi-modal (image + text) | ViT | Attention handles cross-modal |
+      | Medical / satellite (translation invariance) | CNN | Inductive bias matches data |
+      | Foundation features | ViT (DINOv2 is ViT-based) | Best pretrained backbones |
+
+      A safe 2026 default for a new project: pretrained ConvNeXt-Base + fine-tune. Solid quality, reasonable inference cost, well-supported in HuggingFace and timm.
+
+      For maximum quality and you have compute: fine-tune a DINOv2 ViT-L backbone.
+    pitfalls:
+      - "ViTs need more augmentation than CNNs to train from scratch. Modern ViT recipes (DeiT, Swin) bake this in."
+  - question: "What are foundation models doing for CV?"
+    shortAnswer: |
+      Three major ones: CLIP (image-text alignment), DINOv2 (self-supervised features), SAM (promptable segmentation). They're pretrained on huge data, transfer to many downstream tasks, and replace lots of from-scratch training.
+    detailed: |
+      The big three vision foundation models in 2026:
+
+      **CLIP / SigLIP** (OpenAI 2021; Google 2023 for SigLIP). Trained on image-caption pairs with contrastive loss. Output: aligned image + text embeddings.
+      - Use for: zero-shot classification, image-text retrieval, image search, content moderation.
+      - Limitation: not designed for dense prediction (segmentation, detection).
+
+      **DINOv2** (Meta 2023). Self-supervised ViT trained via self-distillation. Output: strong general-purpose visual features.
+      - Use for: feature extraction, fine-tuning backbone, dense correspondence, clustering.
+      - The "ImageNet-pretrained ResNet of 2026" — your default visual backbone.
+
+      **SAM / SAM 2** (Meta 2023, 2024). Promptable segmentation: given an image + a prompt (point, box, mask), output a high-quality mask.
+      - Use for: zero-shot segmentation, annotation tools (mask anything), interactive editing.
+      - Game-changer for annotation workflows.
+
+      Plus VLMs (LLaVA, GPT-4V, Claude vision, Gemini): general-purpose vision-language reasoning. Covered in A7.6.
+
+      These foundation models did to CV what BERT/GPT did to NLP: replaced 80% of from-scratch training.
+    pitfalls:
+      - "Foundation models are huge. DINOv2-L is ~300M params. For edge / mobile, distill to smaller models."
+  - question: "What's the 'starter stack' for a CV project in 2026?"
+    shortAnswer: |
+      timm + HuggingFace Transformers (backbones), Albumentations or torchvision.transforms.v2 (augmentation), Weights & Biases (tracking), Roboflow or CVAT (annotation), ONNX / TensorRT (deployment). Plus the relevant foundation model.
+    detailed: |
+      The convergent 2026 starter stack:
+
+      - **timm** (HuggingFace): the largest library of pretrained vision models — every ConvNeXt, ViT, EfficientNet, etc. Use this for backbones.
+      - **HuggingFace Transformers**: for ViT-based and foundation models (DINOv2, SigLIP, SAM via HuggingFace ports).
+      - **Albumentations** or **torchvision.transforms.v2**: augmentation pipelines.
+      - **PyTorch Lightning** or **HuggingFace Trainer**: training loops.
+      - **Weights & Biases**: experiment tracking, visualisations.
+      - **Roboflow** / **CVAT** / **Label Studio**: annotation platforms.
+      - **ONNX Runtime** / **TensorRT** / **OpenVINO**: deployment optimisation.
+      - **Ultralytics YOLO**: object detection (mature, opinionated, productive).
+      - **MediaPipe**: on-device CV (face, hand, pose).
+
+      Most production CV projects use 5-7 of these.
+    pitfalls:
+      - "Don't use raw torchvision for augmentation in 2026. torchvision.transforms.v2 or Albumentations are dramatically faster."
+---
+
+<TldrCallout>
+  Computer vision for ML engineers in 2026 is dominated by foundation models (CLIP for retrieval,
+  DINOv2 for features, SAM for masks) and pretrained backbones (ConvNeXt, ViT, EfficientNet). Most
+  production work is data, augmentation, fine-tuning, and deployment — not architecture research.
+  CNN still wins on small data and edge; ViT wins at scale and benefits from foundation-model
+  pretraining.
+</TldrCallout>
+
+## What this module covers
+
+This is the practical CV module for ML engineers. It assumes the architectures from Module 5 (CNNs, transformers) and extends into the tools, decisions, and infrastructure of production CV.
+
+| Lesson | Topic                                              |
+| ------ | -------------------------------------------------- |
+| A7.2   | Image preprocessing and augmentation               |
+| A7.3   | Image classification with pretrained backbones     |
+| A7.4   | Object detection (YOLO, DETR, RT-DETR)             |
+| A7.5   | Image segmentation (semantic, instance, SAM)       |
+| A7.6   | Vision-language models (CLIP, SigLIP, LLaVA, VLMs) |
+| A7.7   | Self-supervised vision features (DINOv2, MAE)      |
+| A7.8   | Deployment and inference optimisation              |
+
+For deep architectural coverage of ViT, transformer internals, and scaling, see Module 5. For multimodal models in the generative direction, see Track B.
+
+## The task / tool map for 2026
+
+| Task                                     | First reach                                    |
+| ---------------------------------------- | ---------------------------------------------- |
+| General image classification             | Fine-tune ConvNeXt or ViT (timm / HuggingFace) |
+| Zero-shot classification                 | CLIP / SigLIP                                  |
+| Object detection (real-time)             | YOLO-v8+ (Ultralytics)                         |
+| Object detection (high quality)          | RT-DETR, DINO-DETR                             |
+| Semantic segmentation                    | Mask2Former, SegFormer                         |
+| Instance segmentation                    | Mask R-CNN, Mask2Former                        |
+| Promptable / interactive segmentation    | SAM 2                                          |
+| Image embeddings (retrieval, similarity) | DINOv2 (visual), CLIP (visual+text)            |
+| Image-text retrieval                     | CLIP / SigLIP                                  |
+| Visual question answering                | LLaVA, GPT-4V, Claude vision                   |
+| OCR                                      | TrOCR, PaddleOCR, Tesseract                    |
+| Face recognition                         | InsightFace                                    |
+| Body pose estimation                     | MediaPipe Pose                                 |
+| Image generation                         | (Track B / Stable Diffusion, FLUX)             |
+| Edge / mobile inference                  | MobileNet, EfficientNet-Lite, MediaPipe        |
+
+This is the conventional decision tree. Module A7 fills in why each one is "first reach" and what alternatives exist.
+
+## The three foundation models you'll actually use
+
+In 2026, three pretrained vision models do a lot of heavy lifting:
+
+**CLIP / SigLIP** — aligned image and text embeddings.
+
+- Image → vector; text → vector; cosine similarity tells you how related they are.
+- Powers: zero-shot classification, image-text retrieval, content moderation, multimodal search.
+- Where it fails: dense prediction (segmentation, detection); fine-grained recognition.
+
+**DINOv2** — self-supervised visual features.
+
+- ViT trained without labels, with self-distillation.
+- Produces strong feature vectors per image patch.
+- Powers: feature extraction, fine-tuning starting point, clustering, dense correspondence.
+- The new "default backbone" — better than ImageNet-pretrained ConvNets for many tasks.
+
+**SAM / SAM 2** — promptable segmentation.
+
+- Given image + a point / box / mask prompt, output a high-quality segmentation mask.
+- Zero-shot — works on anything without training on your data.
+- Powers: annotation tools (mask anything), interactive editing, automated pipelines.
+- Often used as a building block in larger systems.
+
+VLMs (LLaVA, GPT-4V, Claude vision, Gemini) are the fourth pillar but covered specifically in A7.6.
+
+<AnalogyCallout>
+  Foundation models in CV are like foundation models in NLP: someone else spent millions of dollars
+  producing a strong general-purpose model. Your job is to integrate, fine-tune, evaluate, and ship.
+  The transformer changed NLP in 2018; CLIP, DINOv2, and SAM changed CV around 2021-2023. You're
+  working in the post-foundation era.
+</AnalogyCallout>
+
+## CNN vs ViT: still both, depending
+
+The internet sometimes acts like ViT replaced CNN. It didn't. Both are used heavily in production. The decision:
+
+| Dimension                                 | CNN (ConvNeXt, EfficientNet, MobileNet) | ViT                      |
+| ----------------------------------------- | --------------------------------------- | ------------------------ |
+| Small data (<10k images)                  | Wins                                    | Underperforms            |
+| Large data (>100k) or pretrained backbone | Strong                                  | Often wins               |
+| Edge / mobile inference                   | Wins                                    | Heavier                  |
+| Real-time detection (>30 FPS)             | YOLO (CNN-based)                        | Slower                   |
+| Foundation model backbones                | Limited                                 | DINOv2, SigLIP, MAE      |
+| Pretrained quality                        | Good (ImageNet, JFT)                    | Excellent (CLIP, DINOv2) |
+| Inductive bias for translation invariance | Yes (helpful for medical, satellite)    | No (must learn)          |
+
+A safe default in 2026: pretrained ConvNeXt-Base or DINOv2 ViT-B, fine-tune. Both work well, well-supported, no surprises.
+
+For deployment: ConvNeXt for edge; ViT when latency budget allows.
+
+## What's faded
+
+Things that used to be everywhere and aren't in 2026:
+
+- **Hand-engineered features** (SIFT, HOG, SURF). Replaced by learned features.
+- **From-scratch CNN training** (no ImageNet pretraining). Almost never the right choice.
+- **R-CNN, Fast R-CNN, Faster R-CNN** as first detectors to learn. Modern intros start with YOLO or DETR.
+- **VGG, AlexNet** as production models. Used in textbooks only.
+- **GANs** as the default generator. Diffusion replaced them for image generation.
+- **Manual non-maximum suppression** (NMS) by writing your own code. Libraries handle it.
+
+These appear in old code bases and tutorials. Recognise them; don't reach for them.
+
+<InlineQuiz
+  question="A startup wants to classify product photos into 50 categories. They have 200 labeled photos per category (10k total) and want to ship to a mobile app. What's the most pragmatic stack?"
+  options={[
+    { text: "Train a custom ViT from scratch on the 10k images." },
+    {
+      text: "Fine-tune a pretrained EfficientNet-Lite or MobileNetV3 on the 10k images; deploy via ONNX/TFLite to mobile. ~5-10 MB model, sub-100ms inference.",
+      correct: true,
+    },
+    { text: "Use GPT-4V for each classification request." },
+    { text: "Train a CLIP model from scratch on your product photos." },
+  ]}
+  explanation="10k images and mobile deployment is the textbook EfficientNet-Lite / MobileNetV3 scenario. Pretrained on ImageNet, fine-tuned on your 10k, deployed via ONNX Runtime or TFLite. 5-10 MB model, runs in 50-100ms on consumer phones. Custom-from-scratch fails at 10k images; GPT-4V costs $0.01+ per request and adds 1-2s latency; training CLIP from scratch requires millions of images and dollars."
+/>
+
+## What's NOT in this module
+
+Some adjacent topics live elsewhere:
+
+- **Image generation** (Stable Diffusion, diffusion models) — Track B (GenAI Builder).
+- **Video understanding** — touched briefly; full coverage is its own field.
+- **3D vision / NeRFs / Gaussian Splatting** — specialised; not Track A core.
+- **Image / video compression** — engineering, not ML-engineer-focused.
+- **Embedded / DSP-level optimisation** — touched in A7.8; full coverage is its own field.
+
+For most ML engineers, this module + the foundation models it covers handles 90% of CV work.
+
+<InlineQuiz
+  question="Which of these is NOT a typical 2026 CV engineer responsibility?"
+  options={[
+    { text: "Designing a novel attention mechanism for ViT.", correct: true },
+    { text: "Setting up RandAugment + Mixup + CutMix in a training pipeline." },
+    { text: "Distilling a fine-tuned ConvNeXt-Large into a MobileNet for production." },
+    { text: "Evaluating model failures on minority sub-populations." },
+  ]}
+  explanation="Architecture research is a research role at frontier labs (Meta FAIR, Google DeepMind, OpenAI vision, Anthropic vision). Production CV engineers focus on data, augmentation, fine-tuning existing architectures, evaluation, deployment, and operations. The other three are mainstream production work."
+/>
+
+## The rest of this module
+
+Each subsequent lesson digs into one of the production tasks:
+
+- **A7.2**: augmentation — where you build robustness for cheap.
+- **A7.3**: classification — the foundation task.
+- **A7.4**: detection — finding and localising objects.
+- **A7.5**: segmentation — pixel-level prediction.
+- **A7.6**: VLMs — combining vision and language.
+- **A7.7**: self-supervised features — DINOv2 deep dive.
+- **A7.8**: deployment — making it fast enough to ship.
+
+Module A8 (MLOps) covers cross-modality operational concerns. The capstone synthesises everything.

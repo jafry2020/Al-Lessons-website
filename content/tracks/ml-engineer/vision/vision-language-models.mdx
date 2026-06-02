@@ -1,0 +1,438 @@
+---
+title: "Vision-language models: CLIP, SigLIP, LLaVA, GPT-4V"
+description: "Models that understand image and text together. CLIP for embeddings and retrieval; LLaVA / GPT-4V for visual reasoning and Q&A. The fastest-moving area of CV in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: vision-language-models
+lessonCode: "A7.6"
+estMinutes: 15
+prereqs:
+  - "A7.3 Image classification with pretrained backbones"
+  - "A6.3 Word, sentence, and contextual embeddings"
+objectives:
+  - "Use CLIP / SigLIP for zero-shot classification, image-text retrieval, and image embeddings."
+  - "Pick between VLM (LLaVA, GPT-4V, Claude vision) and traditional fine-tuned models for a visual reasoning task."
+  - "Build a multimodal RAG pipeline that retrieves images by text query and answers questions about them."
+pitfalls:
+  - "Treating CLIP as 'a classifier.' It's an embedding model; classification is a downstream use case via cosine similarity."
+  - "Using VLMs for high-volume simple tasks. They're expensive; fine-tuned small models often suffice."
+  - "Ignoring the prompt template. 'a photo of a {class}' vs '{class}' changes CLIP zero-shot accuracy by 5-10%."
+  - "Mixing image embeddings across CLIP versions / providers. Like text embeddings, vision embedding spaces don't align across models."
+importantQuestions:
+  - question: "What is CLIP, in one paragraph?"
+    shortAnswer: |
+      Contrastive Language-Image Pretraining (OpenAI, 2021). Two encoders (one image, one text) trained on 400M image-caption pairs so that matched pairs have high cosine similarity and mismatched pairs have low. Produces aligned image + text embeddings.
+    detailed: |
+      Architecture: two encoders, one for images (ViT or ResNet), one for text (transformer). Both output a fixed-dim embedding (typically 512 or 768).
+
+      Training: at each step, take a batch of N (image, caption) pairs. Encode all to embeddings. Compute the N×N similarity matrix. The diagonal (matched pairs) should be high; off-diagonal (mismatched) should be low. Symmetric cross-entropy loss in both directions.
+
+      Trained on 400M pairs scraped from the web. The data scale is the secret sauce.
+
+      Result: an image of a cat and the text "a photo of a cat" produce embeddings with high cosine similarity. An image of a dog and the cat caption produce low similarity.
+
+      What you can do with it:
+      - **Zero-shot classification**: encode candidate class names; pick the one with highest similarity to the image.
+      - **Image-text retrieval**: encode all images; at query time, encode the text query; find nearest image.
+      - **Image search by image**: encode all images; at query time, encode the query image; find nearest.
+      - **Content moderation**: text descriptions of unsafe content; flag images near those embeddings.
+
+      In 2026, CLIP is the workhorse for image-text retrieval and zero-shot classification. SigLIP (Google, 2023) is the modern equivalent with a slightly different training objective (sigmoid loss instead of softmax); often better quality.
+    pitfalls:
+      - "CLIP was trained mostly on English captions. Multilingual CLIP variants exist (M-CLIP, multilingual SigLIP) for non-English use cases."
+  - question: "What's the difference between CLIP and SigLIP?"
+    shortAnswer: |
+      Same idea (image + text contrastive), different loss. CLIP uses softmax over all pairs in the batch (each image must be most similar to its caption). SigLIP uses sigmoid per pair (each pair is independently a positive or negative). SigLIP scales better and often wins.
+    detailed: |
+      CLIP's loss (per batch of N pairs):
+      ```
+      L_image = CE(image_logits, [0, 1, 2, ..., N-1])
+      L_text = CE(text_logits, [0, 1, 2, ..., N-1])
+      L = (L_image + L_text) / 2
+      ```
+      Each image's embedding is compared against all N text embeddings; cross-entropy ensures the matched one is most similar.
+
+      SigLIP's loss (Zhai et al., 2023):
+      ```
+      For each (image_i, text_j) pair (i,j in batch):
+          label = 1 if i==j else -1
+          loss += -log(sigmoid(label * (similarity - bias)))
+      ```
+      Each pair is independently positive or negative. No softmax across the batch.
+
+      Why SigLIP wins:
+      - Doesn't require all-pairs comparisons in memory.
+      - Scales to larger batches better.
+      - Empirically better zero-shot accuracy.
+
+      In 2026: SigLIP / SigLIP-2 are the preferred contrastive vision-language models. CLIP still widely deployed because of ecosystem inertia.
+    pitfalls:
+      - "Don't mix SigLIP and CLIP embeddings in one index. Different spaces, different scales."
+  - question: "What's a VLM and how does it differ from CLIP?"
+    shortAnswer: |
+      Vision-Language Model: an LLM with vision input — typically a vision encoder (CLIP or SigLIP) projected into the LLM's embedding space. Generates text given image + text input. LLaVA, GPT-4V, Claude vision, Gemini, Llama 3.2 vision.
+    detailed: |
+      VLM architecture (LLaVA, BLIP-2, Idefics, etc.):
+
+      1. **Vision encoder** (CLIP ViT or similar) encodes image into a sequence of patch tokens.
+      2. **Projector** (MLP or Q-Former) maps vision tokens into the LLM's embedding space.
+      3. **LLM** (Llama, Vicuna, etc.) generates text given image tokens + text tokens.
+
+      Output: free-form text in response to image + text prompt.
+
+      Examples (2026):
+      - **LLaVA / LLaVA-Next** (open source): builds on Llama + CLIP.
+      - **GPT-4V / GPT-4o (vision)**: OpenAI's proprietary.
+      - **Claude 3.5 Sonnet (vision)**: Anthropic's.
+      - **Gemini 1.5 Pro**: Google's.
+      - **Llama 3.2 Vision**: Meta's open-source.
+      - **Qwen-VL** (Alibaba), **InternVL** (Shanghai AI Lab): strong open-source.
+
+      Use cases:
+      - Visual question answering ("how many people are in this image?")
+      - Image description / captioning.
+      - Document understanding (charts, tables, forms).
+      - UI / screen understanding.
+      - Visual chain-of-thought reasoning.
+
+      CLIP gives embeddings; VLMs generate text. Different problems, often used together.
+    pitfalls:
+      - "VLMs hallucinate visual content. Always validate critical extractions against the source image."
+  - question: "When should you use a VLM vs. a fine-tuned vision model?"
+    shortAnswer: |
+      VLM when: need text explanation, novel categories, low volume, complex reasoning over image content. Fine-tuned vision model when: fixed task, high volume, latency-sensitive, cost matters.
+    detailed: |
+      Decision criteria:
+
+      | Situation | Use |
+      | --------- | --- |
+      | "Classify into 10 fixed categories" at scale | Fine-tuned ConvNeXt / ViT |
+      | "Describe this image in detail" | VLM (GPT-4V, Claude, LLaVA) |
+      | "Extract structured data from this invoice" | VLM with structured output |
+      | "Detect 50 product types in real-time video" | Fine-tuned YOLO |
+      | "Answer arbitrary questions about images" | VLM |
+      | Visual content moderation, fixed policies | Fine-tuned classifier |
+      | One-off batch analysis | VLM (no training cost) |
+      | Document OCR + understanding | VLM or specialised TrOCR + LLM |
+      | "Is this image safe?" with detailed reasoning | VLM |
+      | Real-time on-device | Fine-tuned small model |
+
+      Cost / latency:
+      - Fine-tuned: 10-50ms, < $0.001 per request.
+      - VLM API (GPT-4V): 1-3s, $0.01-0.05 per image.
+      - VLM self-hosted (LLaVA-Next): 200-500ms on GPU.
+
+      For high-volume production: fine-tuned. For prototyping or low-volume reasoning-heavy: VLM.
+    pitfalls:
+      - "Don't underestimate VLM cost at scale. 1M images/day × $0.01 = $10k/day. Distill to small model when volume justifies."
+  - question: "How do you build multimodal RAG (image-text retrieval)?"
+    shortAnswer: |
+      Index images by their CLIP / SigLIP embeddings in a vector DB. At query time, encode the text query (CLIP text encoder), retrieve nearest images. Optionally feed retrieved images + query to a VLM for answer generation.
+    detailed: |
+      Multimodal RAG architecture:
+
+      ```
+      Index time:
+        Image corpus → CLIP image encoder → image embeddings → vector DB
+
+      Query time:
+        Text query → CLIP text encoder → text embedding
+                                              ↓
+                                   Top-k nearest images
+                                              ↓
+        [Optional: pass top-k images + query to VLM for answer generation]
+      ```
+
+      Both image and text are embedded in the same space, so cosine similarity directly compares them.
+
+      Implementation with HuggingFace + pgvector:
+
+      ```python
+      from transformers import CLIPModel, CLIPProcessor
+      model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+      processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+
+      # Index
+      for image in images:
+          inputs = processor(images=image, return_tensors="pt")
+          with torch.no_grad():
+              img_emb = model.get_image_features(**inputs)
+          img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
+          # Store img_emb in vector DB
+
+      # Query
+      query = "red sports car at night"
+      inputs = processor(text=query, return_tensors="pt", padding=True)
+      with torch.no_grad():
+          txt_emb = model.get_text_features(**inputs)
+      txt_emb = txt_emb / txt_emb.norm(dim=-1, keepdim=True)
+      # Retrieve nearest images from vector DB
+      ```
+
+      Add a VLM (GPT-4V, LLaVA) downstream to answer questions about the retrieved images.
+
+      Production examples: image search, e-commerce ("find products matching this description"), visual content discovery, surveillance footage retrieval.
+    pitfalls:
+      - "CLIP embeddings are typically 512 or 768 dim. 100M images × 512 dim × 4 bytes = 200 GB. Plan storage."
+---
+
+<TldrCallout>
+  Vision-language models in 2026: CLIP / SigLIP for image-text embeddings (retrieval, zero-shot
+  classification); VLMs (LLaVA, GPT-4V, Claude vision, Gemini, Llama 3.2 Vision) for generative
+  reasoning over images. Use CLIP when you want fast retrieval or zero-shot classification; use a
+  VLM when you need to generate text, reason, or describe what's in an image. They're often used
+  together — CLIP retrieves, VLM answers.
+</TldrCallout>
+
+## The two families
+
+**CLIP-style contrastive models** (CLIP, SigLIP, OpenCLIP, EVA-CLIP):
+
+- Two encoders: image and text.
+- Output: aligned embeddings — image and text in the same space.
+- Use for: retrieval, zero-shot classification, similarity, content moderation.
+- Not for: generation.
+
+**Generative VLMs** (LLaVA, GPT-4V, Claude vision, Gemini, Llama 3.2 Vision, Qwen-VL):
+
+- Image encoder + projector + LLM.
+- Output: free-form text given image + text prompt.
+- Use for: Q&A, captioning, reasoning, structured extraction.
+- Slower, more expensive than CLIP.
+
+Often used together: CLIP retrieves candidates; VLM answers questions about them.
+
+## CLIP zero-shot classification
+
+```python
+from transformers import CLIPProcessor, CLIPModel
+import torch
+
+model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+
+candidates = [
+    "a photo of a cat",
+    "a photo of a dog",
+    "a photo of a bird",
+]
+
+inputs = processor(text=candidates, images=image, return_tensors="pt", padding=True)
+with torch.no_grad():
+    outputs = model(**inputs)
+
+probs = outputs.logits_per_image.softmax(dim=-1)
+# probs[0] is the most-likely class
+```
+
+Note: the prompt template matters. "a photo of a cat" vs "cat" can give 5-10% different accuracy. Engineered prompts (multiple templates, ensemble) lift further.
+
+Zero-shot CLIP top-1 on ImageNet: ~76% (vs. 86%+ for fine-tuned ViT-L). Useful baseline; gap closes for visually distinct classes.
+
+## SigLIP: the modern alternative
+
+SigLIP (Zhai et al., 2023) and SigLIP-2 (2024) replace CLIP's softmax loss with a sigmoid loss. Each (image, text) pair is independently positive or negative; no all-pairs softmax.
+
+Benefits:
+
+- Scales better to large batches.
+- Often higher zero-shot accuracy than equivalent CLIP.
+- More efficient training.
+
+Use:
+
+```python
+from transformers import SiglipProcessor, SiglipModel
+processor = SiglipProcessor.from_pretrained("google/siglip-large-patch16-256")
+model = SiglipModel.from_pretrained("google/siglip-large-patch16-256")
+# API similar to CLIP
+```
+
+For new projects in 2026: SigLIP / SigLIP-2 is the preferred contrastive VLM. CLIP still common due to ecosystem inertia and OpenAI lineage.
+
+<AnalogyCallout>
+  CLIP / SigLIP are like a translator between "image-space" and "text-space" — given an image, find
+  the matching text; given text, find the matching image. They don't generate; they just know which
+  side maps to which. VLMs are storytellers — given an image and a question, they tell you what they
+  see and answer.
+</AnalogyCallout>
+
+## Multimodal RAG
+
+The natural extension of NLP RAG: retrieve images instead of (or in addition to) text chunks.
+
+```
+Index time:
+  Images → CLIP image encoder → embeddings → vector DB
+  Text chunks → CLIP text encoder → embeddings → vector DB
+
+Query time:
+  Text query → CLIP text encoder → embedding
+             → search nearest images
+             → optional: pass to VLM with the question
+```
+
+The same embedding space means text queries can directly retrieve images (and vice versa).
+
+Production use cases:
+
+- **E-commerce search**: "long-sleeve red dress" finds matching product photos.
+- **Stock photo search**: text → image retrieval.
+- **Surveillance footage**: "people wearing red jackets in this hour".
+- **Internal asset libraries**: "logos with mountains".
+- **Visual content moderation**: text descriptions of disallowed content; flag matching images.
+
+Adding a VLM at the end gives you visual question answering grounded in retrieved images.
+
+## VLMs in practice
+
+A VLM call:
+
+```python
+# GPT-4V
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }
+    ],
+)
+
+# Claude
+response = anthropic.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {...}},
+                {"type": "text", "text": "What's in this image?"},
+            ],
+        }
+    ],
+)
+
+# LLaVA (self-hosted)
+# Via vLLM or HuggingFace pipeline
+```
+
+Common use cases:
+
+| Use case               | Example                                                |
+| ---------------------- | ------------------------------------------------------ |
+| Image description      | "Describe this image in detail"                        |
+| VQA                    | "What colour is the car?"                              |
+| Structured extraction  | "Extract all text + amounts from this receipt as JSON" |
+| Chart reading          | "What's the trend in Q3?"                              |
+| Document understanding | "Summarise this slide"                                 |
+| Visual reasoning       | "Why is the person smiling?"                           |
+| Multi-image            | "How do these two images differ?"                      |
+
+VLMs hallucinate. Always validate critical extractions; never use them as the sole source of truth for high-stakes decisions.
+
+## VLM cost and latency
+
+| Model                             | Latency   | Cost per image  |
+| --------------------------------- | --------- | --------------- |
+| GPT-4o (vision)                   | 1-3s      | ~$0.005-0.02    |
+| Claude 3.5 Sonnet                 | 1-3s      | ~$0.005-0.015   |
+| Gemini 1.5 Pro                    | 1-3s      | ~$0.005-0.015   |
+| LLaVA-Next-7B (self-hosted, H100) | 200-500ms | infra cost only |
+| Qwen2-VL-7B (self-hosted)         | 200-500ms | infra cost only |
+| Fine-tuned ViT classifier         | 10-50ms   | <$0.001         |
+
+For 1M images/day:
+
+- VLM API: $5,000-20,000/day.
+- Self-hosted LLaVA: $200-500/day in GPU compute.
+- Fine-tuned classifier: <$50/day.
+
+The cost gradient is steep. Use the right tool for the volume.
+
+## When VLM is the right call
+
+| Situation                                    | Why VLM                          |
+| -------------------------------------------- | -------------------------------- |
+| Novel / evolving categories                  | No training needed               |
+| Need natural-language explanation            | Generation-native                |
+| Multi-step reasoning over image              | LLM capability + vision input    |
+| Low volume (< 1k/day)                        | Engineering cost dominates       |
+| Structured extraction from complex documents | Better than OCR + LLM separately |
+| Visual chain-of-thought                      | VLM does this natively           |
+
+| Situation                                     | Why fine-tuned model     |
+| --------------------------------------------- | ------------------------ |
+| Fixed classes, > 10k/day                      | 100× cheaper             |
+| Real-time UX (< 100ms)                        | Latency                  |
+| Edge / mobile                                 | VLMs too heavy           |
+| Deterministic output                          | VLM stochasticity        |
+| Standard CV tasks (detection, classification) | Pretrained baselines win |
+
+Common pattern: prototype with VLM → distill to fine-tuned model when scale justifies.
+
+<InlineQuiz
+  question="You need to answer arbitrary natural-language questions about a corpus of 50,000 product photos ('which photos show people wearing red shoes?', 'what's the most common background?'). Volume is ~10 queries per day. What's the most pragmatic stack?"
+  options={[
+    { text: "Fine-tune a custom VLM on your product photos." },
+    {
+      text: "CLIP retrieval + GPT-4V or Claude vision. CLIP narrows candidate images by text query; VLM answers detailed questions about the top-k. 10 queries/day = ~$1/day in API cost.",
+      correct: true,
+    },
+    { text: "Pass the entire corpus to GPT-4V on every query." },
+    { text: "Build a custom retrieval index from product metadata." },
+  ]}
+  explanation="Multimodal RAG is exactly the right pattern. CLIP embeds 50k images once (cheap, ~1 hour). Per query: text → CLIP → top-100 candidates (milliseconds), top-10 sent to VLM for the detailed question (~$0.10). 10 queries/day = ~$1/day. Fine-tuning a custom VLM at this scale is wildly disproportionate. Passing all 50k images to GPT-4V is impossible (context limits, cost). Metadata-only retrieval misses visual nuance ('red shoes' is visual)."
+/>
+
+## Open-vocab detection / segmentation revisited
+
+The promptable / VLM-adjacent models for detection and segmentation (A7.4, A7.5):
+
+- **Grounding DINO**: text-conditioned object detection.
+- **OWLv2**: open-vocab detection from CLIP-style training.
+- **YOLO-World**: open-vocab + YOLO speed.
+- **Grounded-SAM**: Grounding DINO + SAM = open-vocab segmentation.
+
+All exploit the VLM idea: visual features aligned with text embeddings, so you can specify what to find with natural language.
+
+These bridge "traditional CV" (boxes, masks) with "language interfaces" (text queries). Increasingly the default for novel / evolving tasks.
+
+<InlineQuiz
+  question="You're building image search for a stock photo library (5M images). Users type queries like 'sunset over mountains' or 'cat playing piano'. What's the core stack?"
+  options={[
+    { text: "Fine-tuned ConvNeXt classifier with 10,000 categories." },
+    {
+      text: "Index all 5M images with CLIP / SigLIP embeddings in a vector DB (pgvector, Qdrant, etc.). At query time, encode the text query with CLIP / SigLIP and retrieve top-k nearest images.",
+      correct: true,
+    },
+    { text: "GPT-4V looking at every image for every query." },
+    { text: "Text-only search over image captions." },
+  ]}
+  explanation="This is the canonical CLIP / SigLIP retrieval use case. Index once (5M images × 768-dim × 4 bytes = ~15 GB), query in milliseconds. Pure semantic search across image-text alignment. Fine-tuned 10k-category classifier can't handle arbitrary queries. GPT-4V on every query is impossible at scale (cost, latency). Text-only search misses the visual semantics (the captions may not contain the right keywords)."
+/>
+
+## Open-source vs API VLMs
+
+| Aspect                | API (GPT-4V, Claude, Gemini)        | Open (LLaVA, Qwen-VL, Llama 3.2 Vision) |
+| --------------------- | ----------------------------------- | --------------------------------------- |
+| Quality               | Highest                             | Catching up; ~80-90% of frontier        |
+| Cost                  | Per-request                         | Infra-only                              |
+| Latency               | 1-3s                                | 200-500ms (with vLLM)                   |
+| Data privacy          | Sent to provider                    | Self-hosted                             |
+| Fine-tuning           | Limited / no                        | Yes                                     |
+| Multimodal capability | Highest (charts, complex reasoning) | Good and improving                      |
+
+For sensitive data or high volume, self-hosted Llama 3.2 Vision or Qwen2-VL is a strong choice. For maximum quality on complex visual reasoning, frontier API.
+
+## Closing for VLMs
+
+Vision-language models are the fastest-moving area of CV in 2026. CLIP / SigLIP remain the workhorses for embedding-based retrieval and zero-shot classification. Generative VLMs (LLaVA, GPT-4V, Claude vision, etc.) handle reasoning, structured extraction, and Q&A. They're often used together — CLIP for fast retrieval, VLM for the detailed question.
+
+The next lesson goes deeper on self-supervised visual representations — DINOv2 specifically — the backbone behind much of modern vision feature extraction.

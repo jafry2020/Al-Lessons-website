@@ -1,0 +1,395 @@
+---
+title: "Self-supervised vision features: DINOv2, MAE, and friends"
+description: "Visual features learned without labels. DINOv2 has displaced ImageNet-supervised pretraining as the strongest general-purpose backbone for transfer. Why it works and how to use it."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: vision
+moduleLabel: "Module 7 · Computer Vision"
+lesson: self-supervised-vision
+lessonCode: "A7.7"
+estMinutes: 11
+prereqs:
+  - "A7.3 Image classification with pretrained backbones"
+  - "A3.6 Autoencoders"
+objectives:
+  - "Distinguish the main SSL families: contrastive (SimCLR, MoCo, DINO), masked-prediction (MAE, BEiT), self-distillation (DINO, DINOv2)."
+  - "Use DINOv2 as a frozen feature extractor or as a fine-tuning starting point."
+  - "Decide when self-supervised features beat supervised pretraining."
+pitfalls:
+  - "Treating DINOv2 as 'just another ImageNet backbone.' Its features transfer differently — often better — especially to non-natural-image domains."
+  - "Building a custom SSL pipeline from scratch. Use DINOv2 / MAE / SigLIP weights; SSL pretraining costs hundreds of GPU-days."
+  - "Forgetting that DINOv2 produces per-patch features. For classification, pool them. For dense prediction, use them directly."
+  - "Comparing SSL features to supervised on ImageNet only. SSL's advantage is transfer to other domains, not raw ImageNet top-1."
+importantQuestions:
+  - question: "What is self-supervised learning for vision?"
+    shortAnswer: |
+      Train a model to predict some property of the image from another property — without labels. Examples: predict missing patches (MAE), predict augmentation pairs (SimCLR), self-distill (DINO). Produces strong general-purpose features.
+    detailed: |
+      Self-supervised learning (SSL) uses the data as its own label. Three main families:
+
+      **Contrastive** (SimCLR, MoCo, BYOL, DINO):
+      - Two augmented views of the same image should produce similar features.
+      - Two views of different images should produce different features.
+      - Loss: InfoNCE / contrastive / cosine similarity.
+
+      **Masked modeling** (MAE, BEiT, SimMIM):
+      - Mask random patches of an image.
+      - Train to reconstruct the masked patches.
+      - Like BERT for images.
+
+      **Self-distillation** (DINO, DINOv2):
+      - Two views of the image; one passed through a "student" network, one through a "teacher" (EMA of student).
+      - Loss: student's predictions should match teacher's, in feature space.
+      - No negative pairs needed (unlike SimCLR).
+
+      All produce visual features that transfer to downstream tasks: classification, detection, segmentation, retrieval.
+
+      Why SSL beats supervised pretraining in 2026: the data scale is much larger (1B+ images for DINOv2; ImageNet is 1M). SSL doesn't need labels, so any image is training data.
+    pitfalls:
+      - "SSL pretraining is expensive: DINOv2 cost ~600,000 GPU-hours to train. Use the released checkpoints; don't train from scratch."
+  - question: "What is DINOv2 specifically?"
+    shortAnswer: |
+      DINOv2 (Meta, 2023) is a ViT pretrained with self-distillation on 142M curated images. Produces strong dense visual features (per-patch embeddings). Has become the default 'feature extractor backbone' for vision in 2026.
+    detailed: |
+      DINOv2 (Oquab et al., 2023) extends DINO (2021) with:
+      - **More data**: 142M curated images (vs. ImageNet's 1M).
+      - **Better data curation**: deduplication, balanced sampling, augmented "knowledge distillation" pipeline.
+      - **Larger models**: ViT-S/14, ViT-B/14, ViT-L/14, ViT-g/14.
+      - **Better features for dense prediction** (segmentation, depth, correspondence).
+
+      Use cases:
+      - **Linear probe for classification**: freeze DINOv2, train linear classifier. Strong baseline, often within 2-3 points of full fine-tune.
+      - **Fine-tune backbone**: replace ImageNet pretraining with DINOv2.
+      - **Dense feature extraction**: per-patch features for downstream tasks (segmentation backbone, dense correspondence).
+      - **Few-shot learning**: DINOv2 features + nearest-neighbour classifier on few examples per class.
+      - **Out-of-domain transfer**: DINOv2 transfers better than ImageNet to medical, satellite, microscopy.
+
+      Available via HuggingFace (`facebook/dinov2-base`), timm (`vit_base_patch14_dinov2.lvd142m`), or direct from Meta's repo.
+    pitfalls:
+      - "DINOv2 uses patch size 14 (not 16). Input size must be divisible by 14."
+  - question: "What is MAE and where does it fit?"
+    shortAnswer: |
+      Masked Autoencoder (He et al., 2021): mask 75% of image patches; train a ViT to reconstruct them. Pretrains strong ViTs for transfer; especially good for tasks that benefit from understanding image structure.
+    detailed: |
+      MAE architecture:
+
+      1. Divide image into 14×14 patches (224×224 image → 16×16 = 256 patches).
+      2. Randomly mask 75% of patches.
+      3. Pass remaining 25% through ViT encoder.
+      4. Decoder reconstructs all patches.
+      5. Loss: MSE on masked patches.
+
+      The high masking ratio (75%) is key — at lower ratios the task is too easy and features don't learn meaningfully. 75% is hard enough that the model must learn semantic structure.
+
+      Properties:
+      - Strong ViT pretraining without labels.
+      - Encoder learns to use sparse information (25% of patches).
+      - Transfers well to downstream tasks via fine-tuning.
+
+      MAE itself was superseded somewhat by DINOv2 for general features, but the masked-modeling idea persists in many modern SSL approaches.
+
+      Hybrid: **EVA-02** combines MIM (masked image modeling) with CLIP-style supervision. Strong general-purpose backbone.
+    pitfalls:
+      - "MAE features perform poorly when used frozen (linear probe). They're optimised for fine-tuning, not for feature extraction directly."
+  - question: "How does DINOv2 compare to ImageNet supervised pretraining?"
+    shortAnswer: |
+      DINOv2 wins on transfer (especially out-of-domain), linear probing, dense prediction, and feature extraction. ImageNet supervised wins on the narrow task of ImageNet classification when fine-tuned. For most production transfer, DINOv2 is the better starting point.
+    detailed: |
+      Benchmark comparison (ImageNet-1k linear probe):
+
+      | Pretraining | Backbone | Top-1 |
+      | ----------- | -------- | ----- |
+      | ImageNet supervised | ViT-L | ~85% |
+      | CLIP | ViT-L | ~85% |
+      | DINOv2 | ViT-L | ~86% |
+      | MAE | ViT-L | ~78% (linear probe) but ~86% (fine-tune) |
+
+      For transfer tasks (other datasets, other domains):
+      - DINOv2 features transfer dramatically better to fine-grained, satellite, medical.
+      - ImageNet supervised features are more "ImageNet-flavoured."
+
+      For dense prediction (segmentation, depth):
+      - DINOv2 features are spatially coherent; especially good as a backbone for segmentation / depth estimation.
+      - ImageNet supervised features are less dense-aware.
+
+      For 2026 production:
+      - General classification: DINOv2 backbone, often beats ImageNet pretraining.
+      - Out-of-distribution domain: DINOv2 transfers better.
+      - Fine-grained classification: DINOv2 + fine-tune; sometimes domain-specific pretraining matters more.
+
+      ImageNet pretraining still ships in production (lots of legacy models) and isn't bad — DINOv2 is just better for most new projects.
+    pitfalls:
+      - "DINOv2 was trained on 142M curated images including web scrapes. Not safe for all licensing contexts; check before commercial use."
+  - question: "When should you use SSL features vs. fine-tune end-to-end?"
+    shortAnswer: |
+      Use SSL features (frozen) when: small data (<5k examples), prototyping speed, multi-task. Fine-tune when: > 5k examples, quality matters, can afford the compute.
+    detailed: |
+      Strategies for using SSL features:
+
+      **Linear probe** (frozen features + linear classifier):
+      - Cheap (seconds to train classifier).
+      - Strong with DINOv2 — often 95% of fine-tune quality.
+      - Best for: <5k examples per class, prototyping.
+
+      **Frozen + small MLP head**:
+      - Slightly more capacity than linear; still cheap.
+      - Marginal improvement over linear in most cases.
+
+      **Partial fine-tune** (freeze early layers, fine-tune late):
+      - Compromise: some capacity, less compute.
+      - Useful when full fine-tune overfits.
+
+      **Full fine-tune**:
+      - Best quality.
+      - Requires more data and compute.
+      - Best for: > 5k examples per class, production.
+
+      **LoRA / adapter tuning**:
+      - Few trainable parameters; backbone frozen.
+      - Useful for very large backbones (DINOv2-g).
+
+      Modern pattern: try linear probe first (free baseline). If quality insufficient, full fine-tune. LoRA for very large backbones.
+    pitfalls:
+      - "DINOv2 frozen features are a strong baseline. Don't immediately jump to full fine-tune; measure linear probe first."
+  - question: "Should I pretrain my own SSL model?"
+    shortAnswer: |
+      Almost never. SSL pretraining costs 100k-1M GPU-hours. Use released checkpoints (DINOv2, MAE, CLIP). The exception: very domain-specific (medical, satellite) where pretraining on domain data dramatically helps.
+    detailed: |
+      The economics of SSL pretraining:
+
+      - **DINOv2** training: ~600,000 GPU-hours.
+      - **CLIP** training: ~500,000 GPU-hours.
+      - **MAE** training: ~200,000 GPU-hours.
+
+      That's millions of dollars of compute. For 99% of teams, use the released checkpoints.
+
+      Exceptions where domain-specific SSL helps:
+      - **Medical imaging**: pretrain on PubMed images, X-rays, MRI scans. RadImageNet, MedCLIP, BiomedCLIP.
+      - **Satellite / aerial**: pretrain on SpaceNet, xView. SatMAE.
+      - **Microscopy**: pretrain on biological data.
+      - **Industrial / manufacturing**: pretrain on factory imagery.
+
+      For these, domain-specific pretrained checkpoints often beat general DINOv2 by 5-10 points. Check HuggingFace and academic releases.
+
+      For general / natural images: DINOv2 is the default. Don't pretrain.
+    pitfalls:
+      - "Self-supervised pretraining on a small in-domain dataset (1k-10k images) usually fails. SSL needs scale to work."
+---
+
+<TldrCallout>
+  Self-supervised vision learning produces strong general-purpose features without labels. In 2026,
+  DINOv2 (Meta, 2023) is the dominant SSL backbone — pretrained on 142M images via
+  self-distillation; produces dense per-patch features that transfer to classification,
+  segmentation, retrieval, and dense prediction. Use frozen DINOv2 + linear probe for small data;
+  fine-tune for larger data. For domain-specific work (medical, satellite), domain-pretrained
+  variants exist and matter.
+</TldrCallout>
+
+## Why SSL works
+
+The premise: labelled data is expensive; unlabelled data is abundant. Train a model on a pretext task using only the data itself, and the resulting features transfer to downstream tasks.
+
+Three main pretext tasks:
+
+| Family                | Pretext task                                         | Examples           |
+| --------------------- | ---------------------------------------------------- | ------------------ |
+| **Contrastive**       | Match augmented views; distinguish from other images | SimCLR, MoCo, BYOL |
+| **Masked modeling**   | Reconstruct masked patches                           | MAE, BEiT, SimMIM  |
+| **Self-distillation** | Student predicts teacher's features                  | DINO, DINOv2       |
+
+All produce features that are useful for: classification, detection, segmentation, retrieval, dense correspondence, depth estimation.
+
+## DINOv2: the dominant 2026 backbone
+
+DINOv2 (Oquab et al., 2023) trains a ViT with self-distillation:
+
+1. Two augmented views of the same image: x_global, x_local.
+2. Pass through student network → features.
+3. Pass through teacher network (EMA of student) → features.
+4. Loss: cross-entropy between student output and teacher output (treating teacher's softmax distribution as the target).
+
+No labels, no negative pairs. Just "student should match teacher under different views."
+
+Training data: 142M curated images (LVD-142M dataset). Curation is essential — random web scraping is too noisy.
+
+Why DINOv2 matters:
+
+- **Strong dense features**: per-patch ViT outputs are spatially coherent. Good for segmentation, depth, dense matching.
+- **Linear probe rivals fine-tuning**: on many benchmarks, frozen DINOv2 + linear classifier is within 2-3 points of full fine-tune.
+- **Out-of-domain transfer**: better than ImageNet pretraining for medical, satellite, fine-grained recognition.
+- **Multiple sizes**: ViT-S/14 (21M), ViT-B/14 (86M), ViT-L/14 (304M), ViT-g/14 (1.1B).
+
+By 2026, DINOv2 has largely displaced ImageNet-supervised pretraining as the "default backbone" choice.
+
+<AnalogyCallout>
+  ImageNet supervised pretraining teaches a model to label 1000 specific classes. DINOv2 teaches a
+  model to recognise visual patterns broadly — colours, textures, shapes, parts, objects — without
+  committing to any specific taxonomy. The result transfers better, like how a generalist musician
+  transitions to new genres more fluently than a virtuoso of one specific genre.
+</AnalogyCallout>
+
+## Using DINOv2 in practice
+
+**Linear probe** (frozen features + linear classifier):
+
+```python
+import torch
+import timm
+from sklearn.linear_model import LogisticRegression
+
+model = timm.create_model("vit_base_patch14_dinov2.lvd142m", pretrained=True, num_classes=0)
+model.eval()
+
+# Extract features
+features = []
+labels = []
+for x, y in train_loader:
+    with torch.no_grad():
+        f = model(x.cuda())  # shape: [B, 768] (CLS token feature)
+    features.append(f.cpu())
+    labels.append(y)
+features = torch.cat(features).numpy()
+labels = torch.cat(labels).numpy()
+
+# Train linear classifier
+clf = LogisticRegression(max_iter=1000, C=1.0)
+clf.fit(features, labels)
+```
+
+Fast: extract features once (one pass over data); train linear in seconds.
+
+**Fine-tune end-to-end**:
+
+```python
+model = timm.create_model("vit_base_patch14_dinov2.lvd142m", pretrained=True, num_classes=NUM_CLASSES)
+# Standard fine-tune recipe from A7.3
+```
+
+**Dense features** for segmentation backbone:
+
+```python
+model = timm.create_model("vit_base_patch14_dinov2.lvd142m", pretrained=True, num_classes=0)
+with torch.no_grad():
+    patch_features = model.forward_features(x.cuda())  # [B, N+1, 768] — CLS + patches
+patch_features = patch_features[:, 1:, :]  # drop CLS, keep per-patch
+# Use as backbone for segmentation head
+```
+
+For 14×14 patches and 224×224 input: 16×16 = 256 patches per image, each with 768-dim features.
+
+## MAE: the masked-modeling alternative
+
+Masked Autoencoder (He et al., 2021):
+
+1. Image → 16×16 patches.
+2. Randomly mask 75% of patches.
+3. Encoder (ViT) sees only the 25% unmasked patches.
+4. Decoder reconstructs the masked patches.
+5. Loss: MSE on masked patches.
+
+Properties:
+
+- **Strong fine-tune backbone**: ViT pretrained with MAE fine-tunes to SOTA on ImageNet.
+- **Weak frozen features**: MAE features are optimised for reconstruction, not linear separability. Linear probe accuracy is much lower than DINOv2 / CLIP.
+- **Compute-efficient**: encoder only sees 25% of patches → fast training.
+
+Use:
+
+- MAE checkpoint → fine-tune for downstream task. Don't linear-probe.
+- DINOv2 checkpoint → linear-probe OR fine-tune (both work).
+
+Modern variants:
+
+- **EVA-02** (BAAI, 2022): combines MIM with CLIP-style supervision. Strong general backbone.
+- **BEiT v3** (Microsoft, 2022): unified multimodal pretraining (image + text).
+
+## Comparing pretraining strategies
+
+| Pretraining         | Best for                              | Linear probe (IN-1k) | Fine-tune (IN-1k) |
+| ------------------- | ------------------------------------- | -------------------- | ----------------- |
+| ImageNet supervised | Classification baseline               | ~85% (ViT-L)         | ~85-86%           |
+| CLIP                | Vision-language, retrieval, zero-shot | ~85% (ViT-L)         | ~86%              |
+| DINOv2              | General features, transfer, dense     | ~86% (ViT-L)         | ~87%              |
+| MAE                 | Fine-tune backbone                    | ~78% (ViT-L)         | ~86%              |
+| EVA-02              | SOTA general                          | ~88% (ViT-L)         | ~89%              |
+
+Numbers approximate; varies by exact checkpoint. The pattern: DINOv2 and EVA-02 lead for general purpose; CLIP leads for zero-shot and retrieval; MAE for fine-tune (only).
+
+For transfer to non-ImageNet domains (medical, satellite, fine-grained), the gap widens in DINOv2's favour.
+
+## Domain-specific SSL
+
+For specialised domains, domain-pretrained checkpoints often beat general DINOv2:
+
+| Domain                     | Checkpoints                                |
+| -------------------------- | ------------------------------------------ |
+| Medical imaging            | MedCLIP, BioMedCLIP, RadImageNet, MoCo-CXR |
+| Satellite / aerial         | SatMAE, GeoBert, MERIT                     |
+| Microscopy                 | Cellpose, MicroSAM                         |
+| Pathology                  | RudolfV, virchowv2, Hibou                  |
+| Industrial / manufacturing | Specialised vendor pretrained models       |
+
+These pretrain on millions of in-domain images (medical CTs, satellite imagery, microscopy slides). Transfer to specific downstream tasks dramatically outperforms general pretraining.
+
+When to use:
+
+- Have a domain matching one of the above.
+- Limited labelled data.
+- Domain-specific visual properties (multi-spectral, non-RGB).
+
+For general / natural images: stick with DINOv2.
+
+<InlineQuiz
+  question="You have 500 labelled images of plant diseases. You want a classifier. What's the most appropriate 2026 stack?"
+  options={[
+    { text: "Train a ViT from scratch on the 500 images." },
+    {
+      text: "Linear-probe DINOv2-Base on the 500 images. Strong baseline in minutes; if quality insufficient, fine-tune with strong augmentation.",
+      correct: true,
+    },
+    { text: "Use GPT-4V on each image." },
+    { text: "Train a self-supervised model on the 500 plant images first." },
+  ]}
+  explanation="500 images is firmly linear-probe territory. DINOv2 features transfer well to specialised domains like plant pathology. Linear probe takes minutes and often achieves 80-90% accuracy. Fine-tuning is the next step if linear probe falls short. Training from scratch fails at 500 images. GPT-4V is expensive and doesn't capture domain-specific subtleties. Training SSL on 500 images doesn't work — SSL needs scale."
+/>
+
+## Should you pretrain your own SSL model?
+
+For 99% of teams: no.
+
+Costs:
+
+- DINOv2 training: ~600k GPU-hours.
+- CLIP training: ~500k GPU-hours.
+- MAE training: ~200k GPU-hours.
+
+That's $1M+ in compute. Use released checkpoints.
+
+Exceptions:
+
+- You have a very specialised domain (medical sub-specialty, niche industrial) with millions of unlabelled images and reason to believe general pretraining doesn't transfer well.
+- You have research budget and want to publish.
+
+For these cases: start from a general checkpoint and continue training on your domain data (continued pretraining). Cheaper than from scratch and often as effective.
+
+<InlineQuiz
+  question="True or false: in 2026, DINOv2 (self-supervised) features beat ImageNet (supervised) features for ImageNet-1k linear probe classification."
+  options={[
+    { text: "False — supervised on ImageNet is the gold standard for ImageNet evaluation." },
+    {
+      text: "True — DINOv2 features actually outperform ImageNet supervised features on ImageNet-1k linear probe (and on most other benchmarks). The SSL pretraining produces better-organised feature space.",
+      correct: true,
+    },
+    { text: "Roughly equal; the gap is within noise." },
+    { text: "True for fine-tune but false for linear probe." },
+  ]}
+  explanation="DINOv2 ViT-L gets ~86% ImageNet-1k linear probe vs. ~85% for ImageNet-supervised ViT-L. The pretraining data is larger and the self-distillation objective produces features that separate classes better than the supervised classification objective itself. This is the paradoxical result that established DINOv2 as the default backbone: self-supervised pretraining is now better than supervised pretraining even for the original supervised task."
+/>
+
+## Closing for self-supervised vision
+
+Self-supervised pretraining transformed vision in the early 2020s the same way self-supervised pretraining transformed NLP. DINOv2 is the practical default backbone in 2026; CLIP / SigLIP are the dominant for vision-language; domain-specific SSL exists where natural-image pretraining doesn't transfer.
+
+For most production: use the released DINOv2 / CLIP / SigLIP checkpoints. Don't pretrain from scratch. Linear probe as the cheap baseline; fine-tune when you have data and need quality.
+
+The next and final lesson covers deployment: turning a trained model into a production system with the right latency, throughput, and cost characteristics.
