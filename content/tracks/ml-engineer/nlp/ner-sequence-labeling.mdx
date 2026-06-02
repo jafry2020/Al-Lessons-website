@@ -1,0 +1,379 @@
+---
+title: "Named entity recognition and sequence labeling"
+description: "Extract structured spans (people, dates, products) from unstructured text. The 'classify each token' family of tasks — and when to use spaCy vs. a fine-tuned encoder vs. an LLM."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: ner-sequence-labeling
+lessonCode: "A6.5"
+estMinutes: 12
+prereqs:
+  - "A6.4 Text classification with pretrained encoders"
+objectives:
+  - "Apply BIO tagging to convert span-level labels into per-token labels."
+  - "Pick between spaCy, fine-tuned encoder, and LLM extraction for an NER task."
+  - "Evaluate NER systems with span-level F1 (the right metric) rather than token accuracy (the misleading one)."
+pitfalls:
+  - "Reporting token-level accuracy on NER. 'O' (outside) dominates; even a useless model scores 90%+."
+  - "Forgetting BIO requires you to predict B- and I- consistently. A model that emits 'I-PERSON' without a preceding 'B-PERSON' is malformed."
+  - "Fine-tuning a model on data where entity boundaries are inconsistent. Annotation quality matters more than model choice for NER."
+  - "Using LLMs for NER on high-volume / well-defined tasks. Slow and expensive vs. a fine-tuned encoder, with similar quality on standard entities."
+importantQuestions:
+  - question: "What does sequence labeling include beyond NER?"
+    shortAnswer: |
+      Any task where every token gets a label: part-of-speech tagging, NER, chunking, slot filling, question-answering span extraction, dependency labeling. NER is the most common production case.
+    detailed: |
+      Sequence labeling = predict one label per token. Common tasks:
+
+      | Task | Example |
+      | ---- | ------- |
+      | NER | "Barack Obama visited Paris" → ["PER", "PER", "O", "LOC"] |
+      | POS tagging | "She runs fast" → ["PRON", "VERB", "ADV"] |
+      | Slot filling | "Book a flight to Paris" → ["O", "O", "O", "O", "DEST"] |
+      | Span extraction (QA) | Mark the answer span in a paragraph |
+      | Chunking | Group tokens into noun-phrases, verb-phrases, etc. |
+      | Stance detection (per-claim) | Per-sentence agree/disagree |
+
+      All use the same encoder + per-token classifier architecture. The label set and the BIO encoding vary; the rest is shared.
+
+      NER specifically: identify entity spans and their types in unstructured text. Most common types: PERSON, ORGANIZATION, LOCATION, DATE, MONEY, PRODUCT. Domain-specific NER (medical: diseases, drugs, dosages; financial: tickers, instruments) is a huge industry application.
+    pitfalls:
+      - "Don't confuse 'classify the sentence's topic' (sentence classification) with 'tag each entity in the sentence' (sequence labeling). Different architectures."
+  - question: "What is BIO tagging?"
+    shortAnswer: |
+      Convert span labels to per-token labels: B-X (begin entity X), I-X (inside entity X), O (outside any entity). Variants: BIOES adds E (end) and S (single token).
+    detailed: |
+      Span labels like "Barack Obama / PERSON" become per-token labels:
+
+      | Token | Label |
+      | ----- | ----- |
+      | Barack | B-PER |
+      | Obama | I-PER |
+      | visited | O |
+      | Paris | B-LOC |
+
+      The model predicts one label per token; downstream code reassembles spans by finding B- tokens and consuming subsequent I- of the same type.
+
+      **BIOES** (sometimes called BIOLU) adds E-X (end) and S-X (single token):
+
+      | Token | Label |
+      | ----- | ----- |
+      | Paris | S-LOC |
+      | Barack | B-PER |
+      | Obama | E-PER |
+
+      Slightly harder to learn but more constrained at decoding. Used in some research systems; standard BIO is more common.
+
+      Why BIO and not just X / O? Without B- and I-, two adjacent same-type entities can't be distinguished ("Barack Obama Michelle Obama" — one PERSON span or two?).
+    pitfalls:
+      - "When predicted labels are inconsistent (I-PER without preceding B-PER), most decoders 'repair' to B-PER. Decisions vary; document yours."
+  - question: "What's the standard NER model in 2026?"
+    shortAnswer: |
+      Fine-tuned encoder (BERT, RoBERTa, ModernBERT, DeBERTa) with a per-token linear classifier head. spaCy or `bert-base-NER` from HuggingFace cover most needs out of the box.
+    detailed: |
+      The architecture:
+
+      ```
+      input tokens → encoder → per-token features → linear head → per-token labels (BIO)
+      ```
+
+      Specifically with HuggingFace:
+
+      ```python
+      from transformers import AutoTokenizer, AutoModelForTokenClassification, Trainer
+      model = AutoModelForTokenClassification.from_pretrained(
+          "answerdotai/ModernBERT-base",
+          num_labels=NUM_LABELS,
+          id2label=id2label,
+          label2id=label2id,
+      )
+      tokenizer = AutoTokenizer.from_pretrained("answerdotai/ModernBERT-base")
+      # train on per-token labels...
+      ```
+
+      Off-the-shelf options:
+      - **spaCy** (en_core_web_trf or en_core_web_sm): general NER + parsing + POS pipeline. CPU-friendly. Good for general entities.
+      - **dslim/bert-base-NER** (HuggingFace): pre-trained for CoNLL-2003 entities (PER, ORG, LOC, MISC).
+      - **flair/ner-english-large**: another popular pretrained NER.
+
+      For domain-specific NER (medical, legal, scientific): fine-tune on your labelled data. ~500-5k labelled documents is usually enough for a strong domain NER.
+    pitfalls:
+      - "Tokenizer subword splits complicate token alignment. HuggingFace's `tokenize_and_align_labels` pattern handles this; use it."
+  - question: "Should you use an LLM for NER?"
+    shortAnswer: |
+      For low volume, novel entity types, or zero labelled data: yes — prompt the LLM for structured extraction. For standard entities at scale: no — fine-tuned encoder is 100× faster and at least as accurate.
+    detailed: |
+      LLM NER pattern:
+
+      ```python
+      response = openai.chat.completions.create(
+          model="gpt-4o",
+          messages=[{"role": "user", "content": f"""Extract all PERSON, ORG, LOC entities from this text. Return JSON.
+
+      Text: {text}"""}],
+          response_format={"type": "json_object"},
+      )
+      ```
+
+      When this wins:
+      - **Novel entity types**: "extract all medical conditions and their severity" with no labelled data.
+      - **Few-shot adaptation**: include 3-5 examples in the prompt.
+      - **Cross-language**: GPT-4 handles 50+ languages out of the box.
+      - **Joint extraction + reasoning**: "find adverse events and their causes" — needs reasoning over context.
+
+      When fine-tuned encoder wins:
+      - **High volume**: encoder is 100× cheaper per request.
+      - **Standard entities**: CoNLL-style PER/ORG/LOC — pretrained NER hits 90%+ F1 with no work.
+      - **Latency**: 20ms vs 1000ms.
+      - **Consistency**: deterministic outputs (no LLM randomness).
+
+      Modern pattern: prototype with LLM extraction; distil to fine-tuned encoder when scale demands.
+    pitfalls:
+      - "LLM extraction can hallucinate entities not in the source text. Always validate against the input."
+  - question: "How do you evaluate NER?"
+    shortAnswer: |
+      Span-level F1 (entity-level), not token-level accuracy. An NER prediction is correct only if both the span boundaries AND the entity type match. Use seqeval or the `evaluate` library.
+    detailed: |
+      Token-level accuracy is misleading: most tokens are 'O' (outside any entity), so always-predict-O scores 90%+ on most NER datasets while being completely useless.
+
+      Proper evaluation uses span-level precision, recall, F1:
+
+      - **Precision**: of predicted entities, what fraction is correct (right boundaries + right type)?
+      - **Recall**: of gold entities, what fraction did we predict correctly?
+      - **F1**: harmonic mean.
+
+      Variants:
+      - **Strict span match**: boundaries and type both exact. Standard.
+      - **Partial / loose match**: overlap counts as a hit; sometimes used in medical NER where boundaries are fuzzy.
+
+      Tools:
+      - `seqeval` library: standard for sequence labelling evaluation. Computes BIO-aware span-level F1.
+      - HuggingFace `evaluate.load("seqeval")`: integrated with Trainer.
+
+      Per-entity-type F1 is essential: aggregate F1 hides poor performance on rare entity types. Report PER F1, LOC F1, etc., separately.
+    pitfalls:
+      - "F1 < 80% in benchmarks usually means a hard or noisy dataset. F1 > 95% sometimes means evaluation is too lenient (loose matching, common entities)."
+  - question: "What about extracting structured data, not just entity spans?"
+    shortAnswer: |
+      For structured extraction (e.g., 'extract all date-amount pairs from invoices'), you have three options: (1) NER + post-processing, (2) span-pair classification (relation extraction), (3) prompt an LLM with JSON schema.
+    detailed: |
+      Structured extraction beyond simple NER:
+
+      **NER + post-processing.** Train NER for the entity types (DATE, AMOUNT), use rules to pair them. Brittle but fast.
+
+      **Relation extraction.** Train a model to predict relations between detected entities. The `dygiepp` and `OpenNRE` libraries support this. More complex; needs labelled relation data.
+
+      **LLM with structured output.** Prompt with a JSON schema; GPT-4 / Claude / Llama 3.1+ support structured outputs natively. Most flexible; expensive at scale. The current go-to for prototyping structured extraction.
+
+      ```python
+      response = client.chat.completions.create(
+          model="gpt-4o",
+          messages=[...],
+          response_format={
+              "type": "json_schema",
+              "json_schema": {
+                  "name": "invoice",
+                  "schema": {
+                      "type": "object",
+                      "properties": {
+                          "vendor": {"type": "string"},
+                          "items": {"type": "array", "items": {...}},
+                          "total": {"type": "number"},
+                      },
+                  },
+              },
+          },
+      )
+      ```
+
+      In 2026 for new structured extraction projects: prototype with LLM structured output, distill to a fine-tuned encoder + post-processing if volume justifies.
+    pitfalls:
+      - "Even with structured outputs, LLMs occasionally produce malformed JSON. Always validate and retry."
+---
+
+<TldrCallout>
+  Sequence labelling assigns a label to every token in the input — NER is the dominant production
+  case. The standard 2026 stack: fine-tune an encoder (BERT, RoBERTa, ModernBERT) with BIO tagging
+  on labelled data, or use spaCy / pretrained NER models for general entities. LLMs are useful for
+  novel / low-data extraction tasks; for standard high-volume NER, fine-tuned encoders are 100×
+  cheaper. Always evaluate with span-level F1, never token accuracy.
+</TldrCallout>
+
+## The shape of the task
+
+NER labels span structure in text:
+
+| Token     | Label |
+| --------- | ----- |
+| Apple     | B-ORG |
+| Inc       | I-ORG |
+| announced | O     |
+| record    | O     |
+| profits   | O     |
+| in        | O     |
+| Cupertino | B-LOC |
+
+The model outputs per-token labels; downstream code reassembles spans by finding B- tokens and consuming subsequent I- of the same type.
+
+BIO scheme:
+
+- **B-X**: begin entity X.
+- **I-X**: inside entity X (continues the previous one).
+- **O**: outside any entity.
+
+Variants:
+
+- **BIOES** / **BIOLU**: adds E- (end) and S- (single token). Slightly more constrained.
+
+For most NER work in 2026: stick with BIO, use HuggingFace's `AutoModelForTokenClassification`, and rely on `seqeval` for evaluation.
+
+## The pipeline
+
+```python
+from transformers import AutoTokenizer, AutoModelForTokenClassification, Trainer, TrainingArguments
+from datasets import load_dataset
+import evaluate
+
+MODEL = "answerdotai/ModernBERT-base"
+LABELS = ["O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
+id2label = {i: l for i, l in enumerate(LABELS)}
+label2id = {l: i for i, l in enumerate(LABELS)}
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL)
+model = AutoModelForTokenClassification.from_pretrained(
+    MODEL, num_labels=len(LABELS), id2label=id2label, label2id=label2id,
+)
+
+# ... tokenize and align labels (subword-aware) ...
+# trainer.train()
+
+metric = evaluate.load("seqeval")
+def compute_metrics(p):
+    # convert predictions and labels to BIO label strings, drop -100 padding
+    return metric.compute(predictions=preds, references=refs)
+```
+
+The non-obvious step is **subword alignment**: when the tokenizer splits "Cupertino" into ["Cu", "##per", "##tino"], the original label needs to be replicated to all subwords (or only the first; the rest get -100 to mask from loss). HuggingFace's `tokenize_and_align_labels` recipe is standard.
+
+## When to use which tool
+
+| Situation                                  | Tool                                                |
+| ------------------------------------------ | --------------------------------------------------- |
+| General PERSON / ORG / LOC at low scale    | spaCy `en_core_web_trf`, off-the-shelf              |
+| General entities at scale                  | dslim/bert-base-NER, off-the-shelf                  |
+| Domain-specific entities (medical, legal)  | Fine-tune ModernBERT or DeBERTa on labelled data    |
+| Novel entity types, no labels              | Prompt LLM with few-shot examples                   |
+| Structured extraction (entity + attribute) | LLM with structured outputs, or relation extraction |
+| Real-time, > 100 QPS                       | Fine-tuned encoder (DistilBERT-based for speed)     |
+| Cross-language NER                         | XLM-RoBERTa or LLM                                  |
+
+spaCy is unfairly maligned in the LLM era. For pre-extracted general entities + POS tags + dependency parsing at high throughput on CPU, it remains the best tool. It just isn't trained for novel entity types.
+
+<AnalogyCallout>
+  NER is like highlighting names in a document with different colours: green for people, blue for
+  places, yellow for dates. The model has to decide for each word which colour (if any) to use, and
+  adjacent words of the same colour form one highlighted span. BIO is the encoding that lets you
+  tell adjacent same-colour spans apart.
+</AnalogyCallout>
+
+## Evaluation: span-level F1, not token accuracy
+
+The dominant 'O' label makes token accuracy useless. On most NER datasets, 'always predict O' scores 90%+ accuracy.
+
+The right metric is span-level F1:
+
+```python
+import evaluate
+metric = evaluate.load("seqeval")
+results = metric.compute(predictions=preds_bio, references=refs_bio)
+# {'PER': {'precision': 0.92, 'recall': 0.88, 'f1': 0.90, 'number': 1234},
+#  'ORG': {'precision': 0.85, 'recall': 0.80, 'f1': 0.82, 'number': 456},
+#  'overall_f1': 0.88, ...}
+```
+
+A predicted entity is correct only if:
+
+1. Span boundaries exactly match a gold entity.
+2. Entity type matches.
+
+Report per-entity-type F1: aggregate F1 hides poor performance on rare types. PERSON might be 95% F1 while DATE is 60% — meaningful actionable info.
+
+## When to use an LLM for NER
+
+LLMs are useful for NER when:
+
+- **Novel entity types** without labelled data ("extract all chemical reactions and reagents").
+- **Few-shot adaptation** — include 3-5 examples in the prompt.
+- **Cross-language** — GPT-4 / Claude handle 50+ languages with similar quality.
+- **Reasoning-required extraction** — "find all causes of the outage" requires implicit reasoning, not just span detection.
+
+LLMs are NOT useful for NER when:
+
+- **High volume**: an encoder serves 1000s of requests/second; an LLM API is 1-2 seconds per request.
+- **Standard entity types**: CoNLL-style PER/ORG/LOC have strong pretrained models; LLMs aren't notably better.
+- **Latency-critical** (under 100ms): encoder, every time.
+
+A common 2026 pattern: prototype the extraction task with GPT-4 + structured outputs. Once the task is well-defined and validated, label a few thousand examples and fine-tune a small encoder for production.
+
+## Structured extraction beyond NER
+
+Many real tasks want more than entity spans — they want structured records:
+
+- "Extract all date-amount-vendor triples from this invoice."
+- "Find all adverse events in this drug trial report and rate each as mild/moderate/severe."
+- "Parse this resume into a structured profile."
+
+Three approaches:
+
+1. **NER + post-processing.** Fine-tune NER for the entity types, write rules to pair entities. Fast, brittle.
+2. **Relation extraction.** Joint or pipelined: extract entities, then classify relations between pairs. More complex; needs relation-labelled data.
+3. **LLM structured output.** Prompt with a JSON schema; modern LLMs support structured generation. Most flexible, costliest.
+
+For new projects in 2026: prototype with option 3, evaluate carefully, distill to option 1 or 2 if cost / latency demand.
+
+<InlineQuiz
+  question="You build a CoNLL-style NER model. Token accuracy on the dev set is 96%. Span F1 is 67%. What's going on?"
+  options={[
+    { text: "The model is overfit." },
+    {
+      text: "Token accuracy is inflated by the dominant 'O' label; 96% means the model correctly predicts O on most non-entity tokens, but only catches 67% of entities correctly. F1 is the honest metric.",
+      correct: true,
+    },
+    { text: "Need a bigger model." },
+    { text: "Tokenization is broken." },
+  ]}
+  explanation="Classic NER evaluation trap. Token accuracy hides class imbalance — 'O' tokens dominate, so always-O scores 90%+. Span F1 at 67% tells you: of entities predicted, 67% match; of gold entities, 67% caught. That's mediocre. Improvements come from more labelled data, longer context (ModernBERT helps), or stronger model (DeBERTa-v3). This is exactly why you never report token accuracy on NER."
+/>
+
+## Production deployment
+
+A trained NER model in production:
+
+1. **Serve via** HuggingFace Inference Endpoints, BentoML, FastAPI + Transformers, or Triton.
+2. **Batch requests**: 10-100 texts per forward pass dramatically improves throughput.
+3. **Quantise** to fp16 / int8 for 2-4× speedup.
+4. **Post-process**: BIO decoder, entity merging across subwords, deduplication.
+5. **Monitor**: track distribution of predicted entity types over time; alert on drift.
+
+Production NER systems often combine multiple signals: model predictions, rule-based extractors, knowledge-base lookup (e.g., a list of known organisations), and possibly an LLM fallback for novel or low-confidence cases.
+
+<InlineQuiz
+  question="A medical company needs to extract drug names, dosages, and adverse events from doctor's notes. They have ~2,000 labelled notes. Volume is ~10k notes/day. What's the most pragmatic approach?"
+  options={[
+    { text: "Use GPT-4 with structured output for everything." },
+    {
+      text: "Fine-tune a domain encoder (BioBERT, PubMedBERT, or ClinicalBERT) on the 2k labelled notes for entity extraction; consider an LLM pass for adverse-event relations specifically.",
+      correct: true,
+    },
+    { text: "Build a regex extractor with hardcoded drug names." },
+    { text: "Train a Llama-7B model from scratch on the notes." },
+  ]}
+  explanation="2k labelled medical notes is enough to fine-tune a domain-specific encoder (BioBERT, PubMedBERT, ClinicalBERT, or modern equivalents). Domain pretraining matters enormously in medical NLP. For the simpler entities (drugs, dosages), fine-tuned encoder. For adverse-event relations (which require reasoning over context: 'patient reported dizziness after starting drug X'), an LLM pass on the encoder-extracted spans is reasonable. At 10k notes/day, pure GPT-4 would cost ~$50/day for the simpler extraction tasks — fine, but unnecessary."
+/>
+
+## Closing for sequence labeling
+
+Sequence labelling is older than transformers (HMMs, CRFs were the previous generation) but the modern stack — fine-tuned encoder + BIO + seqeval — is what production uses in 2026. The interesting work is data quality, domain adaptation, and integrating multiple signals (model + rules + KB).
+
+The next lesson moves from per-token labels to semantic retrieval — finding relevant content in a corpus, the foundation of RAG.

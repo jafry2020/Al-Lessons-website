@@ -1,0 +1,457 @@
+---
+title: "Working with LLM APIs in production"
+description: "What an ML engineer actually does with OpenAI / Anthropic / Google / open-weights LLMs. Prompting that doesn't suck, structured outputs, prompt caching, cost engineering, fallback strategies."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: llm-apis
+lessonCode: "A6.7"
+estMinutes: 16
+prereqs:
+  - "A6.6 Semantic search and retrieval (RAG)"
+  - "A6.2 Tokenization: BPE, WordPiece, SentencePiece, tiktoken"
+objectives:
+  - "Write system + user prompts that consistently produce the desired output format."
+  - "Use structured outputs (JSON schema, tool calling) instead of regex-parsing free-text responses."
+  - "Engineer for cost (caching, batching, model routing) and reliability (retries, fallbacks, timeouts) in production."
+pitfalls:
+  - "Treating prompts as throwaway strings. Version them, test them, monitor them like any other code."
+  - "Parsing free-text LLM output with regex. Use structured outputs (JSON mode, tool calling) instead — much more reliable."
+  - "Forgetting prompt caching. Anthropic + OpenAI both offer ~90% cost reduction for repeated prefixes."
+  - "Single-provider lock-in. Build with retries that can route to a fallback model when the primary fails."
+importantQuestions:
+  - question: "What's a 'production-grade' prompt look like in 2026?"
+    shortAnswer: |
+      A system message that sets role + constraints + output format, a user message with the task. Few-shot examples for harder tasks. Structured output (JSON schema or tool calling) instead of free text. Versioned in code, evaluated against a regression suite.
+    detailed: |
+      Anatomy of a production prompt:
+
+      ```python
+      SYSTEM = """You are a support ticket classifier.
+      Output one of: [billing, technical, account, other].
+      Output exactly one label, no explanation.
+      """
+
+      USER = "I can't log in to my account; password reset isn't working."
+
+      response = client.chat.completions.create(
+          model="gpt-4o-mini",
+          messages=[
+              {"role": "system", "content": SYSTEM},
+              {"role": "user", "content": USER},
+          ],
+          temperature=0,
+      )
+      ```
+
+      Key elements:
+      - **System message** defines role, constraints, output format.
+      - **User message** is the actual input. Keep it minimal.
+      - **temperature=0** for deterministic, repeatable behaviour. (Note: still not bit-perfect identical across calls; LLMs have some non-determinism.)
+      - **Output format constraint** in the system message: explicit and tested.
+      - For harder tasks: add 2-5 few-shot examples in the user message.
+
+      Production prompts are versioned files (often in Markdown or YAML), tested with regression suites, and monitored for drift.
+    pitfalls:
+      - "Don't put dynamic user input directly in the system message. Treat the system message as trusted code; user input as untrusted data."
+  - question: "What are structured outputs and why use them?"
+    shortAnswer: |
+      Force the LLM to output JSON matching a predefined schema. Eliminates parsing free text. Supported natively by OpenAI (`response_format`), Anthropic (tool calling), Google, and open-source servers via grammar constraints.
+    detailed: |
+      Free-text output has problems:
+      - LLM might add 'Sure! Here's your answer:' before the data.
+      - Field names might be inconsistent across calls.
+      - Optional fields might be omitted in unpredictable ways.
+      - Parsing requires brittle regex / heuristics.
+
+      Structured outputs constrain the LLM to a JSON schema:
+
+      ```python
+      response = openai.chat.completions.create(
+          model="gpt-4o",
+          messages=[...],
+          response_format={
+              "type": "json_schema",
+              "json_schema": {
+                  "name": "ticket_class",
+                  "schema": {
+                      "type": "object",
+                      "properties": {
+                          "category": {
+                              "type": "string",
+                              "enum": ["billing", "technical", "account", "other"],
+                          },
+                          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                          "reasoning": {"type": "string"},
+                      },
+                      "required": ["category", "confidence"],
+                  },
+              },
+          },
+      )
+      # response.choices[0].message.content is valid JSON matching the schema
+      ```
+
+      This is now the default for production. Tool calling (function calling) is the same mechanism — define a function signature, LLM outputs arguments matching it.
+
+      Modern open-source LLMs support similar via vLLM's `guided_json` parameter or libraries like `outlines` and `lm-format-enforcer`.
+    pitfalls:
+      - "Structured outputs add latency (~10-20% in some cases) because the model must satisfy constraints. Acceptable trade-off."
+  - question: "What is prompt caching and how does it work?"
+    shortAnswer: |
+      OpenAI and Anthropic cache the KV-state of prompt prefixes. Repeated prefixes (system messages, RAG context) cost ~10% of normal. Massive cost saving for prompts where the prefix is stable.
+    detailed: |
+      Standard LLM inference: each request processes the entire prompt from scratch. If you have a 5000-token system prompt and 100 token user message, you pay for 5100 input tokens per request.
+
+      Prompt caching: the API caches the model's hidden states up to the point where the prompt diverges. Next request with the same prefix only processes the new tokens.
+
+      OpenAI (automatic): prefixes ≥1024 tokens cached automatically; cached portion costs 50% of normal price. Cache TTL ~5 min.
+
+      Anthropic (explicit): mark cache breakpoints in the prompt. Cached portions cost 10% of normal price. Cache TTL 5 min (or 1 hour with extended caching, more expensive to write).
+
+      Use case: a RAG system with a 3000-token instruction + tool description prefix that's identical across queries. With caching: 90% cost reduction on those tokens. At scale, this is huge.
+
+      Pattern: put stable content (system prompt, few-shot examples, RAG context that repeats) first; variable content (user query) last.
+    pitfalls:
+      - "Cache hits require *exact* prefix match. Even one whitespace difference invalidates the cache."
+  - question: "How do you handle cost in production LLM applications?"
+    shortAnswer: |
+      Combine: cheaper models for simpler tasks (model routing), prompt caching for stable prefixes, batching when latency permits, streaming for UX, max_tokens to bound output, monitoring for cost regressions.
+    detailed: |
+      The cost engineering toolkit:
+
+      **Model routing.** Use GPT-4o-mini ($0.15/M input) for simple tasks; only call GPT-4o ($2.50/M input) for complex ones. A classifier or LLM can decide which to route to.
+
+      **Prompt caching.** As above — repeated prefixes at ~10% cost.
+
+      **Batching.** Send multiple inputs in one request when possible. OpenAI's batch API offers 50% discount for non-real-time work (24h SLA).
+
+      **Streaming.** Doesn't reduce cost but improves UX; user sees output as it generates. Often perceived as faster.
+
+      **max_tokens** in the response. Prevent runaway generation. Sensible defaults per use case.
+
+      **Open-weights LLMs.** Self-host Llama / Mistral / Qwen via vLLM for high-volume. Break-even vs. API around 100k requests/day.
+
+      **Distillation.** Use frontier LLM to label data, train a smaller fine-tuned model for production. Pattern: prototype expensive, deploy cheap.
+
+      **Monitoring.** Track $/request, tokens/request per endpoint. Alert on regressions.
+    pitfalls:
+      - "Don't optimise cost before quality. Hit your quality bar first; optimise cost when scale demands it."
+  - question: "How do you handle reliability (failures, rate limits, latency spikes)?"
+    shortAnswer: |
+      Retries with exponential backoff for transient failures. Timeouts on every call. Fallback chains (Claude → GPT → smaller model → error). Circuit breakers for dependent services. Monitor p50/p99 latency and error rates per provider.
+    detailed: |
+      Production checklist:
+
+      **Retries.** All LLM APIs have transient errors (rate limits, 500s, timeouts). Use exponential backoff with jitter: wait 1s, 2s, 4s, 8s. Cap at 3-5 retries. Most SDKs have this built in.
+
+      **Timeouts.** Set client-side timeouts (~30s for non-streaming, longer for streaming). Don't let a hung request block your event loop.
+
+      **Fallback chains.** When primary model fails, retry on a fallback. Example: try Claude 3.5 Sonnet, fall back to GPT-4o, fall back to a smaller open-source model on local infra. Library: LangChain / your-own-wrapper.
+
+      **Circuit breakers.** If a provider has elevated error rates, stop sending traffic for a cooling period. Prevents cascading failures.
+
+      **Concurrency limits.** Match your provider's rate limit. OpenAI tier-1 is 500 RPM for GPT-4o; tier-5 is 10,000 RPM.
+
+      **Caching.** Cache LLM responses for identical inputs. Especially useful for evaluation runs.
+
+      **Monitoring.** Track per-provider: success rate, p50/p99 latency, cost. Alert on regressions.
+    pitfalls:
+      - "Don't make naked LLM API calls in your hot path. Wrap with retries, timeout, monitoring."
+  - question: "How do you version and test prompts?"
+    shortAnswer: |
+      Treat prompts as code. Store in version-controlled files. Build a regression test suite of (input, expected_output) pairs. Evaluate every prompt change against the suite. Tools: PromptLayer, Langfuse, Weights & Biases prompts.
+    detailed: |
+      Prompt engineering is software engineering. Industrial-grade practice:
+
+      **Version control.** Prompts live in `.md`, `.yaml`, or `.py` files in your repo. Code review them.
+
+      **Regression suite.** A test set of (input, expected_output) pairs. After every prompt change, evaluate the new prompt on the suite. Fail the PR if accuracy drops.
+
+      **LLM-as-judge for fuzzy outputs.** When output is free text (summaries, answers), use a stronger LLM to score the new output vs. baseline. See A6.8 on evaluation.
+
+      **Tooling.** Several platforms exist:
+      - **PromptLayer**: prompt versioning + monitoring.
+      - **Langfuse**: open-source LLM observability.
+      - **Weights & Biases Prompts**: integrated with W&B experiment tracking.
+      - **Helicone**: API proxying for monitoring and caching.
+      - **OpenAI Evals**: standardised eval framework.
+
+      Most teams use one of these plus their own evaluation scripts. The unsexy work that prevents quality regressions.
+    pitfalls:
+      - "Don't 'eyeball' prompt changes. A prompt that looks better can score worse on the regression suite. Always test."
+---
+
+<TldrCallout>
+  Production LLM applications in 2026 are 10% prompt design, 30% structured-output and validation
+  engineering, 30% cost / reliability engineering (caching, retries, fallbacks, model routing), and
+  30% evaluation infrastructure. The model itself is the easy part. Treat prompts as versioned code;
+  use structured outputs instead of regex-parsing free text; cache aggressive; monitor everything.
+</TldrCallout>
+
+## The structure of a production prompt
+
+```python
+SYSTEM_PROMPT = """You are a {role}.
+
+Your task: {task description}.
+
+Constraints:
+- Output exactly one {output type}.
+- Do not include explanation unless asked.
+- If you cannot answer, respond with "{fallback}".
+
+Output format: {explicit format spec}
+"""
+
+response = client.chat.completions.create(
+    model=MODEL,
+    messages=[
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_input},
+    ],
+    temperature=0,
+    max_tokens=200,
+    response_format={"type": "json_schema", "json_schema": SCHEMA},  # structured output
+)
+```
+
+Five things to get right:
+
+1. **System message defines the contract.** Role, constraints, output format.
+2. **User message is data, not instructions.** Treat as untrusted.
+3. **Temperature = 0 for production tasks** that should be deterministic.
+4. **max_tokens to bound output.** Prevent runaway generation.
+5. **Structured output** (JSON schema, tool calling) instead of free text.
+
+These five lift quality, reliability, and predictability dramatically over naive prompting.
+
+## Structured outputs: stop parsing free text
+
+Free-text LLM output is a parsing nightmare:
+
+```
+"Sure! Here's the answer:
+{
+  'category': 'billing'
+}
+
+Let me know if you need anything else!"
+```
+
+You can't reliably JSON-parse this. Regex catches you 90% of the time and bites the other 10%.
+
+Modern LLMs support structured outputs natively. With OpenAI JSON schema:
+
+```python
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "category": {"type": "string", "enum": ["billing", "technical", "account", "other"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["category", "confidence"],
+    "additionalProperties": False,
+}
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[...],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "ticket_class", "schema": SCHEMA, "strict": True},
+    },
+)
+
+data = json.loads(response.choices[0].message.content)  # guaranteed valid JSON matching schema
+```
+
+Anthropic uses tool calling for the same effect; Google's Gemini supports controlled generation; vLLM has `guided_json` for self-hosted models.
+
+**Use structured outputs whenever you'll parse the response programmatically.** It eliminates entire categories of bugs.
+
+<AnalogyCallout>
+  Prompting an LLM with no output constraints is like ordering coffee from a barista who might
+  respond with the coffee, a poem about coffee, or directions to a coffee farm. Structured outputs
+  are the laminated menu — you order from a fixed set; you get back what you ordered.
+</AnalogyCallout>
+
+## Prompt caching: the 90% cost cut
+
+If your prompt has a stable prefix (system message, few-shot examples, RAG context that doesn't change per request), use prompt caching.
+
+**OpenAI**: automatic for prefixes ≥1024 tokens. Cached portion costs 50% of input price.
+
+**Anthropic**: explicit cache markers in the prompt. Cached portion costs 10% of input price (90% savings) or write-cached at 25% extra; 5-min TTL standard, 1-hour available.
+
+```python
+# Anthropic prompt caching
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    system=[
+        {
+            "type": "text",
+            "text": LARGE_INSTRUCTION_BLOCK,  # stable across requests
+            "cache_control": {"type": "ephemeral"},
+        },
+    ],
+    messages=[{"role": "user", "content": user_query}],  # variable
+)
+```
+
+Practical effect: a RAG pipeline with a 3000-token system prompt + tool descriptions + retrieved chunks (stable per session) can cut input costs by 80-90%. At scale, transformative.
+
+Place stable content at the _start_ of the prompt; variable content at the end. Order matters for caching to work.
+
+## Model routing
+
+Not every request needs your most expensive model:
+
+```python
+def route(query):
+    if is_simple_classification(query):
+        return "gpt-4o-mini"  # $0.15/M
+    if requires_reasoning(query):
+        return "gpt-4o"        # $2.50/M
+    if requires_long_context(query):
+        return "claude-3-5-sonnet"  # better long context handling
+    return "gpt-4o-mini"  # default
+```
+
+`is_simple_classification()` can be a regex, a small classifier, or even an LLM call (cheap one).
+
+At scale: 80% of requests can route to the cheap model; 15% to mid-tier; 5% to top-tier. Total cost can drop 10× without quality loss.
+
+## Cost engineering checklist
+
+For an LLM-powered production application:
+
+| Lever                                        | Savings                         |
+| -------------------------------------------- | ------------------------------- |
+| Cache repeated prefixes (Anthropic / OpenAI) | 50-90% on cached tokens         |
+| Route simple queries to cheaper models       | 5-10× cost reduction overall    |
+| Batch non-real-time work (OpenAI Batch API)  | 50% on batched requests         |
+| Set `max_tokens` aggressively                | Bounds runaway output cost      |
+| Compress / summarise RAG context             | Less context per request        |
+| Self-host open-weights for high volume       | Break-even ~100k req/day        |
+| Distill frontier → fine-tuned small model    | 100-1000× cheaper at deployment |
+| Monitor $/request per endpoint               | Catch regressions early         |
+
+A startup spending $10k/month on LLM APIs typically can drop to $2-3k/month by applying these levers. At enterprise scale, the savings are six or seven figures.
+
+## Reliability: build for failure
+
+LLM APIs fail. Rate limits, 500s, timeouts, model deprecations. Production code must handle these:
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+)
+def call_llm(messages):
+    try:
+        return primary_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            timeout=30,
+        )
+    except (RateLimitError, ServerError, TimeoutError):
+        # Fall back to alternate provider
+        return fallback_client.messages.create(
+            model="claude-3-5-sonnet",
+            messages=messages,
+            timeout=30,
+        )
+```
+
+Production essentials:
+
+1. **Retries with exponential backoff** for transient errors.
+2. **Timeouts** on every call (30s typical).
+3. **Fallback chain** to a different provider / model.
+4. **Circuit breakers** for sustained provider failures.
+5. **Monitoring** of per-provider success rate, p99 latency, cost.
+
+Libraries: `tenacity` (retries), `circuitbreaker`, full-stack platforms like `Helicone` (proxy + monitoring).
+
+## Versioning prompts as code
+
+Prompts are not strings. They're code that affects production behaviour. Engineering practices:
+
+- **Source control.** Prompts in `prompts/*.md` or `prompts/*.yaml` files, code-reviewed.
+- **Regression suite.** A growing list of (input, expected_behaviour) pairs. Run after every change.
+- **A/B test in production.** For ambiguous changes, route 10% to the new prompt and compare metrics.
+- **Roll back fast.** Prompts can be regressed and re-deployed in seconds; treat as an emergency lever.
+- **Monitor prompt-level metrics.** Per-prompt success rate, p99 latency, cost, user feedback.
+
+Tools: PromptLayer, Langfuse (open-source), Weights & Biases Prompts, OpenAI Evals, Helicone. Each handles part of versioning / monitoring / evaluation. Many teams build their own minimal wrapper.
+
+<InlineQuiz
+  question="You're rolling out a new classification prompt that 'feels better' in spot tests. Your manager asks for the risk assessment before deployment. What's the right answer?"
+  options={[
+    { text: "It feels better; let's ship it." },
+    {
+      text: "Run the new prompt against the regression test suite. Compare accuracy, latency, cost vs. baseline. Roll out only if metrics are equal or better; revert if not.",
+      correct: true,
+    },
+    { text: "Wait for user complaints before changing." },
+    { text: "Train a custom model instead of changing the prompt." },
+  ]}
+  explanation="Prompts are code; changes need testing. 'Feels better' is one data point but unreliable — LLM behaviour is high-variance and human spot-checks miss regressions. A regression suite (even 50 examples) catches accuracy drops the manual review misses. This is the difference between hobbyist and production LLM engineering. The cost is small: writing the suite takes hours; running it takes minutes."
+/>
+
+## Self-hosted vs API: when to switch
+
+Decision factors at high volume:
+
+| Volume        | API                              | Self-hosted                     |
+| ------------- | -------------------------------- | ------------------------------- |
+| < 1k req/day  | API. Engineering cost dominates. | No.                             |
+| 1k - 100k/day | API usually.                     | Maybe, if compliance / privacy. |
+| > 100k/day    | Evaluate.                        | Worth considering.              |
+| > 1M/day      | Often self-hosted.               | Likely worth the engineering.   |
+
+Self-hosting an open-weights model (Llama-3-70B, Mistral, Qwen):
+
+- **Pros**: lower per-request cost at scale; data privacy; no rate limits; control over model versions.
+- **Cons**: significant engineering (vLLM, autoscaling, monitoring, model upgrades); commit to specific hardware capacity; quality often slightly below frontier APIs.
+
+Tools for self-hosting: **vLLM** (high-throughput), **TGI** (HuggingFace), **SGLang**, **TensorRT-LLM** (NVIDIA optimised), Modal, Replicate, Anyscale (managed self-hosting).
+
+For most teams in 2026: API until you cross the cost threshold. Then self-host the specific high-volume use cases; keep API for everything else.
+
+<InlineQuiz
+  question="Your team is paying $15,000/month for OpenAI GPT-4o on a high-volume classification task that's well-defined and labelled. What's the most impactful cost optimisation?"
+  options={[
+    { text: "Switch to GPT-3.5-turbo to save money." },
+    {
+      text: "Fine-tune a small encoder (DistilBERT or ModernBERT) on logs of the GPT-4o predictions. Expected cost: ~$200/month inference; one-time training cost. Quality usually within 1-2 points.",
+      correct: true,
+    },
+    { text: "Negotiate a better OpenAI rate." },
+    { text: "Use prompt caching." },
+  ]}
+  explanation="At $15k/month on a well-defined task with available data (the GPT-4o outputs themselves are labels), distillation is the canonical move. Fine-tune a 100M encoder on the LLM outputs, deploy on a single GPU. ~99% cost reduction, typically within 1-2 quality points of GPT-4o, and you own the model. Prompt caching saves 50-90% but not 99%; rate negotiation is incremental; GPT-3.5-turbo is older / weaker and not free. Distill-from-LLM is the production playbook."
+/>
+
+## The 2026 LLM stack
+
+For a typical production LLM application:
+
+- **SDK**: openai / anthropic / google-genai Python clients.
+- **Retries / fallbacks**: custom or tenacity / instructor.
+- **Structured outputs**: native JSON schema (OpenAI) or `instructor` library wrapping any provider.
+- **Caching**: built-in (OpenAI auto; Anthropic explicit) + Redis for response-level caching.
+- **Monitoring**: Langfuse / Helicone / W&B Prompts / OpenTelemetry.
+- **Self-hosted serving** (if relevant): vLLM + Kubernetes / Modal / Replicate.
+- **Eval suite**: custom or OpenAI Evals / W&B / inspect-ai.
+- **Prompt versioning**: Git + PromptLayer / Langfuse.
+
+The interesting work isn't writing prompts. It's the engineering around them: structured outputs, caching, model routing, evaluation, monitoring.
+
+The next lesson covers the evaluation piece in detail — how to measure whether your NLP system is actually working.

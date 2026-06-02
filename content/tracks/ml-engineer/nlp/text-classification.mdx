@@ -1,0 +1,367 @@
+---
+title: "Text classification with pretrained encoders"
+description: "The most common production NLP task. Pick a pretrained encoder, fine-tune on your labelled data, ship a fast cheap classifier. The bread-and-butter of applied NLP."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: text-classification
+lessonCode: "A6.4"
+estMinutes: 13
+prereqs:
+  - "A6.3 Word, sentence, and contextual embeddings"
+  - "A4.4 Loss functions for neural networks"
+objectives:
+  - "Fine-tune a pretrained encoder (DistilBERT / ModernBERT) for text classification using HuggingFace."
+  - "Decide between fine-tuning, frozen-features + linear, and prompting an LLM for a given classification task."
+  - "Apply class imbalance fixes, label smoothing, and threshold tuning specific to classification."
+pitfalls:
+  - "Reaching for an LLM for high-volume classification. A 100M-parameter encoder fine-tune is 100× cheaper and often comparable on accuracy."
+  - "Treating classification as 'just call .fit()'. The data and the threshold matter much more than the model choice."
+  - "Ignoring class imbalance. With 99% / 1% labels, baseline accuracy is 99% and meaningless."
+  - "Using accuracy for multi-label classification. F1 or per-label precision-recall is the honest metric."
+importantQuestions:
+  - question: "What's the standard text classification pipeline in 2026?"
+    shortAnswer: |
+      Load a pretrained encoder (DistilBERT, ModernBERT, RoBERTa). Replace the final layer with a classifier head matching your label space. Fine-tune end-to-end on your labelled data. Evaluate on held-out test. Deploy.
+    detailed: |
+      The standard recipe:
+
+      ```python
+      from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+      from datasets import load_dataset
+
+      model_name = "distilbert-base-uncased"  # or "answerdotai/ModernBERT-base"
+      tokenizer = AutoTokenizer.from_pretrained(model_name)
+      model = AutoModelForSequenceClassification.from_pretrained(
+          model_name, num_labels=NUM_CLASSES
+      )
+
+      dataset = load_dataset("your-dataset")
+      dataset = dataset.map(lambda x: tokenizer(x["text"], truncation=True), batched=True)
+
+      trainer = Trainer(
+          model=model,
+          args=TrainingArguments(
+              output_dir="./out",
+              num_train_epochs=3,
+              learning_rate=2e-5,
+              per_device_train_batch_size=32,
+              evaluation_strategy="epoch",
+          ),
+          train_dataset=dataset["train"],
+          eval_dataset=dataset["validation"],
+      )
+      trainer.train()
+      ```
+
+      This 20-line recipe covers ~80% of production text classification. The interesting work is in the data: cleaning, labelling, balancing, augmenting.
+    pitfalls:
+      - "Use `AutoModelForSequenceClassification` not `AutoModel`. The former adds a classifier head; the latter doesn't."
+  - question: "When should you fine-tune vs. prompt an LLM?"
+    shortAnswer: |
+      Fine-tune when: >1k labelled examples, fixed label set, high-volume inference, latency / cost-sensitive. Prompt when: tiny data, evolving labels, low volume, or quality on edge cases dominates.
+    detailed: |
+      The economics:
+
+      | Volume | Fine-tuned encoder | Prompted LLM |
+      | ------ | ------------------ | ------------ |
+      | 100/day | $0 (free model on CPU) | Negligible API cost |
+      | 10k/day | Single-GPU instance ~$100/mo | $20-100/mo at $0.50/M tokens |
+      | 1M/day | Couple GPU instances ~$500/mo | $2,000-10,000/mo |
+      | 100M/day | Cluster of GPUs | $200k+/mo |
+
+      At low volumes the LLM wins on engineering simplicity. At high volumes the fine-tuned model wins on cost.
+
+      Quality:
+      - For a well-defined classification task with enough labelled data, fine-tuning matches or exceeds prompting.
+      - For tasks requiring reasoning, fine-tuning struggles; prompting wins.
+      - For tasks with shifting labels / new classes added regularly, prompting is much faster to adapt.
+
+      Latency: fine-tuned DistilBERT runs in 10-50ms. LLM API runs in 500-2000ms. For real-time UX (chat-style search, content moderation in the user's loop), the small model wins.
+    pitfalls:
+      - "Prototype with prompting; distill to fine-tuned model when volume justifies. Common modern pattern."
+  - question: "What's the right encoder for classification in 2026?"
+    shortAnswer: |
+      For English: ModernBERT (2024) or DistilBERT (fast). For multilingual: XLM-R or multilingual ModernBERT. For long documents: Longformer or any model with extended context. For most cases: ModernBERT-base.
+    detailed: |
+      The 2026 options:
+
+      | Model | Params | Context | Best for |
+      | ----- | ------ | ------- | -------- |
+      | DistilBERT | 66M | 512 | Fast, lightweight |
+      | BERT-base | 110M | 512 | Original, well-understood |
+      | RoBERTa-base | 125M | 512 | Better BERT (more training) |
+      | DeBERTa-v3-base | 184M | 512 | Often best for classification |
+      | ModernBERT-base | 150M | 8192 | 2024-current SOTA encoder; longer context |
+      | XLM-RoBERTa | 270M | 512 | Multilingual |
+      | Longformer | 149M | 4096 | Long documents |
+
+      For most new projects in 2026: ModernBERT-base or DeBERTa-v3-base. Both have strong out-of-box quality and ModernBERT has dramatically longer context.
+
+      For inference-cost-sensitive: DistilBERT — slightly worse quality, much faster.
+
+      For multilingual: XLM-RoBERTa or BGE-M3 (using as a classifier base).
+    pitfalls:
+      - "Don't fine-tune large LLMs (Llama-7B) for simple classification. Massive overkill. A 100M encoder gets there with much less compute."
+  - question: "How do you handle class imbalance?"
+    shortAnswer: |
+      Three approaches: weighted cross-entropy loss (weight inversely by class frequency), oversampling the minority class, threshold tuning on the validation set. Often combine. Stratified train/val/test splits are always required.
+    detailed: |
+      Imbalance is the rule in production classification (fraud, defects, spam, conversion). Strategies:
+
+      **Stratified splits.** Always use `stratify=labels` when splitting. Without it, your validation set might have zero positive examples.
+
+      **Loss weighting.** `nn.CrossEntropyLoss(weight=class_weights)` where class_weights[i] = 1 / freq(i). The minority class contributes more to the loss; gradient pushes the model to learn it.
+
+      **Oversampling / undersampling.** Repeat minority examples or sample fewer majority examples in each epoch. Simple; can lead to overfitting on the repeated examples.
+
+      **Synthetic minority oversampling (SMOTE)**. Generate synthetic minority examples by interpolating between real ones. Used for tabular; less effective for text where interpolation isn't well-defined.
+
+      **Threshold tuning.** Train with whatever loss. At inference, set the decision threshold by sweeping on validation: pick the threshold that maximises your business metric (F1, recall@fixed-precision, etc.).
+
+      **Focal loss** (Lin et al., 2017). Down-weights well-classified examples; useful for severe imbalance like object detection.
+    pitfalls:
+      - "Don't oversample / undersample the test set. Test set should reflect deployment distribution."
+  - question: "How is multi-label classification different from multi-class?"
+    shortAnswer: |
+      Multi-class: each example has exactly one label out of K (softmax + cross-entropy). Multi-label: each example can have multiple labels out of K (sigmoid per output + binary cross-entropy per output). Different head, different loss.
+    detailed: |
+      Multi-class (one label per example):
+      ```python
+      model = AutoModelForSequenceClassification.from_pretrained(
+          name, num_labels=K, problem_type="single_label_classification"
+      )
+      # Output: K logits; softmax → one probability per class
+      ```
+
+      Multi-label (zero or more labels per example):
+      ```python
+      model = AutoModelForSequenceClassification.from_pretrained(
+          name, num_labels=K, problem_type="multi_label_classification"
+      )
+      # Output: K logits; sigmoid → K independent probabilities
+      ```
+
+      Loss for multi-label is BCEWithLogits applied per output, not softmax + cross-entropy.
+
+      Evaluation:
+      - Multi-class: accuracy, macro/micro F1, confusion matrix.
+      - Multi-label: per-label precision/recall, micro/macro F1, AP per label.
+
+      Multi-label is harder. Common in real systems: a news article might be both "politics" and "Asia"; a support ticket might be "billing" and "urgent". Don't squash to multi-class.
+    pitfalls:
+      - "When labels are mutually exclusive AND exhaustive, use multi-class. When labels are independent, use multi-label."
+  - question: "When does linear probing beat fine-tuning?"
+    shortAnswer: |
+      For tiny labelled data (<500 examples), or when you need a deterministic, fast baseline. Embed all your data once with a frozen encoder; train a logistic regression on top.
+    detailed: |
+      Linear probing = freeze the encoder; train only a linear classifier on the [CLS] or pooled features.
+
+      Pros:
+      - **Tiny data friendly**: logistic regression on 200 examples doesn't overfit the way a full fine-tune does.
+      - **Fast**: train in seconds, not minutes.
+      - **Multi-task**: same frozen features feed multiple classifiers.
+      - **Reproducible**: less stochastic than fine-tuning.
+
+      Cons:
+      - Slightly lower accuracy than full fine-tune on most tasks.
+      - Limited by the quality of the pretrained features.
+
+      Modern pattern: use a strong sentence-transformer (BGE-large) frozen, train sklearn LogisticRegression on top. Surprisingly strong baseline for many tasks; faster to ship than full fine-tuning.
+
+      For tasks with >5k labelled examples, full fine-tuning usually wins by 1-3 percentage points. Below that, linear probing is often competitive or better.
+    pitfalls:
+      - "When using frozen encoders for classification, pick an encoder trained for representation (sentence-transformers, BGE) over a raw classification-tuned model."
+---
+
+<TldrCallout>
+  Text classification in 2026 is mostly: load a pretrained encoder (DistilBERT, ModernBERT, RoBERTa,
+  DeBERTa), fine-tune on your labelled data, deploy. For high-volume production tasks, this beats
+  LLM API calls on both cost and latency by 10-100×. The interesting work isn't model choice — it's
+  data quality, class imbalance, and threshold tuning.
+</TldrCallout>
+
+## The default recipe
+
+20 lines, give or take:
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+from datasets import load_dataset
+
+MODEL = "answerdotai/ModernBERT-base"  # or "distilbert-base-uncased" for faster
+NUM_LABELS = 5
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL, num_labels=NUM_LABELS)
+
+ds = load_dataset("imdb")  # your dataset here
+ds = ds.map(lambda x: tokenizer(x["text"], truncation=True), batched=True)
+
+trainer = Trainer(
+    model=model,
+    args=TrainingArguments(
+        output_dir="./out",
+        num_train_epochs=3,
+        learning_rate=2e-5,
+        per_device_train_batch_size=32,
+        evaluation_strategy="epoch",
+        load_best_model_at_end=True,
+    ),
+    train_dataset=ds["train"],
+    eval_dataset=ds["test"],
+)
+trainer.train()
+```
+
+That's a working classifier. The headline metric (accuracy, F1, AUROC) goes in `compute_metrics`. The rest is engineering: data prep, evaluation, error analysis, deployment.
+
+## Choosing an encoder
+
+| Encoder          | Params | Speed   | Notes                                |
+| ---------------- | ------ | ------- | ------------------------------------ |
+| DistilBERT       | 66M    | Fastest | Lightweight; good baseline           |
+| BERT-base        | 110M   | Medium  | Original; well-understood            |
+| RoBERTa-base     | 125M   | Medium  | Better-trained BERT                  |
+| DeBERTa-v3-base  | 184M   | Medium  | Often top-quality for classification |
+| ModernBERT-base  | 150M   | Fast    | 2024-current; 8k context             |
+| XLM-RoBERTa-base | 270M   | Medium  | Multilingual                         |
+| Longformer       | 149M   | Slower  | 4k context window                    |
+
+In 2026, the practical default is **ModernBERT-base** (long context, fast inference) or **DeBERTa-v3-base** (slightly higher quality on benchmarks). DistilBERT remains the choice for latency-critical or compute-constrained deployment.
+
+For multilingual (10+ languages), use XLM-RoBERTa or multilingual ModernBERT variants.
+
+## Fine-tune vs. linear probe vs. LLM
+
+A decision matrix:
+
+| Situation                                 | Approach                                      |
+| ----------------------------------------- | --------------------------------------------- |
+| < 500 labelled examples                   | Linear probe on frozen encoder, or prompt LLM |
+| 500-5k examples                           | Linear probe or full fine-tune; both viable   |
+| 5k-100k examples                          | Full fine-tune of encoder                     |
+| 100k+ examples, fixed labels, high volume | Full fine-tune of encoder; tune hyperparams   |
+| Tiny data + need quality                  | Few-shot prompting of frontier LLM            |
+| Labels change weekly                      | Prompt LLM (no retraining)                    |
+| Real-time UX, > 10k requests/day          | Fine-tuned small encoder                      |
+
+The "fine-tune small encoder" path covers most production deployments. LLM prompting wins for prototyping, low volume, or reasoning-heavy tasks.
+
+<AnalogyCallout>
+  Choosing between fine-tuning and prompting is like deciding between training a junior employee vs
+  hiring a senior consultant. Junior employee (fine-tuned small model): cheaper, focused on one
+  task, learns from your data, ships at low marginal cost. Senior consultant (LLM API): expensive
+  per task, handles novel cases, no training required. Different tools for different scales.
+</AnalogyCallout>
+
+## Class imbalance: the practical problem
+
+Most production classification has imbalanced classes. 99% of transactions aren't fraud. 95% of emails aren't spam. 80% of support tickets are routine.
+
+A model trained naively on imbalanced data:
+
+1. Always predicts the majority class.
+2. Scores high accuracy.
+3. Is useless for the minority class.
+
+Three lines of defence:
+
+1. **Stratify your splits.** `train_test_split(stratify=labels)`. Always.
+2. **Weight the loss.** Class i gets weight 1 / freq(i). The minority class contributes more to the gradient.
+3. **Tune the threshold.** Sweep the decision threshold on validation; pick the value that maximises your business metric (F1, recall@fixed-precision).
+
+For severe imbalance (1% positive or less), consider **focal loss** (Lin et al., 2017) — it down-weights easy examples and forces the model to focus on hard ones.
+
+Don't oversample to 50/50. You inflate training accuracy and break calibration; the model thinks positives are common.
+
+## Evaluating classifiers properly
+
+Use the right metric for the task:
+
+| Task                                   | Right metric                          |
+| -------------------------------------- | ------------------------------------- |
+| Balanced multi-class                   | Accuracy, macro F1                    |
+| Imbalanced multi-class                 | Per-class precision, recall, macro F1 |
+| Binary, calibrated probability matters | AUROC, calibration plot               |
+| Imbalanced binary                      | PR-AUC, F1, precision @ K             |
+| Multi-label                            | Per-label F1, micro / macro F1        |
+| Ranking quality                        | NDCG, MAP                             |
+
+Always report metrics on a held-out test set, not the validation set. The validation set is for model selection / tuning; the test set is for honest reporting.
+
+For production: report metrics per-segment too. Aggregate accuracy can hide poor performance on important sub-groups (specific user types, languages, time periods).
+
+## Common pitfalls
+
+**1. Wrong evaluation metric.** Predicting "non-spam always" on a 95/5 spam dataset gets 95% accuracy. Use F1 on the positive class.
+
+**2. Label leakage.** Features computed from the label (e.g., "the document length tends to be higher for class A" — but length was used to filter examples). Check feature provenance.
+
+**3. Data drift.** Distribution shifts between training and deployment. Monitor model accuracy on production data over time.
+
+**4. Tokenization mismatch.** Train tokenizer ≠ inference tokenizer (e.g., training on truncated text but deploying without truncation).
+
+**5. Forgotten threshold.** Default 0.5 is rarely optimal. Tune on validation.
+
+<InlineQuiz
+  question="You fine-tune DistilBERT for spam detection on 100k emails (95% non-spam, 5% spam). Without any adjustments, accuracy is 95.4%. What's the most informative additional metric to report?"
+  options={[
+    {
+      text: "Macro F1, but also precision and recall on the spam class specifically.",
+      correct: true,
+    },
+    { text: "Top-5 accuracy." },
+    { text: "Word error rate." },
+    { text: "BLEU score." },
+  ]}
+  explanation="95.4% accuracy on a 95/5 imbalanced dataset is barely above 'always predict non-spam' (which gets 95%). Macro F1 averages F1 across classes, giving the minority class equal weight. But the single most informative metric for spam detection is precision and recall on the spam (positive) class — these tell you 'when we flag spam, are we right?' (precision) and 'how much spam do we catch?' (recall). The business cost ratio of false-positive vs false-negative determines the threshold."
+/>
+
+## Deployment: from notebook to production
+
+A trained classifier in production:
+
+1. **Inference service**: HuggingFace Inference Endpoints, BentoML, Triton, FastAPI + Transformers.
+2. **Batching**: process multiple inputs per forward pass for higher throughput.
+3. **Quantisation**: int8 or fp16 quantisation cuts memory ~4× / 2× with minimal quality loss. ONNX Runtime, TensorRT.
+4. **Distillation** (optional): train a smaller model on the predictions of a larger one. Common to go from large fine-tune to DistilBERT-sized production model.
+5. **Monitoring**: track distribution of predicted probabilities, per-class precision over time. Alert on drift.
+
+For real-time UX: target p99 latency under 100ms. A quantised DistilBERT classifier on a single GPU can serve ~1000 req/s with 30-50ms p99 latency.
+
+<InlineQuiz
+  question="A 500-example sentiment classification task is your starting point. You have a budget of ~$50 in compute. What should you try first?"
+  options={[
+    { text: "Train a transformer from scratch on the 500 examples." },
+    {
+      text: "Encode the 500 examples with a frozen sentence-transformer like BGE-large, then train logistic regression on the embeddings. Costs ~$1, takes minutes.",
+      correct: true,
+    },
+    { text: "Fine-tune Llama-3-70B with LoRA." },
+    { text: "Fine-tune ModernBERT-base; it'll learn quickly." },
+  ]}
+  explanation="500 examples is firmly in the linear-probe regime. Embedding with a strong sentence-transformer (BGE-large) once gives you 500 × 1024-dim vectors; logistic regression on those takes seconds. Training a full transformer from scratch on 500 examples is hopeless. Fine-tuning DistilBERT or ModernBERT works but overfits more easily and takes longer. Fine-tuning Llama-3-70B is absurd overkill. The frozen-encoder + linear pattern is the right answer at this scale; spend the saved time on better labels or more data."
+/>
+
+## Distillation: the cost-cutting move
+
+Pattern: train a large model (DeBERTa-v3-large), then distill its predictions into a smaller production model (DistilBERT or ModernBERT-base):
+
+1. Train the large model. Get its prediction probabilities on a large unlabeled pool.
+2. Train the small model with the large model's probabilities as soft labels (KL divergence loss).
+3. Deploy the small model.
+
+Often the small model matches the large model's quality within 1-2 points at 5-10× faster inference. The 2026 production playbook for high-volume classification: fine-tune large → distill → serve small.
+
+For most teams, distillation is overkill — fine-tuning a small model directly works. Reach for distillation when you have lots of unlabeled data and quality matters more than ease.
+
+## What this lesson skipped
+
+- **Hierarchical classification** (predict category → subcategory). Use multi-task heads or sequential models.
+- **Active learning**. Iteratively label the model's most uncertain examples.
+- **Zero-shot classification**. NLI-based models (`facebook/bart-large-mnli`) classify with no fine-tuning needed for the labels.
+- **Few-shot prompting**. For prototype / low-data work, prompting a frontier LLM with a few labelled examples is a strong baseline.
+
+The next lesson tackles a different shape of NLP task: sequence labelling — assigning a label to each token, not the whole sentence.

@@ -1,0 +1,435 @@
+---
+title: "Evaluation for NLP systems"
+description: "The unsexy work that separates production NLP from demoware. Golden sets, BLEU vs ROUGE vs exact match, LLM-as-judge, regression suites, and how to evaluate generative output without losing your mind."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: nlp-evaluation
+lessonCode: "A6.8"
+estMinutes: 14
+prereqs:
+  - "A6.7 Working with LLM APIs in production"
+  - "A0.8 Evaluation metrics"
+objectives:
+  - "Pick the right metric for the NLP task: classification, retrieval, generation, structured extraction."
+  - "Build and maintain a golden set / regression test suite for an LLM-powered feature."
+  - "Use LLM-as-judge effectively, knowing when it's reliable and when it isn't."
+pitfalls:
+  - "Evaluating LLM systems on toy / academic benchmarks instead of your actual production task. MMLU scores don't predict your app's quality."
+  - "Treating BLEU / ROUGE as gospel for generation quality. They correlate weakly with human judgment for open-ended tasks."
+  - "Using LLM-as-judge without verifying judge agreement with human ratings. The judge can have biases that contaminate everything."
+  - "Skipping per-segment evaluation. Aggregate metrics hide failures on important user sub-groups."
+importantQuestions:
+  - question: "What's a 'golden set' and why do you need one?"
+    shortAnswer: |
+      A curated set of (input, expected_output) pairs that represents production behaviour. Run after every prompt / model change to catch regressions. Start small (50-200 examples) and grow over time.
+    detailed: |
+      A golden set is the regression test suite for an LLM-powered feature. Components:
+
+      - **Diverse inputs**: cover common cases AND edge cases (failures you've seen in production).
+      - **Expected outputs**: either exact strings (for deterministic tasks), or rubrics (for generative tasks).
+      - **Metadata**: tags for category, difficulty, source. Lets you slice metrics by segment.
+
+      Workflow:
+
+      1. Start by collecting 30-50 examples manually (from real production traffic, customer reports, edge cases).
+      2. Run any new prompt / model against the golden set; report per-example pass/fail and aggregate metrics.
+      3. Grow the set continuously: every production failure → add to golden set + fix.
+      4. Track golden-set metrics over time as a release gate.
+
+      Tools:
+      - Custom script + JSON / CSV / SQLite.
+      - OpenAI Evals (declarative framework).
+      - LangChain LangSmith (commercial).
+      - Weights & Biases / Comet / Helicone (multi-purpose).
+
+      The golden set is the most important artefact in production LLM development. Better golden set > better model.
+    pitfalls:
+      - "Don't only add 'hard' examples to the golden set. The distribution should reflect production traffic."
+  - question: "Which metrics for which NLP task?"
+    shortAnswer: |
+      Classification: accuracy, F1, AUROC. Retrieval: NDCG, MAP, recall@k. Translation: BLEU, COMET, human eval. Summarisation: ROUGE, BERTScore, LLM-as-judge. Open-ended generation: LLM-as-judge or human eval.
+    detailed: |
+      The mapping:
+
+      | Task | Standard metrics |
+      | ---- | ---------------- |
+      | Binary classification | Accuracy, F1, precision/recall, AUROC, PR-AUC |
+      | Multi-class | Per-class F1, macro F1, confusion matrix |
+      | Multi-label | Per-label F1, micro/macro F1, mAP |
+      | Sequence labeling (NER) | Span-level F1 (seqeval) |
+      | Retrieval | Recall@k, NDCG@k, MAP, MRR |
+      | Translation | BLEU, chrF, COMET (neural), human eval |
+      | Summarisation | ROUGE-1/2/L, BERTScore, factual consistency, LLM-as-judge |
+      | Q&A (extractive) | Exact match, token F1 |
+      | Q&A (open-ended) | LLM-as-judge against reference; human eval |
+      | Code generation | pass@k (does generated code execute and pass tests?) |
+      | Open-ended generation | LLM-as-judge with rubric; human eval |
+      | RAG end-to-end | Per-stage (retrieval recall, generation faithfulness, answer relevance) |
+
+      Critical: pick metrics aligned with the user-facing goal. Optimising BLEU when users care about fluency is a mistake.
+    pitfalls:
+      - "Reference-free metrics (LLM-as-judge, BERTScore) don't need ground-truth references and scale better than n-gram metrics."
+  - question: "What's wrong with BLEU and ROUGE?"
+    shortAnswer: |
+      They compare n-gram overlap between output and reference. For paraphrased / generative output where many valid answers exist, they correlate weakly with human judgment. Useful as one signal among several; not as a sole metric.
+    detailed: |
+      BLEU (Papineni et al., 2002) was designed for machine translation. Counts n-gram overlap (1-4 grams) between output and reference; applies brevity penalty.
+
+      ROUGE (Lin, 2004) is the same idea for summarisation: ROUGE-N counts n-gram overlap (recall-oriented); ROUGE-L uses longest common subsequence.
+
+      Problems:
+      - **Single reference is rarely enough.** Many valid outputs exist for the same input; BLEU penalises valid paraphrases.
+      - **Lexical, not semantic.** "The car is red" vs "The vehicle has a red colour" have low BLEU but identical meaning.
+      - **Doesn't catch factual errors.** A fluent, well-formed wrong answer can score high.
+      - **Brittle to formatting.** Punctuation, capitalisation matter.
+
+      Modern alternatives:
+      - **BERTScore** (Zhang et al., 2019): cosine similarity between BERT embeddings of output and reference. Captures paraphrase better.
+      - **COMET** (Rei et al., 2020): trained metric for MT; correlates well with human ratings.
+      - **LLM-as-judge**: ask a strong LLM to rate. Best correlation with human judgment for open-ended tasks; expensive.
+
+      Use BLEU / ROUGE as one signal (cheap, standardised, comparable to prior work) alongside more nuanced metrics for final judgment.
+    pitfalls:
+      - "ROUGE has many variants. Specify which (ROUGE-1, ROUGE-2, ROUGE-L) in any report."
+  - question: "How does LLM-as-judge work, and when is it reliable?"
+    shortAnswer: |
+      Ask a strong LLM (typically GPT-4o or Claude) to rate the output of another LLM, often against a rubric. Reliable for tasks where the judge can verify (factual recall, formatting, instruction following). Less reliable for tasks the judge itself struggles with (deep reasoning, novel domain).
+    detailed: |
+      Standard LLM-as-judge prompt:
+
+      ```
+      You are evaluating the quality of an AI assistant's response.
+
+      User question: {question}
+      Assistant response: {response}
+      [Optional reference answer: {reference}]
+
+      Rate the response on a scale of 1-5 for {criterion}:
+      1 - Completely wrong / unhelpful
+      ...
+      5 - Excellent
+
+      Output JSON: {"rating": <int>, "reasoning": "<brief>"}
+      ```
+
+      Strengths:
+      - **Scales**: thousands of evaluations per day cheaply.
+      - **Aligned with human judgment** on many tasks (correlation 0.7-0.9 with human ratings for typical chat tasks).
+      - **Captures nuance**: handles paraphrase, factual checking, tone.
+
+      Weaknesses:
+      - **Position bias**: in pairwise comparisons, judges often prefer the first option.
+      - **Length bias**: judges often prefer longer responses.
+      - **Self-preference**: a model judging itself tends to rate itself higher.
+      - **Cost**: GPT-4o judging at scale isn't free.
+
+      Best practices:
+      - **Use a different model as judge** than as candidate (to avoid self-preference).
+      - **Randomise order** in pairwise comparisons.
+      - **Validate judge against human ratings** on a sample. If judge agreement with humans is <0.7, don't trust it.
+      - **Use rubrics** (specific criteria) rather than single-axis "is this good?" — much more reliable.
+      - **Use chain-of-thought**: ask the judge to explain before scoring.
+    pitfalls:
+      - "LLM-as-judge has known failure modes. Validate it against human ratings; don't trust blindly."
+  - question: "How do you evaluate RAG systems specifically?"
+    shortAnswer: |
+      Per-stage: retrieval recall (did we get the right chunks?), generation faithfulness (does the answer use the retrieved chunks?), answer relevance (does the answer address the query?). End-to-end accuracy is the headline; per-stage tells you what to fix.
+    detailed: |
+      RAG evaluation must measure each stage independently:
+
+      **Retrieval recall**: of the chunks that contain the answer, what fraction did we retrieve in the top-k? Needs labelled (query, relevant-chunks) pairs.
+
+      **Faithfulness**: of the claims in the answer, what fraction are actually supported by the retrieved chunks? Can be evaluated by LLM-as-judge or NLI-based scoring.
+
+      **Answer relevance**: does the answer actually address the question? LLM-as-judge with rubric.
+
+      **End-to-end accuracy**: did the system produce the right answer? Requires ground truth.
+
+      Tools that help:
+      - **Ragas** (open source): standard RAG metrics framework.
+      - **TruLens**: monitoring + evaluation for RAG.
+      - **DeepEval**: pytest-style RAG evals.
+      - **LangSmith / Langfuse**: commercial / open observability with eval support.
+
+      The discipline: when end-to-end accuracy is poor, instrument each stage to find the bottleneck. Almost always retrieval recall or chunk-level relevance is the leading cause, not the LLM.
+    pitfalls:
+      - "Don't only measure end-to-end accuracy. You need stage-level metrics to diagnose failures."
+  - question: "How do you do production monitoring for NLP systems?"
+    shortAnswer: |
+      Three loops: real-time (latency, error rate, cost), batch (golden set + sampled production traffic, daily or per release), human review (sampled outputs reviewed by humans for drift detection).
+    detailed: |
+      Production monitoring layers:
+
+      **Real-time**: per-request metrics. Latency p50/p99, error rate, $/request. Standard infrastructure observability — Datadog, Prometheus, CloudWatch.
+
+      **Batch / scheduled evaluation**: run golden set + sample of recent production inputs through the system. Compare current metrics to baseline. Alert on regressions. Daily or per-release frequency.
+
+      **Human review loop**: random sample of production outputs reviewed by humans (internal team or labelled-data services like Scale AI, Surge, Argilla). Tags failures for golden-set growth. Monthly to quarterly.
+
+      **User feedback signal**: thumbs up/down on responses, regenerate buttons, escalation rates. Aggregate as a quality signal.
+
+      **Drift monitoring**: distribution of inputs, outputs, scores over time. Alert on shifts (input distribution changed, output length distribution changed, judge scores trending down).
+
+      Tools for the LLM-specific layer:
+      - **Langfuse / Helicone**: open-source LLM observability.
+      - **LangSmith** (LangChain): commercial.
+      - **Weights & Biases Prompts**: integrated with W&B.
+      - **Arize, WhyLabs, Evidently**: general MLOps monitoring with LLM features.
+
+      The goal: detect quality issues before users do. Monitoring is what makes the difference between "ship and pray" and "ship and improve."
+    pitfalls:
+      - "Don't only monitor 'is the API up.' Quality regressions can occur with 100% uptime and zero error rate."
+---
+
+<TldrCallout>
+  NLP evaluation in 2026 is built on three layers: golden sets (curated regression tests run on
+  every change), automated metrics (BLEU, ROUGE, exact match, F1, LLM-as-judge), and production
+  monitoring (latency, cost, drift, sampled human review). For generative tasks, LLM-as-judge has
+  largely replaced n-gram metrics but must be validated against human agreement before trusted. The
+  unsexy infrastructure work is what separates demoware from production-grade NLP.
+</TldrCallout>
+
+## The three evaluation loops
+
+| Loop                                | Cadence              | Purpose                         | Tool                                |
+| ----------------------------------- | -------------------- | ------------------------------- | ----------------------------------- |
+| **Regression suite (golden set)**   | Per release / per PR | Catch regressions before deploy | Custom + OpenAI Evals / Langfuse    |
+| **Batch eval on production sample** | Daily / weekly       | Detect drift, slice quality     | Custom + Langfuse / W&B             |
+| **Real-time monitoring**            | Continuous           | Latency, error, cost            | Datadog / Prometheus + LLM-specific |
+
+These complement each other. Skip any one and you're missing failure modes.
+
+## The golden set: your most important artefact
+
+A golden set is a curated list of (input, expected_output) pairs that defines what "working" means for your system:
+
+```yaml
+# golden_set.yaml
+- id: ticket-001
+  category: classification
+  input: "I can't log in to my account; password reset isn't working."
+  expected:
+    category: "account"
+    min_confidence: 0.7
+  tags: [common, login]
+
+- id: ticket-042
+  category: classification
+  input: "🤔 sometimes the page just doesn't load at all???"
+  expected:
+    category: "technical"
+    min_confidence: 0.5
+  tags: [edge_case, informal]
+```
+
+Workflow:
+
+1. **Seed**: 30-50 examples collected manually (real production traffic, edge cases, customer reports).
+2. **Grow**: every production failure becomes a new golden-set entry. The set grows with your understanding.
+3. **Run**: every new prompt / model change runs against the golden set; compare metrics to baseline.
+4. **Gate**: failing the golden set blocks deployment.
+
+The golden set is the difference between "ships occasionally" and "ships predictably." Build it first.
+
+<AnalogyCallout>
+  A golden set is the unit test suite for your LLM application. You wouldn't ship a backend service
+  without tests; don't ship a prompt-driven feature without a golden set.
+</AnalogyCallout>
+
+## The metric per task
+
+Pick a metric aligned with the user-facing goal:
+
+| Task              | Right metrics                                                      |
+| ----------------- | ------------------------------------------------------------------ |
+| Classification    | F1 (especially per-class), AUROC for binary                        |
+| Sequence labeling | Span-level F1                                                      |
+| Retrieval         | Recall@k, NDCG@k                                                   |
+| Translation       | BLEU + COMET + sample human eval                                   |
+| Summarisation     | ROUGE + LLM-as-judge faithfulness + length compliance              |
+| Extractive Q&A    | Exact match + token F1                                             |
+| Open-ended Q&A    | LLM-as-judge with rubric                                           |
+| Code generation   | pass@k (executes + passes tests)                                   |
+| RAG               | Per-stage: retrieval recall + generation faithfulness + end-to-end |
+| Open-ended chat   | LLM-as-judge + user feedback signals + sampled human review        |
+
+The thing the metric should _not_ be is "looks good to me." Spot-checks miss systematic failures.
+
+## BLEU and ROUGE: still useful, often misleading
+
+BLEU (translation) and ROUGE (summarisation) count n-gram overlap between output and reference. Standardised, cheap, comparable across papers. But:
+
+- **Sensitive to paraphrase**: "The car is red" vs "The vehicle has a red colour" → low BLEU, same meaning.
+- **Single-reference**: many valid outputs exist for one input.
+- **Lexical, not semantic**: misses factual errors with fluent surface form.
+- **Brittle to formatting**: punctuation, capitalisation, special tokens matter.
+
+Modern alternatives:
+
+- **BERTScore**: cosine similarity between output and reference embeddings. Captures paraphrase. F1-like score in [0, 1].
+- **COMET**: trained on human MT ratings; strong correlation with human judgment. Standard in MT now.
+- **LLM-as-judge**: described below.
+
+**Use BLEU / ROUGE as one signal, not the only signal.** They're useful for tracking regressions on a fixed reference set; less useful for absolute quality judgment.
+
+## LLM-as-judge: the modern workhorse
+
+For open-ended generation, asking a strong LLM to rate the output has become the dominant approach:
+
+```python
+JUDGE_PROMPT = """You are evaluating an AI assistant's response.
+
+Question: {question}
+Assistant response: {response}
+Reference answer (for guidance): {reference}
+
+Evaluate on:
+1. Correctness (1-5): does the response correctly answer the question?
+2. Faithfulness (1-5): are the claims supported by the reference?
+3. Relevance (1-5): does the response address the question, without going off-topic?
+
+Output JSON: {"correctness": int, "faithfulness": int, "relevance": int, "reasoning": str}
+"""
+
+judge_resp = judge_client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": JUDGE_PROMPT.format(...)},
+    ],
+    response_format={"type": "json_object"},
+)
+```
+
+LLM-as-judge is reliable when:
+
+- The judge can verify (facts, format, instruction following).
+- A clear rubric is provided.
+- The judge is a stronger model than the candidate.
+
+LLM-as-judge is unreliable when:
+
+- The task requires deep reasoning the judge can't do.
+- Output length differs dramatically (length bias).
+- In pairwise comparison: judge often prefers the first option (position bias).
+- Judge self-preference: GPT-4 judging GPT-4 rates higher than humans would.
+
+**Always validate the judge against human ratings on a sample (50-100 examples).** Compute Cohen's kappa or correlation. If judge-human agreement < 0.7, the judge isn't trustworthy for your task.
+
+## Evaluating RAG: stages, not aggregates
+
+RAG has multiple stages and each can fail independently:
+
+| Stage            | Metric                      | How to measure                                                               |
+| ---------------- | --------------------------- | ---------------------------------------------------------------------------- |
+| Retrieval        | Recall@k                    | Did the top-k chunks contain the answer? Needs labelled query→chunk pairs    |
+| Reranking        | NDCG@k                      | Are relevant chunks ranked higher?                                           |
+| Faithfulness     | Per-claim verification      | Are the answer's claims supported by retrieved chunks? (LLM-as-judge or NLI) |
+| Answer relevance | LLM-as-judge                | Does the answer address the question?                                        |
+| End-to-end       | LLM-as-judge or exact match | Is the final answer correct?                                                 |
+
+When end-to-end accuracy is poor, drill down: is it because retrieval missed the chunks, the chunks were too noisy, or the LLM hallucinated?
+
+Tools:
+
+- **Ragas** (open source): standard RAG eval metrics.
+- **DeepEval**: pytest-style assertions for LLM outputs.
+- **TruLens**: focused on RAG observability.
+- **LangSmith**, **Langfuse**, **Helicone**: general LLM observability with RAG support.
+
+<InlineQuiz
+  question="Your customer service chatbot fails on 25% of queries (per user thumbs-down). Where do you start the diagnosis?"
+  options={[
+    { text: "Upgrade to a more powerful LLM and see if that helps." },
+    {
+      text: "Sample 50 failing queries, categorise the failure mode (retrieval miss, irrelevant answer, hallucination, format error). Fix the dominant category first.",
+      correct: true,
+    },
+    { text: "Rebuild the entire system with a different framework." },
+    { text: "Add more training data." },
+  ]}
+  explanation="Diagnosis before treatment. A blind LLM upgrade might help marginally but doesn't address the actual problem. Manual error analysis on 50 failures reveals the failure mode distribution — perhaps 60% retrieval misses, 20% format errors, 20% genuine reasoning failures. Each requires a different fix. This is the most underappreciated skill in production LLM engineering."
+/>
+
+## Production monitoring beyond evaluation
+
+Once deployed, NLP systems need ongoing monitoring:
+
+**Quality signals:**
+
+- User thumbs up/down, ratings.
+- Regeneration rate (users asking for a new answer).
+- Escalation to human rate.
+- Conversation length / drop-off rate.
+
+**Cost / latency:**
+
+- Tokens per request (input, output).
+- Latency p50/p99.
+- $/request.
+- Cache hit rate.
+
+**Drift:**
+
+- Distribution of input lengths / topics over time.
+- Distribution of output lengths / scores over time.
+- LLM-as-judge scores on production samples over time.
+
+**Sampled human review:**
+
+- Random sample (1% or 100/day, whichever is smaller) reviewed by humans.
+- Failures tagged and added to golden set.
+- Weekly drift report.
+
+Alerts:
+
+- Quality regression (sampled judge score drops >5%).
+- Cost spike (per-request cost up >20%).
+- Latency spike (p99 > target).
+- Error rate above threshold.
+
+<InlineQuiz
+  question="You evaluate your new RAG prompt using LLM-as-judge on 200 production queries; the new prompt scores 4.2/5 vs. baseline 4.0/5. What's the right next step before deploying?"
+  options={[
+    { text: "Deploy — the metric improved." },
+    {
+      text: "Validate the judge: have humans rate 30-50 of the same queries. Check correlation between human and judge ratings. If correlation > 0.7, trust the judge result. If not, manually review the 200 evaluations.",
+      correct: true,
+    },
+    { text: "Ignore the metric; the difference is too small to matter." },
+    { text: "Re-run the eval with a different judge model." },
+  ]}
+  explanation="0.2 point lift on a 5-point scale is meaningful BUT only if the judge is calibrated. Without human validation, the judge could be biased (length bias, position bias, or systematic error on your task). The 30-50 human ratings establish whether judge agrees with humans. Common finding: judge has 0.6-0.8 correlation, which means meaningful changes show through but small differences are noise. With correlation < 0.5, ditch the LLM-as-judge for this task and use human eval. This validation step takes a few hours and prevents shipping regressions based on bad metrics."
+/>
+
+## The 2026 NLP evaluation stack
+
+For a production NLP system:
+
+| Layer                 | Tool                                        |
+| --------------------- | ------------------------------------------- |
+| Golden set definition | YAML / JSON in repo                         |
+| Regression evaluation | OpenAI Evals / pytest + custom              |
+| LLM observability     | Langfuse (open) / Helicone / LangSmith      |
+| RAG metrics           | Ragas                                       |
+| Real-time monitoring  | Datadog / Prometheus + LLM-specific         |
+| Drift detection       | Evidently AI / WhyLabs / Arize              |
+| Human review pipeline | Argilla / Surge / internal review interface |
+
+For most teams: a golden set + Langfuse for observability + Ragas for RAG metrics covers 80%. Add human review for a 1-10% sample of production traffic. Iterate.
+
+## Closing for Module 6
+
+NLP for ML engineers in 2026 is mostly the integration, evaluation, and operations around foundation models — not new model architecture. The lessons in this module covered:
+
+- **A6.1** — the landscape and decision criteria.
+- **A6.2** — tokenization and its production cost implications.
+- **A6.3** — embeddings (the foundation of retrieval and similarity).
+- **A6.4** — text classification with fine-tuned encoders.
+- **A6.5** — NER and sequence labeling.
+- **A6.6** — semantic search and RAG.
+- **A6.7** — working with LLM APIs.
+- **A6.8** — evaluation (this lesson).
+
+The next module (A7 Computer Vision) covers the visual counterpart. Module A8 (MLOps) then unifies the operational concerns across modalities. Track B is the dedicated path for builders who want depth on the GenAI side specifically.

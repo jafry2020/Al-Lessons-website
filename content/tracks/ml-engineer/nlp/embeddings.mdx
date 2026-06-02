@@ -1,0 +1,302 @@
+---
+title: "Word, sentence, and contextual embeddings"
+description: "How text becomes vectors. From Word2Vec to BERT to sentence-transformers — the journey that made retrieval, similarity, and clustering work for arbitrary text."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: embeddings
+lessonCode: "A6.3"
+estMinutes: 12
+prereqs:
+  - "A6.2 Tokenization: BPE, WordPiece, SentencePiece, tiktoken"
+  - "A2.7 k-Nearest neighbours and vector search"
+objectives:
+  - "Distinguish static (Word2Vec, GloVe) from contextual (BERT) from sentence-level (sentence-transformers) embeddings."
+  - "Choose an embedding model for retrieval, classification, or similarity by trade-offs (quality, dim, latency, cost)."
+  - "Understand why pretrained embeddings are the default starting point for 90% of NLP tasks."
+pitfalls:
+  - "Using pooled BERT [CLS] token embeddings for sentence similarity. They aren't trained for that; sentence-transformers explicitly are."
+  - "Choosing the largest embedding dim available. Higher dim = more storage and slower search with marginal quality gains past ~768."
+  - "Mixing embeddings from different models in one index. They live in different spaces; cosine similarity is meaningless across them."
+  - "Treating embeddings as interpretable. The dimensions don't correspond to features humans would name."
+importantQuestions:
+  - question: "What's a word embedding?"
+    shortAnswer: |
+      A dense vector representation of a word in some learned space, where geometric properties (distance, direction) reflect semantic properties. Word2Vec (Mikolov 2013) was the breakthrough; modern systems use contextual embeddings instead.
+    detailed: |
+      Word2Vec trained a small neural network to predict surrounding words from a target word (or vice versa). The byproduct: a 100-300 dim vector for each word in the vocabulary, where similar words have nearby vectors.
+
+      Famous example: vec("king") - vec("man") + vec("woman") ≈ vec("queen"). The arithmetic suggests learned semantic dimensions like "gender" and "royalty" emerge from the data.
+
+      Properties:
+      - Static: each word has one vector. "Bank" the financial institution and "bank" the riverbank get the same vector.
+      - Trained on a fixed vocabulary; out-of-vocab words have no embedding.
+      - Cheap to compute, cheap to use.
+
+      GloVe (Pennington, Socher, Manning, 2014) is a similar method using global co-occurrence counts. Same idea, slightly different math, similar results.
+
+      Word2Vec / GloVe ruled NLP from 2013 to 2018. Then contextual embeddings (ELMo, BERT) replaced them, because they handle polysemy and context.
+    pitfalls:
+      - "Word2Vec embeddings learned biases from training data ('doctor' near 'man', 'nurse' near 'woman'). Modern systems still inherit such biases unless explicitly mitigated."
+  - question: "What's a contextual embedding?"
+    shortAnswer: |
+      A vector for each token that depends on the surrounding text. BERT (Devlin et al., 2018) produces a different vector for "bank" in "river bank" vs. "savings bank". Contextual embeddings dominate modern NLP.
+    detailed: |
+      A transformer encoder (BERT-style) reads the entire sequence and produces one vector per input token. Each vector encodes both the token identity AND its role in the surrounding context.
+
+      Example: in "I deposited money at the bank", the vector for "bank" encodes "financial institution." In "I sat by the river bank", the same token gets a different vector — closer to "shore" than to "savings."
+
+      Why this matters: polysemous words have one vector with static embeddings (averaging the senses); contextual embeddings disambiguate per usage.
+
+      Uses:
+      - Input features for downstream models (fine-tuning).
+      - Token-level tasks (NER, POS tagging, span extraction).
+      - Sentence-level tasks via pooling (with caveats — see next).
+
+      Modern frontier models (GPT-4, Llama) also produce contextual embeddings (the hidden states of any layer), but accessing them requires running the full model.
+    pitfalls:
+      - "Contextual embeddings from different layers have different properties: low layers capture syntax, high layers capture semantics. Layer choice matters for some tasks."
+  - question: "Why do we need sentence-transformers instead of just BERT [CLS]?"
+    shortAnswer: |
+      BERT's [CLS] token is trained for classification, not similarity. Cosine similarity between [CLS] vectors is unreliable. Sentence-transformers (Reimers & Gurevych, 2019) explicitly trains the model so that cosine similarity matches semantic similarity.
+    detailed: |
+      Vanilla BERT outputs one vector per input token. To get a sentence vector, the obvious approaches are:
+
+      - **[CLS] token**: BERT's first token, intended for classification. Cosine similarity between [CLS] vectors poorly correlates with semantic similarity.
+      - **Mean pooling**: average token vectors. Slightly better than [CLS] but still not great.
+
+      Reimers & Gurevych (2019) fine-tuned BERT with a siamese architecture (two BERT encoders sharing weights) and a contrastive loss, so that similar sentences end up close in vector space and dissimilar sentences far apart. The result: sentence-BERT (SBERT), the basis of the modern sentence-transformers library.
+
+      Modern sentence-transformer models (BGE, E5, GTE, Cohere embed-v3, OpenAI embedding-3) are all trained with similar contrastive objectives. The differences are in scale, training data, and dimensionality.
+    pitfalls:
+      - "If you need sentence embeddings, never use raw BERT [CLS]. Always use a model trained for the task (sentence-transformers, BGE, E5, OpenAI embeddings)."
+  - question: "Which embedding model should I use in 2026?"
+    shortAnswer: |
+      For open-source: BGE-large-en, BGE-M3 (multilingual), or E5-large. For API: OpenAI text-embedding-3-large, Cohere embed-v3, Voyage AI. Match dim to your storage budget; quality saturates around 1024.
+    detailed: |
+      Leaderboards (MTEB on HuggingFace) ranked embedding models. Top picks in 2026:
+
+      | Model | Provider | Dim | Notes |
+      | ----- | -------- | --- | ----- |
+      | BGE-large-en | open / BAAI | 1024 | Free, strong English |
+      | BGE-M3 | open / BAAI | 1024 | Multilingual, multi-functional |
+      | E5-large-v2 | open / Microsoft | 1024 | Strong general-purpose |
+      | nomic-embed-text-v1.5 | open / Nomic | 768 | Trains for long context |
+      | text-embedding-3-large | OpenAI API | 3072 (truncatable to 256) | Strong; Matryoshka support |
+      | embed-v3 | Cohere API | 1024 | Strong multilingual |
+      | voyage-3 | Voyage AI API | 1024 | Targeted at retrieval |
+
+      Decision factors:
+      - **Storage**: each vector is dim × 4 bytes (FP32) or 2 (BF16). 1M docs × 1024 dim × 4 = 4 GB.
+      - **Latency**: bigger models are slower to encode. For batch encoding, BGE-large encodes ~100/s on consumer GPU.
+      - **Quality**: ~1024 dim is the saturation point for most tasks. Going to 3072 helps marginally.
+      - **Cost**: OpenAI embeddings cost $0.13/M tokens; self-hosted BGE is free at inference but needs GPU.
+    pitfalls:
+      - "OpenAI's Matryoshka-style truncation lets you slice text-embedding-3 to 256, 512, 1024, or 3072 dim. Strong storage / quality trade-off."
+  - question: "Can I mix embeddings from different models?"
+    shortAnswer: |
+      No. Each model has its own learned embedding space; cosine similarity between vectors from different models is meaningless. Re-embed your entire corpus when you switch models.
+    detailed: |
+      Two embedding spaces from different models (even from the same family with different sizes) are not aligned. A vector from BGE-large and a vector from OpenAI text-embedding-3 occupy different geometric spaces; their cosine similarity is essentially random.
+
+      Implications:
+      - If you upgrade your embedding model, you must re-embed your entire corpus and rebuild your index.
+      - You cannot search a corpus embedded with model A using a query embedded with model B.
+      - "Embedding alignment" research exists but isn't production-ready for most cases.
+
+      Operational reality: pick an embedding model carefully because changing it is expensive. For very large corpora (>10M docs), re-embedding can take days.
+    pitfalls:
+      - "Quantised vs full-precision versions of the same model produce similar but not identical vectors. Worth using one consistently."
+  - question: "What about LLM-as-embedder?"
+    shortAnswer: |
+      Some research uses the hidden states of frontier LLMs (Llama, GPT) as embeddings. Strong quality on benchmarks but expensive to compute and don't outperform dedicated embedding models like BGE / E5 on most retrieval tasks.
+    detailed: |
+      Recent work (e.g., Llama-2 Embeddings, Mistral-Embed) takes a frontier decoder-only LLM and uses its hidden states (with some pooling) as embeddings. The model is much larger than a typical embedding model (7B-70B vs 100M-300M).
+
+      Pros:
+      - Captures more semantic structure (more parameters, more training data).
+      - Useful for tasks requiring deep reasoning embedded in the representation.
+
+      Cons:
+      - 10-100× slower to compute than dedicated embedding models.
+      - Much more memory.
+      - On standard retrieval benchmarks, doesn't dramatically beat specialised models trained on retrieval data.
+
+      For production: dedicated embedding models (BGE, E5, OpenAI embed) almost always win on cost / quality. LLM-as-embedder is a research direction.
+    pitfalls:
+      - "Don't confuse 'embedding from an LLM hidden state' with 'embedding model trained on retrieval data.' The latter is purpose-built."
+---
+
+<TldrCallout>
+  Embeddings turn text into dense vectors where similar text is geometrically nearby. Word2Vec gave
+  us static word embeddings (one vector per word). BERT gave us contextual embeddings (vectors
+  depend on surrounding text). Sentence-transformers explicitly trains for sentence similarity. In
+  2026, modern embedding models (BGE, E5, OpenAI text-embedding-3) are the default for retrieval,
+  similarity, and clustering — choose one and stick with it (switching means re-embedding
+  everything).
+</TldrCallout>
+
+## The progression
+
+Three generations of text embeddings:
+
+| Generation                                | Examples                                                | Properties                                   |
+| ----------------------------------------- | ------------------------------------------------------- | -------------------------------------------- |
+| **Static word embeddings** (2013-2018)    | Word2Vec, GloVe, fastText                               | One vector per word; ignores context         |
+| **Contextual embeddings** (2018-)         | BERT, RoBERTa, GPT hidden states                        | One vector per token; depends on context     |
+| **Sentence / passage embeddings** (2019-) | sentence-transformers, BGE, E5, OpenAI text-embedding-3 | One vector per chunk; trained for similarity |
+
+Each generation solved a limitation of the previous. By 2026, sentence / passage embeddings dominate production retrieval and similarity tasks.
+
+## Word2Vec: the breakthrough
+
+Mikolov et al. (2013) trained a small two-layer network to predict surrounding words from a target word ("skip-gram") or vice versa ("CBOW"). The hidden layer's weights become the embeddings.
+
+Famous property: vector arithmetic captures semantic relationships.
+
+vec("king") - vec("man") + vec("woman") ≈ vec("queen")
+
+The embeddings encode dimensions like "gender" and "royalty" implicitly. The model didn't know these existed; they emerged from the data.
+
+Limitations:
+
+- **One vector per word.** "Bank" is ambiguous; one vector averages the senses.
+- **Fixed vocabulary.** Out-of-vocabulary words have no embedding (fastText fixed this with subword embeddings).
+- **No context awareness.** "The bank approved my loan" and "I sat by the river bank" produce the same "bank" vector.
+
+Word2Vec / GloVe ruled NLP from 2013 to 2018. They were the input features for nearly every NLP task in that period.
+
+## Contextual embeddings: BERT
+
+BERT (Devlin et al., 2018) introduced contextual embeddings: a transformer encoder reads the whole sequence and outputs one vector per input token, where each vector depends on the surrounding context.
+
+"The bank approved my loan" → vector for "bank" near "credit", "money", "finance"
+"I sat by the river bank" → vector for "bank" near "shore", "water", "stream"
+
+Same token; different vector. Polysemy resolved.
+
+How to get a sentence vector from BERT (the next problem):
+
+- **[CLS] token**: BERT's first input token, intended as a classification target. Cosine similarity between [CLS] vectors poorly tracks semantic similarity.
+- **Mean pooling**: average all token vectors. Slightly better than [CLS] but not great.
+
+Both approaches are mediocre because BERT was trained for masked language modelling, not for similarity. The fix: train explicitly for similarity.
+
+## Sentence-transformers: trained for similarity
+
+Reimers & Gurevych (2019) modified BERT for sentence similarity:
+
+1. Two BERT encoders share weights (siamese architecture).
+2. Pass two sentences through them; get two vectors.
+3. Train with a contrastive loss: similar pairs should have high cosine similarity, dissimilar pairs low.
+
+The result is **sentence-BERT** (SBERT), and more generally the modern sentence-transformer family. Their key property: **cosine similarity between vectors reliably tracks semantic similarity**.
+
+In 2026, all production retrieval / similarity systems use models trained this way. Examples:
+
+| Model                   | Provider         | Dim                     | Multi-lingual?  |
+| ----------------------- | ---------------- | ----------------------- | --------------- |
+| BGE-large-en            | open / BAAI      | 1024                    | English-focused |
+| BGE-M3                  | open / BAAI      | 1024                    | 100+ languages  |
+| E5-large-v2             | open / Microsoft | 1024                    | English         |
+| multilingual-e5-large   | open / Microsoft | 1024                    | 100+ languages  |
+| nomic-embed-text        | open / Nomic     | 768                     | English         |
+| text-embedding-3-large  | OpenAI API       | up to 3072 (Matryoshka) | Multi           |
+| embed-multilingual-v3.0 | Cohere API       | 1024                    | 100+ languages  |
+| voyage-3                | Voyage AI API    | 1024                    | Multi           |
+
+Pick one based on quality, dim (storage), latency, and cost. Don't mix.
+
+<AnalogyCallout>
+  Static embeddings are like a dictionary entry for each word: one definition, regardless of
+  context. Contextual embeddings are like reading the word in a sentence and getting its meaning
+  from the surroundings. Sentence embeddings are like summarising a whole paragraph into a single
+  concept. Each step up handles richer questions but costs more compute.
+</AnalogyCallout>
+
+## What you do with embeddings
+
+Five common production uses:
+
+1. **Retrieval (RAG, semantic search)**. Embed documents, store in vector DB. At query time, embed query, find nearest documents. See A6.6.
+
+2. **Classification (feature extraction)**. Embed text, train a small classifier on top. Faster than fine-tuning a full transformer for tasks with many labels but limited training data.
+
+3. **Clustering**. Embed corpus, run UMAP + HDBSCAN. Discover topics, near-duplicates, customer themes.
+
+4. **Recommendation**. Embed items and users; recommend nearest items per user. Often combined with collaborative filtering.
+
+5. **Deduplication**. Embed records; flag near-duplicates by cosine similarity threshold.
+
+For all of these, the workflow is: pick an embedding model → embed your data once → use the vectors many times.
+
+## Choosing dim and quality
+
+Embedding models offer various output dimensions:
+
+- 384 dim: lightweight (MiniLM); fast, slightly worse quality.
+- 768 dim: standard (BERT-base); good baseline.
+- 1024 dim: high-quality (BGE-large, E5-large); the production sweet spot in 2026.
+- 1536-3072 dim: frontier (OpenAI text-embedding-3-large, some research models); marginal quality gain at storage cost.
+
+A Matryoshka-trained model (OpenAI text-embedding-3, some open models) lets you truncate the vector to lower dim without retraining; useful for storage / quality trade-offs.
+
+Rule of thumb: 1024 dim is usually enough. Going higher costs storage and inference latency for small quality gains.
+
+## Cost engineering for embeddings
+
+For a 10M-document corpus:
+
+- Storage: 10M × 1024 dim × 4 bytes (FP32) = 40 GB. Switch to FP16: 20 GB. Quantise to int8: 10 GB.
+- Indexing cost: depends on index type (HNSW, IVF-PQ).
+- Compute: embedding 10M docs at ~1k tokens each is ~10B tokens. OpenAI cost: $1300. BGE on a single GPU: a few hours of compute, no API cost.
+
+For most teams, **self-hosting an embedding model** is cheaper than API for >100k documents. APIs are convenient for prototyping and small corpora.
+
+## What embedding models can't do well
+
+- **Long documents**. Most embedding models accept 512 tokens; some go to 8k. For longer documents, chunk and embed each chunk.
+- **Code semantics**. Specialised code embeddings (UnixCoder, CodeBERT, codesearchnet-trained) outperform general-purpose models on code retrieval.
+- **Out-of-distribution domains**. Medical, legal, scientific text benefit from domain-specific fine-tuning.
+- **Multi-modal**. Joint image-text embeddings (CLIP) are a different family with their own properties.
+
+<InlineQuiz
+  question="You're building a search system over 500k product descriptions and need sub-second latency. Which approach should you start with?"
+  options={[
+    { text: "OpenAI text-embedding-3-large at 3072 dim, exact cosine search." },
+    {
+      text: "BGE-large-en at 1024 dim, HNSW index in pgvector or Faiss. Sub-second latency on 500k docs is straightforward.",
+      correct: true,
+    },
+    { text: "Fine-tune a custom embedding model from scratch on product descriptions." },
+    { text: "Use the [CLS] token of base BERT for embeddings." },
+  ]}
+  explanation="500k documents at 1024 dim with HNSW indexing gives sub-millisecond ANN retrieval. BGE-large is free, runs on a small GPU, and matches or beats OpenAI embeddings on many benchmarks. Custom fine-tuning is overkill at this scale. BERT [CLS] embeddings are explicitly the wrong tool — they aren't trained for similarity. The 3072 dim from OpenAI gives marginal quality at 3× the storage cost."
+/>
+
+## A note on instructional embeddings
+
+Some modern embedding models (E5, BGE, NV-Embed) are **instruction-tuned**: you prepend a prompt like "Represent this sentence for retrieval:" before embedding. The same model produces different embeddings for the same text depending on the instruction, optimised for different downstream tasks (retrieval vs. classification vs. STS).
+
+In practice: read the model's documentation for the recommended prompt. Skipping it can cost 5-10 points on retrieval benchmarks.
+
+<InlineQuiz
+  question="True or false: you can take embeddings from BGE-large for half your corpus and OpenAI text-embedding-3-large for the other half, and search them together in one Faiss index."
+  options={[
+    { text: "True — both are 1024-dim and can mix." },
+    {
+      text: "False — each embedding model produces vectors in its own learned space. Cosine similarity across models is essentially random; the mixed index would return garbage.",
+      correct: true,
+    },
+    { text: "True if you normalise the vectors first." },
+    { text: "False, but only because the dimensions differ." },
+  ]}
+  explanation="Embedding spaces from different models are not aligned, regardless of dimensionality. The learned vectors live in different geometries; cosine similarity across them is noise. Even between checkpoints of the same model family (BGE-base vs BGE-large), vectors don't align. The operational rule: pick one embedding model and re-embed the entire corpus when you change."
+/>
+
+## Closing for embeddings
+
+Modern embeddings are the workhorse of production NLP. They power retrieval (RAG), similarity (deduplication, recommendation), and clustering (topic modelling, customer segmentation). In 2026 the question is rarely "should I use embeddings?" but "which one?" — and the answer is usually BGE-large, E5-large, or one of the major API embedding products.
+
+The next lessons apply these foundations: A6.4 to classification, A6.5 to sequence labelling, A6.6 to semantic search and RAG.

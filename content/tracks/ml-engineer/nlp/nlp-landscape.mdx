@@ -1,0 +1,271 @@
+---
+title: "The 2026 NLP landscape"
+description: "What an ML engineer's NLP toolkit looks like now: when to call a frontier LLM API, when to fine-tune a small encoder, when to use spaCy. Framing the rest of the module."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: nlp-landscape
+lessonCode: "A6.1"
+estMinutes: 10
+prereqs:
+  - "A5.5 The Transformer architecture"
+  - "A5.8 Pretraining and transfer learning"
+objectives:
+  - "Map NLP tasks (classification, NER, retrieval, generation) to the right tool in 2026."
+  - "Decide between LLM API, fine-tuned small encoder, and classical NLP based on quality, cost, and latency."
+  - "Understand the foundation-model paradigm shift and what work it has eaten."
+pitfalls:
+  - "Defaulting to a frontier LLM for every task. A fine-tuned 100M-parameter encoder is often 100× cheaper at similar quality on a fixed-task workload."
+  - "Defaulting to a fine-tuned small model when you only need it 1000 times a week. Operational complexity (training, monitoring, retraining) costs more than the LLM API."
+  - "Treating spaCy / NLTK as obsolete. For some tasks (rule-based parsing, deterministic tokenisation) they remain the right tool."
+  - "Building from scratch what HuggingFace ships pretrained. Even research starts from a checkpoint."
+importantQuestions:
+  - question: "What does an NLP engineer actually do in 2026?"
+    shortAnswer: |
+      Mostly integrate, fine-tune, and evaluate. Few people train language models from scratch. The work is choosing the right model for the task, fine-tuning when needed, building retrieval and evaluation systems around it, and shipping reliable production NLP.
+    detailed: |
+      The 2026 NLP engineer's job, roughly in order of how much time it consumes:
+
+      1. **Evaluation infrastructure.** Golden sets, regression tests, LLM-as-judge pipelines. The unsexy work that prevents production regressions.
+      2. **Data curation and labeling.** What goes into training / fine-tuning / few-shot examples. Quality dominates quantity.
+      3. **Model selection and integration.** Pick OpenAI / Anthropic / open-weights LLM / small encoder. Wire it into the application.
+      4. **Prompt engineering and structured outputs.** Get the model to do what you want, reliably.
+      5. **Fine-tuning** (LoRA / QLoRA usually).
+      6. **Retrieval system engineering** (RAG, vector databases, reranking).
+      7. **Inference optimisation** (vLLM, quantisation, batching).
+      8. **Actual model architecture work.** Almost nobody does this outside frontier labs.
+
+      The skills that matter: prompt engineering, fine-tuning, retrieval, evaluation, cost/latency reasoning. Architecture and from-scratch pretraining are research roles.
+    pitfalls:
+      - "The 'I want to be an NLP researcher' track is very different from the 'I want to ship NLP in production' track. This module is the latter."
+  - question: "When should you use an LLM API vs. a fine-tuned small model?"
+    shortAnswer: |
+      LLM API when: low volume, varied tasks, fast iteration, quality matters. Fine-tuned small model when: high volume, fixed task, latency / cost-sensitive, data sensitivity (on-prem).
+    detailed: |
+      Decision factors:
+
+      - **Volume.** At 1k requests/day, LLM APIs are cheap. At 10M requests/day, even a $0.50/M-token API costs $5k/day — a fine-tuned 100M encoder running on 1 GPU is much cheaper.
+
+      - **Latency.** Frontier LLMs add 500ms-2s of latency. A DistilBERT-style classifier runs in 10ms. For real-time UX, the small model wins.
+
+      - **Task variability.** If the task changes daily (different categories, formats, asks), prompting an LLM is faster than retraining. If the task is fixed (sentiment of customer reviews), a fine-tuned model is more efficient.
+
+      - **Data sensitivity.** Some industries (healthcare, finance) can't send data to third-party APIs. Self-hosted models are the only option.
+
+      - **Quality ceiling.** Frontier LLMs are smarter at reasoning tasks. A small fine-tuned model can match on narrow tasks but not on open-ended reasoning.
+
+      Common pattern in 2026: prototype with LLM API, validate the task, then distill to a small fine-tuned model if volume / cost justifies it.
+    pitfalls:
+      - "'Distillation' means using LLM outputs as training data for a smaller model. Standard pattern; legal terms matter (OpenAI prohibits this for some uses; check)."
+  - question: "What NLP tasks are nearly solved in 2026?"
+    shortAnswer: |
+      Text classification, sentiment analysis, named entity recognition, language detection, translation, summarisation, basic question answering. All have strong pretrained baselines that work out of the box for most use cases.
+    detailed: |
+      "Nearly solved" doesn't mean perfect — it means a strong pretrained baseline exists and most production work is fine-tuning or prompting on top.
+
+      | Task | 2026 default |
+      | ---- | ------------ |
+      | Sentiment | Fine-tune RoBERTa / ModernBERT |
+      | Topic classification | Fine-tune small encoder or prompt LLM |
+      | NER (general entities) | spaCy or fine-tuned encoder |
+      | Translation | NLLB / Llama / dedicated MT model |
+      | Summarisation | Prompt LLM |
+      | Language detection | fastText (a 2017 library, still SOTA for its task!) |
+      | Sentence similarity | sentence-transformers |
+      | Tokenisation | tiktoken / SentencePiece |
+
+      What's NOT nearly solved:
+      - Multi-hop reasoning over long documents.
+      - Hallucination-free generation.
+      - Truly robust handling of out-of-distribution input.
+      - Low-resource languages (anything except top ~50 languages).
+      - Domain-specific NLP requiring deep expertise (medical, legal, scientific).
+    pitfalls:
+      - "'Nearly solved' is dangerous. Production systems still need careful evaluation, monitoring, and fallbacks."
+  - question: "Where does classical NLP (spaCy, NLTK, regex) still fit?"
+    shortAnswer: |
+      Anywhere deterministic behaviour, fast inference, no GPU dependency, or interpretable rules are required. Tokenisation, sentence segmentation, POS tagging, simple NER, rule-based parsing.
+    detailed: |
+      Classical NLP libraries are not obsolete. They're complementary to neural NLP:
+
+      - **spaCy**: pipeline for tokenisation, sentence segmentation, POS, NER, dependency parsing. Fast (millions of tokens / minute), CPU-only, deterministic. Still the workhorse for preprocessing.
+      - **NLTK**: educational library; some unique data resources (corpora, lexicons).
+      - **regex / text manipulation**: extracting dates, phone numbers, structured patterns from text. Often faster and more reliable than LLM extraction.
+      - **fastText**: word embeddings + classification + language detection. Pre-deep-learning era but Facebook still maintains it; remains the SOTA for language detection.
+
+      Pattern: use classical tools for the deterministic / structured parts; reach for neural models when the task involves semantic understanding.
+    pitfalls:
+      - "Don't 'ask GPT' for tasks where a regex would work. Cheaper, more reliable, more interpretable."
+  - question: "What's the 2026 'starter stack' for a new NLP project?"
+    shortAnswer: |
+      HuggingFace Transformers for models, tokenizers, datasets. spaCy for preprocessing if needed. OpenAI / Anthropic API for prompting. sentence-transformers for embeddings. pgvector or Faiss for retrieval. Weights & Biases or MLflow for experiment tracking.
+    detailed: |
+      The convergent 2026 starter stack:
+
+      - **HuggingFace Transformers**: load any pretrained model with `from_pretrained()`. The default for inference and fine-tuning of open-weights models.
+      - **HuggingFace Datasets**: standard format for training data, with caching and streaming.
+      - **HuggingFace tokenizers**: fast, Rust-backed tokenizers for BPE / WordPiece / SentencePiece.
+      - **sentence-transformers**: embedding models for retrieval, similarity, clustering.
+      - **OpenAI / Anthropic Python SDKs**: prompting and structured output from frontier APIs.
+      - **LangChain / LlamaIndex** (optional): higher-level RAG / agent frameworks. Useful for prototyping; production systems often roll their own.
+      - **pgvector** (Postgres) or **Faiss**: vector indexes.
+      - **vLLM** or **TGI**: high-throughput LLM serving for self-hosted models.
+      - **Weights & Biases**: experiment tracking and evaluation dashboards.
+
+      Most production NLP work uses 4-6 of these.
+    pitfalls:
+      - "Don't conflate 'use LangChain' with 'build a real system.' LangChain is a prototyping library; production usually replaces large parts of it."
+---
+
+<TldrCallout>
+  Modern NLP for ML engineers is mostly about choosing the right tool. Frontier LLM APIs (GPT-4,
+  Claude, Gemini) for fast iteration and reasoning-heavy work. Fine-tuned small encoders
+  (DistilBERT, ModernBERT) for high-volume fixed tasks. Classical NLP (spaCy, regex) for
+  deterministic preprocessing. This module covers the tools, the trade-offs, and the engineering
+  around them — assuming you've already covered transformers and pretraining (Modules 4-5).
+</TldrCallout>
+
+## What this module covers
+
+This is Track A's NLP module — practical NLP for an ML engineer in 2026. It assumes the architectures from Module 5 and extends them into the tools, decisions, and infrastructure of production NLP.
+
+| Lesson | Topic                                                  |
+| ------ | ------------------------------------------------------ |
+| A6.2   | Tokenization (BPE, WordPiece, SentencePiece, tiktoken) |
+| A6.3   | Word / sentence / contextual embeddings                |
+| A6.4   | Text classification with pretrained encoders           |
+| A6.5   | Named entity recognition and sequence labeling         |
+| A6.6   | Semantic search and retrieval (RAG, from Track A view) |
+| A6.7   | Working with LLM APIs in production                    |
+| A6.8   | Evaluation for NLP systems                             |
+
+For deeper coverage of generative AI (transformers internals, fine-tuning, prompt engineering, agents, RAG architecture), Track B (GenAI Builder) is the dedicated path.
+
+## The 2026 task / tool map
+
+| Task                                          | First reach                                               |
+| --------------------------------------------- | --------------------------------------------------------- |
+| Classify text into a known set of labels      | Fine-tuned small encoder (DistilBERT, ModernBERT)         |
+| Extract specific entities (PERSON, DATE, ORG) | spaCy or fine-tuned encoder                               |
+| Semantic search / retrieval                   | sentence-transformers + vector DB                         |
+| Sentiment analysis                            | Fine-tuned RoBERTa, off-the-shelf                         |
+| Translation                                   | Dedicated MT (NLLB) or LLM                                |
+| Summarisation                                 | LLM via API                                               |
+| Question answering over docs                  | RAG pipeline                                              |
+| Open-ended generation                         | LLM via API                                               |
+| Reasoning, planning, multi-step               | Frontier LLM                                              |
+| Code generation                               | Specialized LLM (Codex, Claude, GPT-4)                    |
+| Language detection                            | fastText                                                  |
+| Tokenization                                  | tiktoken (OpenAI), SentencePiece, or model-specific       |
+| Spell correction                              | hunspell / language tools / LLM (overkill for many cases) |
+
+This is the conventional decision tree. Module A6 fills in why each one is "first reach" and what alternatives exist.
+
+## The LLM-vs-fine-tune decision
+
+For a given NLP task, the high-level decision in 2026:
+
+```
+              quality
+                ^
+                |
+   fine-tuned   |
+   small model  |       LLM API
+       o--------|------------o
+                |
+                |
+                +--------------> cost / latency
+              low                       high
+```
+
+The fine-tuned small model is to the bottom-left (low cost, fast); the LLM API is to the upper-right (higher quality, slower, more expensive per request). For most tasks the curve is roughly:
+
+- **< 1k requests/day**: LLM API. The development cost saved dominates.
+- **1k - 100k/day**: depends. If task is fixed and well-defined, fine-tuned model. Otherwise LLM.
+- **> 100k/day**: fine-tuned small model. Even at $0.50/M tokens, 1M requests/day at 500 tokens each is $250/day = $7.5k/month — a fine-tuned DistilBERT on one GPU is cheaper.
+
+Add data-sensitivity, latency, and team capacity as further inputs.
+
+<AnalogyCallout>
+  Choosing between LLM API and fine-tuned small model is like choosing between hiring a consultant
+  and training an employee. Consultant: expensive per hour, available immediately, handles novel
+  problems. Employee: more expensive up front, cheaper per task, handles repetitive work well. Most
+  companies have both; the question is for which work.
+</AnalogyCallout>
+
+## What pretrained foundation models eat
+
+By 2026, large pretrained foundation models have absorbed:
+
+- **Most "classical NLP" tasks** at near-or-better quality with no task-specific training (just prompting).
+- **Hand-engineered feature pipelines** for text (TF-IDF, n-grams, etc. — only used in low-resource baselines now).
+- **Specialised seq2seq models** (translation, summarisation) — LLM API often comparable to dedicated MT systems.
+- **Rule-based parsers** for ambiguous tasks — still beaten by rules for deterministic / structured extraction.
+
+What they haven't (yet) eaten:
+
+- **Truly low-latency NLP** — LLMs add hundreds of ms; fine-tuned encoders run in ms.
+- **Deterministic structured extraction** — regex / spaCy more reliable for date / phone / address / SKU extraction.
+- **Domain-specific models** — PubMedBERT outperforms GPT-3 on some medical NLP at much lower cost.
+- **Sentence embeddings for retrieval** — specialised models (BGE, E5, sentence-transformers) beat general LLM embeddings.
+- **Hardcore preprocessing** — fast tokenization, sentence splitting, normalisation.
+
+## A reasonable mental model
+
+Think of the 2026 NLP stack in three layers:
+
+1. **Preprocessing layer** (deterministic, fast): tokenisation, sentence segmentation, normalisation, regex extraction. Tools: spaCy, tiktoken, regex.
+
+2. **Representation layer** (learned, batched): convert text into vectors for retrieval, classification, similarity. Tools: sentence-transformers, fine-tuned encoders.
+
+3. **Reasoning layer** (LLM, on-demand): open-ended generation, multi-step reasoning, instruction following. Tools: GPT-4, Claude, Llama-served-with-vLLM.
+
+Different tasks live at different layers. Many real systems combine all three: preprocess input, embed for retrieval, hand top-k results to LLM for generation. (That's the RAG pattern — A6.6.)
+
+<InlineQuiz
+  question="A startup wants to classify support tickets into 12 categories. They get 5,000 tickets/day. They have 50,000 labelled examples. What's the most cost-effective stack in 2026?"
+  options={[
+    { text: "Call GPT-4 for each ticket — accuracy is best." },
+    {
+      text: "Fine-tune DistilBERT or ModernBERT on the 50k labelled examples. Serve as one CPU process. Tens of milliseconds per request, ~$100/month infra.",
+      correct: true,
+    },
+    { text: "Build a Mixture-of-Experts ensemble of 10 fine-tuned LLMs." },
+    { text: "Use regex patterns — they're more interpretable." },
+  ]}
+  explanation="50k labelled examples and a fixed 12-class task is the textbook fine-tune-a-small-encoder scenario. DistilBERT or ModernBERT will achieve 90-95% accuracy, run on a single CPU, cost ~$100/month. GPT-4 at 5k tickets/day × ~500 tokens × $0.005/1k = $12.5/day = $375/month, plus higher latency. The fine-tuned encoder is faster, cheaper, and within 1-2% accuracy. This is one of the most common production NLP setups in 2026."
+/>
+
+## The two paradigm shifts worth knowing
+
+**Shift 1: Foundation models replaced from-scratch training.**
+Before 2018, an NLP project meant designing features and training a model on your data. After 2018 (BERT) and especially after 2020 (GPT-3), every project starts from a pretrained model. Training NLP models from scratch is almost exclusively a research activity.
+
+**Shift 2: LLM APIs replaced most "deploy a custom model" projects.**
+For tasks where ~$0.001 per request is fine, you can prompt GPT-4 or Claude and skip the entire MLOps stack. The "build, train, deploy a custom model" workflow only makes sense above a volume / sensitivity / latency threshold.
+
+These shifts have created a different kind of NLP engineer: less custom modelling, more prompt engineering, more retrieval, more evaluation infrastructure.
+
+## What's next in this module
+
+The next seven lessons go through the workflow you'll actually use:
+
+- **A6.2** Tokenization — how text becomes numbers (and why this affects cost).
+- **A6.3** Embeddings — text as vectors, the foundation for retrieval and similarity.
+- **A6.4** Text classification — the most common fine-tuning use case.
+- **A6.5** NER and sequence labeling — structured extraction.
+- **A6.6** Semantic search and RAG — retrieve relevant context for downstream use.
+- **A6.7** Working with LLM APIs — prompting, structured outputs, caching, cost.
+- **A6.8** Evaluation — the unglamorous work that makes everything reliable.
+
+<InlineQuiz
+  question="Which of these is NOT a typical 2026 NLP engineer responsibility?"
+  options={[
+    { text: "Designing transformer architecture variants from scratch.", correct: true },
+    { text: "Building a RAG pipeline with sentence-transformers and pgvector." },
+    { text: "Fine-tuning a small encoder for high-volume classification." },
+    { text: "Designing and maintaining a regression test suite for LLM-powered features." },
+  ]}
+  explanation="Designing new transformer variants is research, not production engineering. Frontier labs (OpenAI, Anthropic, Google DeepMind, Meta) do this; the vast majority of NLP engineers integrate, fine-tune, and evaluate. The other three are mainstream production work. Even research engineers spend more time on data and evaluation than on architecture in 2026."
+/>

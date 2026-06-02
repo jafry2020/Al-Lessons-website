@@ -1,0 +1,399 @@
+---
+title: "Semantic search and retrieval (RAG)"
+description: "How to find relevant chunks in a corpus and feed them to a downstream model. The pattern behind every 'chat with your docs' system and the most-deployed NLP architecture in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: semantic-search-rag
+lessonCode: "A6.6"
+estMinutes: 16
+prereqs:
+  - "A6.3 Word, sentence, and contextual embeddings"
+  - "A2.7 k-Nearest neighbours and vector search"
+objectives:
+  - "Build a RAG pipeline: chunk, embed, index, retrieve, rerank, generate."
+  - "Pick a chunking strategy, embedding model, vector index, and reranker for production."
+  - "Diagnose failures: retrieval miss, irrelevant chunks, hallucination from retrieved context."
+pitfalls:
+  - "Treating RAG as 'just use a vector DB.' Retrieval quality is dominated by chunking and reranking, not the database."
+  - "Indexing whole documents as single chunks. Long chunks dilute embeddings; retrieval gets fuzzy. 200-500 token chunks usually work better."
+  - "Skipping hybrid search (BM25 + vector). Lexical signal (rare words, names) often outperforms pure semantic search."
+  - "Trusting that retrieved context is enough. The LLM still hallucinates; ground in citations and verify."
+importantQuestions:
+  - question: "What is RAG, in one paragraph?"
+    shortAnswer: |
+      Retrieval-Augmented Generation: at query time, retrieve relevant context from a corpus (typically via embedding similarity), concatenate it into an LLM prompt, generate an answer grounded in the retrieved context. Default architecture for 'chat with documents' systems.
+    detailed: |
+      RAG combines a retriever (gets relevant text) and a generator (writes the answer using that text). The pattern:
+
+      1. **Index time** (offline): chunk documents, embed each chunk, store vectors in a vector DB.
+      2. **Query time** (online):
+         a. Embed the query.
+         b. Retrieve top-k chunks by similarity.
+         c. Optionally rerank.
+         d. Concatenate chunks into LLM prompt: "Based on these documents: [chunks]. Question: [query]. Answer:"
+         e. Return LLM output with citations.
+
+      Why this works: LLMs have fixed training data and bounded context. RAG lets you ground them in your specific corpus (company docs, code, knowledge base) without retraining the model. Adding a new document requires re-indexing, not re-training.
+
+      Limitations:
+      - Retrieval quality is the ceiling — if relevant chunks aren't retrieved, the LLM can't use them.
+      - The LLM can still hallucinate even with relevant context; faithfulness must be evaluated separately.
+      - Chunking dramatically affects quality; tuning matters.
+    pitfalls:
+      - "RAG isn't 'fine-tuning' — the model doesn't learn from the corpus. It just gets relevant context at inference time."
+  - question: "What's the right chunking strategy?"
+    shortAnswer: |
+      No universal answer. For Q&A-style content: 200-500 token chunks with ~50 token overlap. For code: function-level chunks. For long-form: paragraph-level or section-level. Always validate on real queries.
+    detailed: |
+      Chunking trade-offs:
+
+      - **Too small** (<100 tokens): chunks lack context; embeddings unstable; you retrieve many fragments.
+      - **Too large** (>1000 tokens): embeddings dilute (the chunk covers many topics); retrieved chunks contain irrelevant content alongside the answer.
+      - **Just right**: depends on content. For dense Q&A content, 200-500 tokens. For long-form analytical content, 500-1000.
+
+      Strategies:
+      - **Fixed-size with overlap**: simplest. 500 tokens per chunk, 50 token overlap to avoid splitting key info.
+      - **Sentence-boundary aware**: split at sentence boundaries; respect document structure.
+      - **Section-aware**: use existing structure (markdown headers, HTML tags). Often the best baseline.
+      - **Semantic chunking**: use a model to detect topic shifts. Fancy; often unnecessary.
+
+      For most projects: start with section-aware chunking + 500-token max. Iterate on retrieval failures.
+
+      Tooling: `langchain` and `llamaindex` have built-in chunkers. For control, write your own (it's ~50 lines).
+    pitfalls:
+      - "Don't chunk on character count. A chunk should be tokens (LLM-relevant) or sentences (semantically coherent), not arbitrary substring boundaries."
+  - question: "What is hybrid search and why is it important?"
+    shortAnswer: |
+      Combine vector similarity (semantic) with BM25 (lexical / keyword). Rank-fuse the results. For most production retrieval, hybrid beats either alone — especially for rare names, codes, jargon.
+    detailed: |
+      Pure semantic search fails on:
+      - Rare names ("Project Codename 472X").
+      - Exact codes / SKUs ("ERR-4592").
+      - Acronyms not in training data.
+      - Specific terminology where exact match matters.
+
+      BM25 (the dominant lexical retrieval algorithm, 1990s) handles these — exact term matching with inverse document frequency weighting. But BM25 misses paraphrase ("car" vs. "automobile").
+
+      Hybrid search:
+      1. Run BM25 query → top-k lexical results.
+      2. Run vector query → top-k semantic results.
+      3. Combine via **reciprocal rank fusion** (RRF) or learned weights.
+      4. Return final ranked list.
+
+      RRF: score(d) = Σ_lists 1 / (k + rank_in_list(d)), with k = 60 a common constant. Simple, parameter-free, works.
+
+      In 2026: pgvector + tsvector (Postgres BM25) make hybrid search a single Postgres query. Elastic, Weaviate, Qdrant, Pinecone all support hybrid natively.
+    pitfalls:
+      - "Pure semantic search loses to hybrid by 5-15 points on most retrieval benchmarks. The lexical signal matters."
+  - question: "What's reranking and when do you need it?"
+    shortAnswer: |
+      A second model that re-scores the top-k retrieved candidates more carefully than the embedding model can. Use a cross-encoder (a transformer that reads both query and document together) for high-precision scoring at the top of the list.
+    detailed: |
+      Retrieval = embedding similarity = bi-encoder (separate encodings for query and document). Fast, scales to billions of documents. Approximation.
+
+      Reranking = cross-encoder = transformer reads (query, document) pair jointly and outputs a score. Slow (one model call per pair), but more accurate.
+
+      Architecture:
+      1. Retrieve top-100 with bi-encoder (fast).
+      2. Rerank top-100 with cross-encoder (slow but only on 100).
+      3. Return top-10 reranked.
+
+      Popular rerankers:
+      - **BGE-reranker-large** (free, open).
+      - **Cohere Rerank API** (paid).
+      - **MS MARCO MiniLM** (small, fast).
+
+      Quality improvement: +10-20% on standard retrieval benchmarks (NDCG@10) at the cost of ~10× latency for the top-100 (but that's still 100-300ms total).
+
+      Use reranking when: top-3 precision matters (e.g., feeding into LLM context where only the top results matter), or the embedding model alone is too noisy.
+    pitfalls:
+      - "Don't rerank too much. Cross-encoders are slow; reranking 1000 candidates takes seconds."
+  - question: "What does a production RAG pipeline look like in 2026?"
+    shortAnswer: |
+      Hybrid retrieval (BM25 + dense) → top-50 → cross-encoder reranker → top-5 → LLM with citations → output validated against sources. Postgres + pgvector covers most cases.
+    detailed: |
+      The production architecture:
+
+      ```
+      User query
+            ↓
+      [Query rewriting / expansion]  (optional, useful for multi-turn)
+            ↓
+      ┌─────────────────┐
+      │  Retrieval      │
+      │  - BM25 (top-K1)│
+      │  - Dense (top-K2)│
+      │  - Fuse (RRF)   │
+      └─────────────────┘
+            ↓
+      [Cross-encoder rerank top-50]
+            ↓
+      [Top-5 to LLM prompt with citations]
+            ↓
+      LLM generation
+            ↓
+      [Output validation, citation check]
+            ↓
+      Response
+      ```
+
+      Stack choices in 2026:
+      - **Vector store**: pgvector (if you already use Postgres), Qdrant, Weaviate, Pinecone, Faiss (self-host).
+      - **Embedding model**: BGE-large, E5-large, OpenAI text-embedding-3.
+      - **Reranker**: BGE-reranker-large or Cohere Rerank.
+      - **LLM**: GPT-4o, Claude, Llama-3-70B-served-with-vLLM.
+      - **Framework** (optional): LangChain, LlamaIndex, Haystack. Useful for prototyping; production often replaces large parts.
+
+      For many use cases, a 'simple RAG' (no rerank, no fancy chunking) reaches 70% of the quality of the full pipeline. Diminishing returns past the basics; data quality matters more than pipeline complexity.
+    pitfalls:
+      - "Don't over-engineer the framework. Many production systems are 200 lines of Python around pgvector and OpenAI API."
+  - question: "What are the common RAG failure modes?"
+    shortAnswer: |
+      Retrieval miss (relevant chunks not retrieved), irrelevant chunks (relevant chunks present but downstream LLM ignores), hallucination from grounded context, citation hallucination (cited chunks don't support the claim).
+    detailed: |
+      Four standard failure modes:
+
+      **1. Retrieval miss.** The right chunks aren't in the top-k. Causes: bad chunking (relevant span split across chunks), embedding model mismatch, query phrasing doesn't match document phrasing. Fix: hybrid search, better chunking, query rewriting.
+
+      **2. Irrelevant chunks dominate the prompt.** Top-k contains the right chunks but also distractor chunks. The LLM gets confused. Fix: better reranking, fewer chunks (top-3 instead of top-10), summarisation.
+
+      **3. Hallucination from grounded context.** Even with relevant chunks present, the LLM makes up facts. Fix: prompting ("only use information from the provided sources"), citation requirements, output verification, fine-tuning on grounded generation data.
+
+      **4. Citation hallucination.** The LLM cites a chunk but the chunk doesn't actually support the claim. Fix: post-hoc verification step (NLI model checks each claim against its cited chunk).
+
+      Evaluation must measure each mode separately. See A6.8 on evaluation.
+    pitfalls:
+      - "If you can't tell *why* RAG is failing, you can't fix it. Build per-stage evaluation early."
+---
+
+<TldrCallout>
+  RAG = retrieve relevant chunks from a corpus, hand them to an LLM as context, generate the answer.
+  In 2026 it's the dominant architecture for 'chat with documents', enterprise search, knowledge
+  assistants. The bottleneck is rarely the LLM — it's retrieval quality (chunking, embedding,
+  reranking). Hybrid search (BM25 + dense) + a cross-encoder reranker beats pure dense retrieval by
+  a wide margin. Postgres + pgvector handles 90% of real workloads.
+</TldrCallout>
+
+## The RAG architecture
+
+```
+Index time (offline):
+
+  Documents → Chunker → Embedder → Vector DB
+                      ↓
+                BM25 index
+
+Query time (online):
+
+  Query → Embedder → Vector search ┐
+        → BM25 search             ─┼→ Rank fusion → Reranker → Top-N → LLM prompt → Response
+                                  ┘
+```
+
+Six components:
+
+1. **Chunker** — splits documents into retrieval units.
+2. **Embedder** — turns text (chunks AND queries) into vectors.
+3. **Vector DB** — stores embeddings, supports approximate nearest-neighbour search.
+4. **BM25 index** — keyword-based search (for hybrid).
+5. **Reranker** — cross-encoder that re-scores top candidates.
+6. **LLM** — generates the final answer using retrieved context.
+
+Get the first four right and you've built a strong retrieval system. The LLM is the easy part.
+
+## Chunking: the most underrated decision
+
+What you index is what you can retrieve. Chunking choices dominate retrieval quality more than any other tuning:
+
+| Strategy                              | When                              |
+| ------------------------------------- | --------------------------------- |
+| **Fixed-size 500 tokens, 50 overlap** | Default; works for most cases     |
+| **Sentence boundary aware**           | When sentences shouldn't be split |
+| **Section / heading aware**           | Markdown / structured docs        |
+| **Semantic**                          | When topics shift mid-document    |
+| **Function / class level**            | Code                              |
+| **Sliding window**                    | Dense Q&A content                 |
+
+Pragmatic recipe:
+
+1. Start with fixed-size 500 tokens, 50 overlap.
+2. Try section-aware (split on markdown headers).
+3. Evaluate retrieval on real queries.
+4. Iterate on failures.
+
+Don't chunk on character count — chunk on tokens (LLM-relevant) or sentences (semantically coherent).
+
+<AnalogyCallout>
+  RAG is like an open-book test for an LLM. Chunking is deciding what pages to copy and hand to the
+  test-taker. Too small (one sentence per page): they don't have context. Too large (whole
+  textbook): they can't find the relevant page. The right size: paragraphs or short sections where
+  each contains one self-contained idea.
+</AnalogyCallout>
+
+## Hybrid retrieval: BM25 + dense
+
+Pure dense retrieval fails on:
+
+- Exact codes ("ERR-4592", "Document #1234").
+- Rare names ("Cleopatra Vandermeer" — not in training data).
+- Acronyms ("KPI", "RTO" — embeddings are fuzzy).
+- Domain jargon ("VARIANCE_INFLATION_FACTOR" — meaningless to general embedders).
+
+BM25 (Robertson & Sparck Jones, 1976; still the strongest classical retrieval) handles these via exact term matching with IDF weighting.
+
+But BM25 misses paraphrase: "car" vs "automobile", "cancel" vs "terminate".
+
+Hybrid combines both:
+
+1. Run BM25 → top 50 (lexical results).
+2. Run dense → top 50 (semantic results).
+3. **Reciprocal rank fusion**: score(doc) = Σ 1 / (60 + rank_in_list(doc)).
+4. Return top-N by fused score.
+
+The RRF constant (60) is empirical; works without tuning. In Postgres, this is one query combining `pgvector` and `tsvector`. In Elastic / Qdrant / Weaviate / Pinecone, it's a built-in hybrid mode.
+
+**Hybrid beats pure dense by 5-15 NDCG@10 points on most benchmarks.** Don't skip it.
+
+## Reranking: cross-encoders for precision
+
+A bi-encoder (the standard embedding model) encodes query and document separately. Fast — vectors are precomputed. Approximation — the model never directly compares the two texts.
+
+A cross-encoder reads (query, document) as a single input and outputs a relevance score. Slow — one model pass per pair. Accurate — direct comparison.
+
+Standard pattern:
+
+1. Retrieve top-100 with bi-encoder (10ms).
+2. Rerank top-100 with cross-encoder (100-300ms).
+3. Use top-5 in the LLM prompt.
+
+Total latency: a few hundred ms. Quality gain: +10-20% on standard benchmarks.
+
+| Reranker           | Type        | Notes                     |
+| ------------------ | ----------- | ------------------------- |
+| BGE-reranker-large | Open, free  | Strong default            |
+| Cohere Rerank API  | Paid        | Strong, multilingual      |
+| MS MARCO MiniLM    | Small, fast | When latency matters      |
+| voyage-rerank-2    | Paid        | Specialised for retrieval |
+
+For a production RAG system: always rerank. The latency hit is worth it.
+
+## The minimal RAG implementation
+
+```python
+# Index time
+from sentence_transformers import SentenceTransformer
+import psycopg2
+
+embedder = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+def index_documents(docs):
+    chunks = []
+    for doc in docs:
+        chunks.extend(chunk_into_500_tokens(doc, overlap=50))
+    embeddings = embedder.encode(chunks, batch_size=32, normalize_embeddings=True)
+    # Store in pgvector
+    conn = psycopg2.connect(...)
+    cur = conn.cursor()
+    for chunk, emb in zip(chunks, embeddings):
+        cur.execute(
+            "INSERT INTO chunks (text, embedding) VALUES (%s, %s)",
+            (chunk, emb.tolist()),
+        )
+
+# Query time
+def query(question, k=5):
+    q_emb = embedder.encode(question, normalize_embeddings=True)
+    cur.execute(
+        "SELECT text FROM chunks ORDER BY embedding <=> %s LIMIT %s",
+        (q_emb.tolist(), k),
+    )
+    chunks = [row[0] for row in cur.fetchall()]
+    prompt = f"Context:\n{chr(10).join(chunks)}\n\nQuestion: {question}"
+    return openai.chat.completions.create(...)
+```
+
+That's ~50 lines. Add hybrid search and reranking and you're at ~200 lines for a strong production-grade pipeline.
+
+## Vector database choices in 2026
+
+| DB                                | Best for                                                |
+| --------------------------------- | ------------------------------------------------------- |
+| **pgvector** (Postgres extension) | Already using Postgres; built-in hybrid via tsvector    |
+| **Qdrant**                        | Self-hosted; rich filtering; Rust performance           |
+| **Weaviate**                      | Self-hosted; modules for hybrid, retrievers, generation |
+| **Pinecone**                      | Managed cloud; simple API; good for prototyping         |
+| **Milvus**                        | Self-hosted; high throughput                            |
+| **Faiss** (library)               | In-process; very fast; no persistence                   |
+| **LanceDB**                       | Embedded; fast; columnar                                |
+| **ScaNN** (Google)                | High-recall, low-latency at scale                       |
+
+**Default recommendation in 2026**: pgvector. You probably already have Postgres; the extension is free; supports filtering by SQL; supports hybrid via tsvector; handles up to ~10M vectors comfortably on a single instance.
+
+For >100M vectors or sub-millisecond latency at scale: dedicated vector DB (Qdrant, Weaviate, Milvus, or managed Pinecone).
+
+## Common failures and fixes
+
+| Symptom                                     | Cause                              | Fix                                                                         |
+| ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------- |
+| Right info exists but model doesn't find it | Chunking split key span            | Bigger chunks; overlap; section-aware chunking                              |
+| Model finds related but not exact info      | Lexical vs semantic mismatch       | Hybrid (BM25 + dense)                                                       |
+| Top-k contains relevant + distractors       | Embedding model not discriminative | Cross-encoder reranking                                                     |
+| Model hallucinates in answer                | LLM ignoring context               | "Only use information from the provided sources"; smaller top-k; better LLM |
+| Cited chunk doesn't support claim           | Citation hallucination             | Post-hoc NLI verification per claim                                         |
+| Slow at scale                               | Too many retrieval+rerank calls    | Cache common queries; smaller reranker; better index                        |
+
+Diagnose per stage. If retrieval is missing the right chunks, no LLM upgrade fixes it.
+
+<InlineQuiz
+  question="Your RAG system retrieves correct documents 70% of the time. The LLM produces correct answers 60% of the time when given correct context, and hallucinates 30% of the time when given correct context. What's the most impactful first improvement?"
+  options={[
+    { text: "Switch to a more powerful LLM." },
+    {
+      text: "Add reranking and hybrid search to improve retrieval — going from 70% to 90% retrieval recall lifts overall accuracy much more than LLM upgrades on the 60% baseline.",
+      correct: true,
+    },
+    { text: "Increase chunk overlap to 200 tokens." },
+    { text: "Train your own LLM from scratch." },
+  ]}
+  explanation="Retrieval recall is the upstream bottleneck. End-to-end accuracy ≤ retrieval_recall × LLM_accuracy_given_correct_context = 0.7 × 0.6 = 42%. Improving retrieval from 70% to 90% would push the ceiling to 54%. Improving LLM from 60% to 75% only gets you 53%. Retrieval is the cheaper, higher-leverage fix. Always diagnose stage-by-stage; the biggest gains come from the weakest stage."
+/>
+
+## Cost and latency at scale
+
+For a production RAG system serving 100k queries/day:
+
+- **Embedding** at query time: 1 forward pass × 100k = ~$1-10/day depending on model.
+- **Vector search** in pgvector: <10ms per query; well within Postgres capacity.
+- **Reranking**: 100 candidates × cross-encoder × 100k queries = ~$50-200/day if self-hosted on a single GPU.
+- **LLM generation**: 5 chunks × 500 tokens + prompt + answer × 100k = ~50M tokens/day. GPT-4o: ~$500/day. Llama-3-70B self-hosted: $200/day in GPU compute.
+
+Roughly $750-1500/day for a strong RAG system at 100k QPS. At 10k QPS, $75-150/day.
+
+Optimisation:
+
+- **Cache the embedding** of repeated queries.
+- **Cache the LLM response** for identical contexts.
+- **Use a smaller LLM for simpler queries**; route complex ones to GPT-4.
+- **Compress chunks** for the LLM prompt (summary before generation).
+
+<InlineQuiz
+  question="You have a 5 GB corpus of technical documentation (PDFs, markdown). You need to build RAG for ~1k internal users, ~500 queries/day total. What's the simplest production architecture?"
+  options={[
+    {
+      text: "Postgres with pgvector for storage, BGE-large for embeddings, OpenAI GPT-4o for generation. No reranking. Add hybrid (pgvector + tsvector) for keyword + semantic. Cost: ~$30/month.",
+      correct: true,
+    },
+    { text: "Stand up a Kubernetes cluster with Pinecone, Cohere, GPT-4." },
+    { text: "Train a custom 70B LLM on your docs." },
+    { text: "Use a regex-based search system." },
+  ]}
+  explanation="500 queries/day is tiny scale. pgvector on a small Postgres instance handles this easily; BGE-large is free; OpenAI GPT-4o per query is ~$0.01 = $5/day = $150/month. Total infrastructure cost is dominated by the LLM API, which is negligible. No need for managed vector DBs or fancy frameworks. The Kubernetes / Pinecone setup is overkill until you have 100x more traffic. Custom LLM training is wildly inappropriate at this scale. Hybrid search via pgvector + tsvector is one query, free."
+/>
+
+## Closing for retrieval
+
+RAG is the most-deployed NLP architecture in 2026. The dominant pattern is reliably: pretrained embedder + vector DB + LLM, with hybrid search and reranking as quality multipliers. Most engineering work is in chunking, retrieval evaluation, and grounded-generation quality — not the LLM itself.
+
+The next lesson takes the LLM call as the focus: how to prompt frontier models effectively, structure outputs, handle costs and rate limits in production.

@@ -1,0 +1,340 @@
+---
+title: "Tokenization: BPE, WordPiece, SentencePiece, tiktoken"
+description: "How text becomes numbers — and why this seemingly boring step affects training cost, inference cost, model quality, and which languages the model handles well."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: nlp
+moduleLabel: "Module 6 · NLP for ML Engineers"
+lesson: tokenization
+lessonCode: "A6.2"
+estMinutes: 13
+prereqs:
+  - "A6.1 The 2026 NLP landscape"
+objectives:
+  - "Explain BPE, WordPiece, and SentencePiece as variants of the same subword tokenization idea."
+  - "Count tokens for a given string in a given tokenizer, and estimate API costs from token counts."
+  - "Identify when tokenization is the root cause of a model bug (rare languages, code, numbers, emojis)."
+pitfalls:
+  - "Estimating token count as ~words. For English it's roughly 0.75 tokens per word, but for code, math, or non-English, the ratio swings widely."
+  - "Comparing token counts across tokenizers as if they're equivalent. GPT-3's tokenizer and tiktoken-cl100k tokenize the same text differently."
+  - "Believing tokenization is solved. Numbers, emojis, code, and low-resource languages still show pathological tokenization."
+  - "Training a model with the wrong tokenizer for the data. A tokenizer trained on web English will tokenize Chinese badly, and vice versa."
+importantQuestions:
+  - question: "Why do we tokenize text at all?"
+    shortAnswer: |
+      Neural networks operate on numbers. Tokenization maps text into a fixed vocabulary of integer IDs the embedding layer can look up. The goal is short sequences for efficiency, broad coverage of rare words, and graceful handling of unseen text.
+    detailed: |
+      Three competing requirements:
+
+      1. **Short sequences.** Each token is one position in the transformer; shorter input = less compute. Word-level tokenization gives short sequences but huge vocabularies.
+
+      2. **Vocabulary coverage.** Every input character / word should be representable. Character-level tokenization handles any text but produces 5-10× longer sequences.
+
+      3. **Graceful out-of-vocabulary.** Unseen words at inference shouldn't produce special "unknown" tokens that destroy meaning. The model should at least see the characters.
+
+      Subword tokenization (BPE, WordPiece, SentencePiece) is the modern compromise: common words become single tokens, rare words split into smaller pieces, anything else falls back to characters. Vocabulary size ~30k-128k; sequence lengths reasonable.
+
+      In production: token count drives cost (LLM API pricing is per token) and latency (transformer attention is O(n²)). Engineers care about token counts deeply.
+    pitfalls:
+      - "The 'unknown token' problem largely vanished with subword tokenization, but rare languages or codes (emojis, ZWJ sequences) still hit edge cases."
+  - question: "What is Byte-Pair Encoding (BPE)?"
+    shortAnswer: |
+      Start with single characters as the vocabulary. Repeatedly find the most-frequent adjacent pair and merge them into a new token. Stop at the target vocabulary size. Used in GPT family, RoBERTa, Llama.
+    detailed: |
+      Sennrich, Haddow, Birch (2016) brought BPE to NLP from compression. Algorithm:
+
+      1. Start with character vocabulary (a, b, c, ...).
+      2. Count all adjacent pairs in training corpus ('th', 'he', 'in', ...).
+      3. Merge the most-frequent pair into a new token.
+      4. Recompute counts; merge next most-frequent.
+      5. Stop at target vocabulary size (e.g., 32k).
+
+      Result: common sequences ('the', 'ing', 'tion') become single tokens; rare sequences fall back to multi-token splits or characters.
+
+      Properties:
+      - Greedy merge order; final vocabulary depends on training corpus.
+      - Inference is deterministic: apply learned merges left to right.
+      - Handles unseen text by falling back to characters / bytes.
+
+      **Byte-level BPE** (used in GPT-2, GPT-3, GPT-4, Llama-3) operates on bytes (0-255) instead of Unicode characters. Guarantees that *any* text can be tokenized — no unknown tokens ever — at the cost of slightly worse compression for non-ASCII text.
+    pitfalls:
+      - "GPT's byte-level BPE assigns multiple tokens to one CJK character on average. Chinese / Japanese cost more per character than English."
+  - question: "How does WordPiece differ from BPE?"
+    shortAnswer: |
+      Both build a vocabulary of subword pieces by iterative merging. BPE merges the most-frequent pair; WordPiece merges the pair that maximises training likelihood. Used in BERT.
+    detailed: |
+      WordPiece (Schuster & Nakajima, 2012, used in BERT, DistilBERT, ModernBERT) selects merges to maximise the likelihood of the training corpus under a language model induced by the vocabulary. In practice this picks pairs that are highly co-occurring relative to chance.
+
+      Notational difference: WordPiece marks word-internal pieces with `##` prefix. "playing" → ["play", "##ing"]. BPE typically uses a space prefix in byte-level form: ` playing` → [` play`, `ing`].
+
+      The split decisions differ subtly; in practice token counts for the same text differ by only a few percent. Choose by which model family you're using, not by tokenizer preference.
+    pitfalls:
+      - "When training tokenizer + model, train both on the same data distribution. A tokenizer trained on English then used on code will tokenize code as char-by-char garbage."
+  - question: "What is SentencePiece and when do you use it?"
+    shortAnswer: |
+      SentencePiece (Google) is both an algorithm (subword tokenization treating text as raw bytes, no whitespace pre-tokenisation) and a library that implements BPE and Unigram. Used in T5, mT5, ALBERT, Llama.
+    detailed: |
+      Pre-SentencePiece tokenizers pre-split on whitespace, which is fine for English but bad for Japanese / Chinese / Thai (no spaces) and code (whitespace matters).
+
+      SentencePiece (Kudo & Richardson, 2018) treats raw text as a sequence of Unicode code points and learns merges directly. No pre-tokenization. Whitespace becomes a real character (`▁`) in the vocabulary.
+
+      Implements two algorithms:
+      - **BPE** (same as above, just without pre-tokenization).
+      - **Unigram** (Kudo, 2018): start with a large vocabulary; iteratively remove tokens that contribute least to corpus likelihood. Probabilistic, produces a single best tokenization but can sample alternatives.
+
+      Used in T5, mT5, ALBERT, XLM-R, Llama family. The standard for multilingual and code-aware tokenizers.
+    pitfalls:
+      - "SentencePiece's `▁` (U+2581) represents a leading space. When you decode, you replace these with spaces. Forgetting this gives 'TheCatSat' instead of 'The Cat Sat'."
+  - question: "How do you count tokens in practice?"
+    shortAnswer: |
+      Use the library that matches your model. OpenAI: `tiktoken`. HuggingFace models: model's tokenizer (`AutoTokenizer.from_pretrained(name)`). Anthropic: their SDK exposes token counts. Don't estimate — count.
+    detailed: |
+      For OpenAI models (GPT-3.5, GPT-4, GPT-4o, GPT-4-turbo):
+
+      ```python
+      import tiktoken
+      enc = tiktoken.encoding_for_model("gpt-4o")
+      tokens = enc.encode("Hello, world!")
+      print(len(tokens))  # 4
+      ```
+
+      For HuggingFace models:
+
+      ```python
+      from transformers import AutoTokenizer
+      tok = AutoTokenizer.from_pretrained("meta-llama/Llama-3-8B-Instruct")
+      tokens = tok.encode("Hello, world!")
+      print(len(tokens))  # may differ from OpenAI
+      ```
+
+      For Anthropic, the SDK has a `count_tokens` helper.
+
+      Rough rule of thumb (English): 1 token ≈ 0.75 words ≈ 4 characters. **But:**
+      - Code: more tokens per "word" (whitespace, punctuation).
+      - Numbers: each digit often a token in some tokenizers; `12345` might be 5 tokens.
+      - Non-English: many more tokens per character (Chinese, Hindi, Arabic).
+      - Emojis: 1-3 tokens each.
+
+      For accurate cost estimation, always count with the actual tokenizer.
+    pitfalls:
+      - "OpenAI's tokenizer counts the system prompt, the user prompt, and the response separately. The full token count for a request is all of them."
+  - question: "When is tokenization the root cause of a model bug?"
+    shortAnswer: |
+      When the model handles a specific input weirdly: numbers, dates, code, low-resource languages, emojis, named entities with rare characters. Inspect the tokens; often the splitting is the cause.
+    detailed: |
+      Tokenization pathologies that show up as model bugs:
+
+      - **Numbers.** GPT-3's tokenizer assigns different tokens to "1234" and " 1234" (with leading space). Multi-digit arithmetic is harder for models because numbers are split awkwardly.
+      - **Low-resource languages.** A model trained on English-heavy data uses many tokens per character for Hindi / Thai / Burmese. Slower and more expensive per request; quality often worse.
+      - **Code.** Whitespace-sensitive code uses more tokens than equivalent English. Common code patterns (if-else, function definitions) become 5-15 tokens each.
+      - **Emojis.** A flag emoji is typically 2 code points (regional indicators) and may be 2-3 tokens.
+      - **Named entities with unusual characters.** Naïve, façade, café might tokenize differently than expected.
+      - **Long words.** Pneumonoultramicroscopicsilicovolcanoconiosis = many tokens (and many embedding lookups).
+
+      Debugging: print `tokenizer.encode(input)` and decode each token individually. If the split looks weird, you have a tokenization bug, not a model bug.
+    pitfalls:
+      - "Some models have a 'special token' vocabulary for control codes (BOS, EOS, separators). Mismatched special tokens between training and inference silently destroy quality."
+---
+
+<TldrCallout>
+  Tokenization turns text into a sequence of integer IDs the embedding layer can look up. Modern
+  systems use subword tokenization (BPE, WordPiece, SentencePiece) trained on the corpus the model
+  will see. The choice affects training compute, inference cost, sequence length, model quality
+  across languages, and how the model handles numbers, code, and rare words. Always count tokens
+  with the actual tokenizer; never estimate.
+</TldrCallout>
+
+## Why tokenization matters
+
+Three reasons every NLP engineer needs to understand tokenization:
+
+1. **Cost.** LLM APIs charge per token. A 10× longer tokenization is a 10× more expensive request.
+2. **Latency.** Attention is O(n²) in token count. Long sequences are slow.
+3. **Quality.** Bad tokenization for your data (numbers, code, non-English) silently degrades model output.
+
+Tokenization is the first layer of the model. Everything downstream depends on it.
+
+## See it in action
+
+The widget below tokenizes the text you type with a small BPE-style tokenizer. Each coloured chunk is one token. Try:
+
+- Common English words → mostly one token each.
+- A long word ("incomprehensibility") → multiple subword tokens.
+- A code snippet → many tokens, whitespace included.
+- A few digits ("12345") → often each digit is its own token.
+
+<TokenizerDemo />
+
+The patterns you see are exactly what production tokenizers produce, scaled down. Real BPE tokenizers have 30k-128k vocabulary entries instead of the toy one used here.
+
+## The four common tokenizers
+
+| Tokenizer                          | Algorithm                          | Used in                      | Notes                                                 |
+| ---------------------------------- | ---------------------------------- | ---------------------------- | ----------------------------------------------------- |
+| **BPE**                            | Greedy merge of most-frequent pair | GPT-2, RoBERTa, BART         | Standard subword tokenization                         |
+| **Byte-level BPE**                 | BPE over bytes (not chars)         | GPT-2/3/4, Llama-3           | Handles any input; multiple tokens per non-ASCII char |
+| **WordPiece**                      | Greedy merge by likelihood         | BERT, DistilBERT, ModernBERT | Similar to BPE in practice                            |
+| **SentencePiece (BPE or Unigram)** | No pre-tokenization                | T5, Llama, Gemma, mT5        | Multilingual / code-friendly                          |
+| **tiktoken**                       | Byte-level BPE (specific vocab)    | OpenAI models                | Official OpenAI tokenizer library                     |
+
+The algorithmic differences are small. Practically: use the tokenizer that matches your model.
+
+## How BPE works
+
+Concretely:
+
+1. Start with a base vocabulary of single characters (or bytes for byte-level).
+2. Tokenize the corpus into character / byte sequences.
+3. Count all adjacent pairs.
+4. Merge the most-frequent pair into a new token. Add it to the vocabulary.
+5. Repeat steps 3-4 until the vocabulary reaches the target size (commonly 32k-128k).
+
+After training, tokenization of new text applies the learned merges greedily, left to right.
+
+<WorkedExample title="BPE on a tiny corpus">
+
+Corpus: "the cat sat on the mat".
+
+Initial tokens: `t h e _ c a t _ s a t _ o n _ t h e _ m a t` (using `_` for spaces).
+
+Adjacent pair counts:
+
+- `t h`: 2 (twice in "the")
+- `h e`: 2
+- `e _`: 2
+- `_ t`: 2
+- ... etc.
+
+Suppose `t h` is the most frequent. Merge it: vocabulary now includes `th`.
+
+Re-tokenize: `th e _ c a t _ s a t _ o n _ th e _ m a t`.
+
+Now `th e` becomes the most frequent pair. Merge: vocabulary now `the`.
+
+Continue until vocabulary reaches target size. Common words like `the`, `cat`, `mat` become single tokens; rarer words decompose into subwords.
+
+</WorkedExample>
+
+## Counting tokens
+
+For real cost / latency estimation, use the actual tokenizer:
+
+```python
+# OpenAI
+import tiktoken
+enc = tiktoken.encoding_for_model("gpt-4o")
+tokens = enc.encode("How much will this cost?")
+print(len(tokens))  # 6
+
+# HuggingFace
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained("meta-llama/Llama-3-8B-Instruct")
+print(len(tok.encode("How much will this cost?")))  # 7
+
+# Anthropic
+import anthropic
+client = anthropic.Anthropic()
+count = client.messages.count_tokens(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "How much will this cost?"}]
+)
+```
+
+The same text often produces different token counts across tokenizers. Don't extrapolate.
+
+Rough English estimate (rule of thumb only): **1 token ≈ 0.75 words ≈ 4 characters**. Useful for back-of-envelope; never for cost reporting.
+
+## Tokenization pathologies
+
+These come up in production:
+
+### Numbers
+
+GPT's tokenizer tokenizes numbers weirdly. "12345" might be 3-5 tokens depending on context. This is one reason LLMs struggle with multi-digit arithmetic — the input doesn't preserve digit structure.
+
+Recent tokenizers (Llama-3) explicitly add per-digit tokens to fix this. Older ones did not.
+
+### Languages
+
+For Latin-script English: ~0.75 tokens per word.
+
+For Chinese: 1.5-3 tokens per character (most chars are 3 bytes in UTF-8, byte-level BPE rarely compresses them).
+
+For Hindi, Arabic, Thai: 2-5 tokens per character.
+
+Practical effect: a non-English document might cost 5-10× more in tokens than the equivalent English. Languages with smaller training presence are penalised in both cost and quality.
+
+### Code
+
+Code is whitespace-sensitive. Each indentation is tokens. Common constructs (`if __name__ == "__main__":`) become 8-12 tokens.
+
+Specialised code models (Codex, Starcoder) train their tokenizers on code-heavy data, getting better compression. General-purpose models give code more tokens than necessary.
+
+### Emojis
+
+A flag emoji (like 🇺🇸) is 2 Unicode code points (regional indicator letters) and typically 2-3 tokens. Some emojis with zero-width joiners (👨‍👩‍👧‍👦) can be 7+ tokens.
+
+### Names with unusual characters
+
+Naïve, façade, José might tokenize as multiple subwords; this can affect NER models.
+
+<AnalogyCallout>
+  Tokenization is like splitting a sentence into syllables for someone learning to read aloud. Done
+  well, common words come out clean and rare words get sounded out a bit. Done badly, every word is
+  sounded out letter-by-letter, slowly and clumsily. Different tokenizers do this for different
+  "alphabets" — English, code, Chinese, math — at very different qualities.
+</AnalogyCallout>
+
+## Tokenization and model quality
+
+The model only ever sees tokens, not raw text. The choice of tokenizer therefore affects:
+
+- **What patterns the model can learn.** If "12345" is always 1 token, the model can learn arithmetic on integers. If it's 5 separate tokens, multi-digit arithmetic is harder.
+- **Which languages it can handle well.** Tokenizer trained on English will tokenize Chinese inefficiently → model has fewer tokens of context → worse quality.
+- **What the embedding layer needs to memorise.** Bigger vocab = more parameters in the input/output embeddings.
+
+This is one reason modern multilingual models (Llama-3, Gemma) use 128k+ vocab — to keep all major languages on similar footing.
+
+<InlineQuiz
+  question="A user reports that GPT-4 is giving inconsistent answers to arithmetic questions like 'what is 273489 + 192834'. You confirm the issue. What's the most likely *tokenization-level* cause?"
+  options={[
+    { text: "The numbers are too large for GPT-4's context window." },
+    {
+      text: "GPT's tokenizer splits multi-digit numbers into arbitrary subword pieces, so the model doesn't see each digit cleanly — making arithmetic harder.",
+      correct: true,
+    },
+    { text: "GPT-4 uses a different tokenizer for numbers than for text." },
+    { text: "The system prompt is interfering with the numbers." },
+  ]}
+  explanation="GPT's tokenizer learned merges from web text where some digit sequences ('100', '2023') are very common and become single tokens; other sequences ('273489') are split into multi-token pieces in a non-digit-aware way. The model sees '273', '489' as separate units, not 6 digits — making column-by-column arithmetic harder. Newer Llama tokenizers explicitly tokenize digits individually (one token per digit), and these models do arithmetic better at small scales. For arithmetic at scale, calling a calculator tool is the production fix, not relying on the LLM."
+/>
+
+## Cost engineering
+
+For an LLM API workload:
+
+- **Compress system prompts.** Token efficiency matters at scale. A 200-token system prompt × 1M requests/day = 200M tokens/day in system overhead alone.
+- **Use cheaper tokenizers.** GPT-4o vs Claude vs Gemini have different per-token pricing AND different token counts for the same text. Compare actual costs, not unit prices.
+- **Truncate input intelligently.** Long context costs scale super-linearly when attention is the bottleneck.
+- **Cache prompt prefixes.** Both OpenAI and Anthropic offer prompt caching that reduces the cost of repeated prefixes by ~90%.
+- **Avoid waste in completions.** Set `max_tokens` to prevent runaway generation.
+
+A well-engineered LLM application monitors tokens per request and per use case as a first-class metric.
+
+<InlineQuiz
+  question="True or false: token count is roughly equal across the major LLM APIs (OpenAI, Anthropic, Google) for the same English text."
+  options={[
+    { text: "True — they all use similar tokenizers." },
+    {
+      text: "False — different tokenizers can produce significantly different token counts for the same text (sometimes 20-30% variation), and pricing is per-token, so cost comparisons require counting each.",
+      correct: true,
+    },
+    { text: "True — only the per-token price differs across providers." },
+    { text: "True for English; false for other languages." },
+  ]}
+  explanation="Different APIs use different tokenizers (OpenAI's tiktoken cl100k or o200k vs. Anthropic's tokenizer vs. Google's). Token counts can vary 10-30% on the same text. Cost comparisons must use the actual tokenizer to count tokens, then multiply by per-token price. The variation is larger for non-English text where each tokenizer has different multilingual coverage."
+/>
+
+## The bottom line
+
+Tokenization is the boring layer that quietly determines model cost, latency, and quality. Engineers who track it carefully avoid 80% of the surprises in production LLM systems. The next lesson moves from token IDs to the dense vector representations the model actually computes — embeddings.
