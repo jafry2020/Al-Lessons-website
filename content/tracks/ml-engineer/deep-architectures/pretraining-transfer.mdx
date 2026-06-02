@@ -1,0 +1,325 @@
+---
+title: "Pretraining and transfer learning"
+description: "Why every modern ML project starts from a pretrained model, what fine-tuning actually does to the weights, and how LoRA / QLoRA changed the economics of adaptation."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: pretraining-transfer
+lessonCode: "A5.8"
+estMinutes: 12
+prereqs:
+  - "A5.7 Scaling laws and compute"
+  - "A4.7 The training stack: schedules, mixed precision, distributed"
+objectives:
+  - "Explain what self-supervised pretraining learns and why those representations transfer to so many downstream tasks."
+  - "Apply linear probing, full fine-tuning, and LoRA / QLoRA — and pick between them by data size and compute budget."
+  - "Avoid the standard pitfalls: catastrophic forgetting, overfitting on small data, mismatched preprocessing."
+pitfalls:
+  - "Treating fine-tuning as 'just training with a different dataset.' The starting weights are everything; bad fine-tuning ruins them quickly."
+  - "Using too-high learning rates for full fine-tuning. The pretrained network has carefully balanced activations; a high lr destroys them in a few steps."
+  - "Fine-tuning when a frozen feature extractor + linear head would suffice. Less compute, less overfitting, usually similar quality on small data."
+  - "Believing LoRA gives identical results to full fine-tuning. Often close, occasionally worse, sometimes better (less overfitting). Measure."
+importantQuestions:
+  - question: "What is self-supervised pretraining?"
+    shortAnswer: |
+      Train a large network to predict parts of its input from other parts: next-token prediction (GPT), masked-token prediction (BERT, MAE), image-text alignment (CLIP). No human labels; the data labels itself.
+    detailed: |
+      Three dominant patterns:
+
+      **Autoregressive prediction** (GPT, Llama). Predict next token given previous tokens. Loss is cross-entropy over the vocabulary. The model implicitly learns syntax, semantics, world knowledge, reasoning patterns — whatever's required to predict text.
+
+      **Masked modelling** (BERT, MAE). Hide a fraction of the input; train to predict the hidden parts. Bidirectional context. Used in BERT for text, MAE for images, Wav2Vec for speech.
+
+      **Contrastive learning** (SimCLR, CLIP, sentence-transformers). Pull similar pairs together, push dissimilar pairs apart in embedding space. For CLIP: image-caption pairs are positives; mismatched pairs are negatives. The model learns a shared image-text embedding.
+
+      All three share: no human labels needed, scale beautifully with data, produce representations that transfer to many downstream tasks. This is the heart of the foundation-model era.
+    pitfalls:
+      - "Self-supervised pretraining works best at scale. Small data + self-supervised usually loses to small data + supervised baseline."
+  - question: "Why do pretrained representations transfer?"
+    shortAnswer: |
+      The model learned features useful for predicting the pretraining objective; those features turn out to be broadly useful for many tasks. Statistical regularities of language (or images) are shared across tasks more than people expected.
+    detailed: |
+      The empirical observation (since BERT, 2018): a model trained on a generic pretraining objective produces internal representations that are good starting points for classification, summarisation, question answering, translation, sentiment analysis, code completion, and many more.
+
+      Why this works:
+      - Text has shared structure (grammar, semantics, world facts). A model that predicts text learns this structure.
+      - Image data has shared structure (edges, textures, parts, objects). A model that completes masked patches learns this hierarchy.
+      - Most downstream tasks require these foundations; building them from scratch wastes data.
+
+      Pretrained models in 2026 are not optional. Every serious vision, NLP, audio, or code project starts from a foundation model. Training from scratch is a research luxury or a niche edge-deployment requirement.
+    pitfalls:
+      - "Transfer works best when downstream and pretraining domains overlap. Medical NLP transfers from general LLMs but not perfectly; domain-specific pretraining (PubMedBERT) helps."
+  - question: "What's the difference between linear probing, full fine-tuning, and LoRA?"
+    shortAnswer: |
+      Linear probing: freeze backbone, train only a linear head on top. Full fine-tuning: update all weights with a small learning rate. LoRA: freeze backbone, add small trainable low-rank adapters to attention layers.
+    detailed: |
+      **Linear probing**. Freeze pretrained model; pass inputs through it; train only a linear classifier on the final features. Fast, no risk of forgetting pretrained knowledge, low overfitting on small data. Often surprisingly strong.
+
+      **Full fine-tuning**. Unfreeze all weights; train with a small learning rate (typically 1/10 to 1/100 of pretraining lr). Best quality if data is sufficient (10k+ examples). Risk: catastrophic forgetting of pretrained knowledge if lr is too high.
+
+      **LoRA (Low-Rank Adaptation)** (Hu et al., 2021). Freeze backbone; add small trainable matrices A ∈ ℝ^(d×r) and B ∈ ℝ^(r×d) with r ≪ d. The effective weight becomes W + α · A · B during forward. Update only A and B. 100-1000× fewer trainable parameters than full fine-tuning, similar quality.
+
+      **QLoRA** (Dettmers et al., 2023). LoRA + quantise the frozen backbone to 4-bit. Fine-tune 70B models on a single 48GB GPU. Game-changer for community fine-tuning.
+
+      Decision rule for 2026:
+      - Tiny data (<1k): linear probe.
+      - Moderate data (1k-100k): LoRA or full fine-tune; LoRA when memory-constrained.
+      - Large data + sufficient compute: full fine-tune.
+      - Massive model on consumer hardware: QLoRA.
+    pitfalls:
+      - "LoRA rank r matters. r=8-16 is typical; r=64 approaches full fine-tune; r=1 is too constrained."
+  - question: "What is catastrophic forgetting and how do you avoid it?"
+    shortAnswer: |
+      Fine-tuning with too-high learning rate or too many epochs can overwrite the pretrained representations, destroying the general capabilities the model came with. Fix: low lr, few epochs, freezing early layers, or LoRA.
+    detailed: |
+      Symptoms:
+      - Fine-tuned model excellent at the target task but terrible at general capabilities it used to have.
+      - Sometimes called "alignment tax" in LLM fine-tuning.
+
+      Causes:
+      - Too-high learning rate (e.g., pretraining-scale lr instead of 1/10 to 1/100 of it).
+      - Too many epochs on small data.
+      - Full fine-tuning on a small task-specific dataset.
+
+      Mitigations:
+      - **Low lr**: 1e-5 to 5e-5 for transformers; 10× smaller than pretraining.
+      - **Few epochs**: 1-3 epochs on full fine-tuning, more on LoRA.
+      - **Layer freezing**: freeze the first half of layers; fine-tune only the upper half.
+      - **LoRA**: by construction, only adds small perturbations; pretrained weights are preserved.
+      - **Regularisation**: KL-divergence to the pretrained model's outputs (used in some RLHF setups).
+
+      For LLMs in 2026: most "fine-tuning" is actually LoRA + careful data curation. Full fine-tuning is reserved for serious-scale projects with enough engineering budget to verify general capabilities remain.
+    pitfalls:
+      - "Don't fine-tune on a task-specific dataset and expect a chatty assistant. Specialised fine-tuning usually requires reinforcing instruction-following too."
+  - question: "What is instruction tuning, and how does it differ from pretraining?"
+    shortAnswer: |
+      Instruction tuning teaches a pretrained LLM to follow natural-language instructions. Trained on (instruction, response) pairs. Required to turn a "next-token predictor" into a usable assistant.
+    detailed: |
+      Out of pretraining, an LLM does next-token prediction. Prompted with "What is the capital of France?", the raw model might continue with "is one of many capital trivia questions..." instead of "Paris." It's modelling the distribution of all internet text, not following instructions.
+
+      Instruction tuning: supervised fine-tuning (SFT) on (instruction, response) pairs. Examples:
+      - "Translate to French: Hello" → "Bonjour"
+      - "Summarise this article: [text]" → "[summary]"
+      - "Write a haiku about autumn" → "Crimson leaves descend / Whispering of seasons changed / Stillness fills the air"
+
+      The dataset is curated, typically 10k-1M examples. After SFT, the model follows instructions reliably.
+
+      RLHF / DPO follow SFT and align the model to human preferences. Together they turn a foundation model into an assistant. Llama-2-Chat, GPT-4, and Claude all go through this pipeline.
+
+      In 2026, "Llama-2-7B" is a foundation model; "Llama-2-7B-Chat" or "Llama-2-7B-Instruct" is the instruction-tuned version. For most application work, use the instruction-tuned variant.
+    pitfalls:
+      - "Pretrained vs. instruct/chat: pick the right starting point. Pretrained for further pretraining; instruction-tuned for prompting and downstream tasks."
+  - question: "What's the standard 'fine-tune for a task' pipeline in 2026?"
+    shortAnswer: |
+      Pick a pretrained model from a hub (HuggingFace, etc.). Format data. LoRA fine-tune (often QLoRA for large models) on a labelled task. Evaluate. If quality suffices, deploy via vLLM or similar inference engine.
+    detailed: |
+      The typical 2026 fine-tuning pipeline for an NLP task:
+
+      1. **Pick a base model**. HuggingFace Hub has thousands. For LLM fine-tuning, start from instruction-tuned variants (Llama-3-Instruct, Mistral-Instruct, etc.).
+      2. **Format data**. (instruction, response) pairs, or (prompt, completion). Use the model's prompt template.
+      3. **Choose adaptation strategy**:
+         - Small data (<1k): linear probe or few-shot prompting (no training).
+         - Medium data: LoRA (rank 16-64, lr 1e-4 to 3e-4).
+         - Large data: QLoRA for 30B+ models on single GPU; full fine-tune for 7B models with multi-GPU.
+      4. **Train**. Typically 1-3 epochs. Use HuggingFace SFTTrainer, TRL, axolotl, or Unsloth.
+      5. **Evaluate** on a held-out test set with task-relevant metrics. Spot-check for catastrophic forgetting.
+      6. **Deploy** via vLLM, TensorRT-LLM, SGLang, or similar inference engine. Optionally merge LoRA into base weights for cleaner deployment.
+
+      This is the dominant pattern for adapting LLMs to specific tasks in 2026.
+    pitfalls:
+      - "Use the model's exact prompt template (special tokens, system message format). Mismatched templates degrade performance silently."
+---
+
+<TldrCallout>
+  In 2026, every ML project starts from a pretrained model. Self-supervised pretraining on
+  internet-scale data produces representations that transfer to most downstream tasks. Adaptation is
+  via linear probing (small data), full fine-tuning (lots of data + compute), or LoRA / QLoRA (most
+  cases). The era of training from scratch is mostly over outside research and niche edge
+  deployment.
+</TldrCallout>
+
+## The transfer-learning premise
+
+Pretraining: train a large model on a generic objective with massive unlabeled data (text, images, audio). Learn representations that capture statistical regularities of the data.
+
+Adaptation: use the pretrained representations as a starting point for a downstream task with limited labelled data. The pretrained model has done the heavy lifting; adaptation just steers it.
+
+This is the paradigm that drove every major ML advance since 2018. BERT showed it for NLP, ResNet/ImageNet showed it for vision (earlier), CLIP showed it for multimodal, GPT showed it for generation. By 2026 it's the default.
+
+## What pretraining learns
+
+| Pretraining objective          | What's learned                                          | Used in              |
+| ------------------------------ | ------------------------------------------------------- | -------------------- |
+| Next-token prediction          | Language structure, world knowledge, reasoning patterns | GPT, Llama, Mistral  |
+| Masked-token prediction        | Bidirectional context, syntactic representations        | BERT, RoBERTa        |
+| Masked image patches           | Visual feature hierarchy                                | MAE, BEiT            |
+| Image-text contrastive         | Joint visual-semantic embedding                         | CLIP, ALIGN, SigLIP  |
+| Image augmentation contrastive | Self-supervised visual features                         | SimCLR, DINO, DINOv2 |
+| Speech masked prediction       | Acoustic + phonetic representations                     | Wav2Vec2, HuBERT     |
+
+The remarkable empirical fact: these objectives, designed to be efficient to train at scale, produce representations broadly useful across tasks. Why? Statistical regularities of natural data are shared across tasks more than expected. A model that predicts the next word learns syntax (useful for parsing), semantics (useful for classification), facts (useful for QA), reasoning (useful for reasoning).
+
+## Adaptation strategies in 2026
+
+### Linear probing
+
+Freeze pretrained model. Pass inputs through it. Train a linear classifier on the final features (or [CLS] token for BERT-style).
+
+When: small data (<1k labelled examples), fast prototyping, low overfitting risk.
+
+Cost: minimal — single forward pass over data, then logistic regression. Often a few minutes.
+
+Surprisingly strong baseline. For many tasks with small data, linear probing of a strong foundation model rivals more complex adaptation.
+
+### Full fine-tuning
+
+Unfreeze all weights. Continue training with a small learning rate (typically 1e-5 to 5e-5 for transformers, 10× smaller than pretraining).
+
+When: lots of data (10k+ examples) and compute, and you need maximum quality.
+
+Risks: catastrophic forgetting if lr too high or too many epochs. Compute cost is the full model.
+
+Standard for BERT-era classification, image classification when data permits.
+
+### LoRA (Low-Rank Adaptation)
+
+Freeze backbone. Add small trainable low-rank matrices to attention (and sometimes FFN) layers:
+
+W_effective = W_pretrained + α · A · B
+
+where A ∈ ℝ^(d × r), B ∈ ℝ^(r × d), and r ≪ d (typically 8-64).
+
+Update only A and B. The effective weight is the sum; A·B is a learned perturbation.
+
+When: most fine-tuning in 2026. Memory-efficient, less catastrophic forgetting, similar quality to full fine-tune in most cases.
+
+Engineering: HuggingFace PEFT library is the standard implementation. Use `LoraConfig(r=16, lora_alpha=32, target_modules=["q_proj", "v_proj"])` as a starting point.
+
+### QLoRA
+
+LoRA + quantise the frozen backbone to 4-bit (NF4 format). Fine-tune the small LoRA matrices in higher precision.
+
+When: large models (30B+) on a single consumer / mid-range GPU.
+
+Quality: comparable to LoRA on most tasks; slight degradation on some.
+
+Game-changer for community fine-tuning. A 70B parameter model can be QLoRA-fine-tuned on a 48GB GPU.
+
+<AnalogyCallout>
+  Pretrained model = a polymath generalist. Fine-tuning = teaching them your specific job. Linear
+  probe: hire them as a consultant, don't change them. Full fine-tune: career change with proper
+  retraining. LoRA: side gig with a few new skills added. QLoRA: side gig but pack lighter — keep
+  the books in a backpack instead of moving the whole library.
+</AnalogyCallout>
+
+## The standard pipeline
+
+For an NLP task in 2026:
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from peft import LoraConfig, get_peft_model
+from trl import SFTTrainer
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B-Instruct",
+    load_in_4bit=True,  # QLoRA
+)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+peft_config = LoraConfig(r=16, lora_alpha=32, target_modules=["q_proj", "v_proj"])
+model = get_peft_model(model, peft_config)
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    args=TrainingArguments(
+        learning_rate=2e-4,
+        num_train_epochs=1,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+    ),
+)
+trainer.train()
+```
+
+A working LoRA fine-tune of an 8B-parameter LLM on a small task fits in this 20 lines. Most engineering effort is in data preparation, evaluation, and deployment.
+
+## Catastrophic forgetting
+
+Fine-tuning can overwrite pretrained capabilities. Symptoms:
+
+- Fine-tuned model excellent at the target task.
+- Mysteriously worse at general capabilities (reasoning, instruction following, facts).
+
+Causes:
+
+- Too-high lr (e.g., 1e-4 instead of 5e-5).
+- Too many epochs on a small dataset.
+- Full fine-tuning instead of LoRA.
+- Narrow training data without instruction-following content.
+
+Mitigations:
+
+- Use **lr 1e-5 to 5e-5** for full fine-tuning, 1e-4 to 5e-4 for LoRA.
+- Limit **epochs to 1-3** for full fine-tuning.
+- **LoRA** by construction limits the perturbation.
+- Include **instruction-following data** alongside task-specific data when fine-tuning chat models.
+
+A good fine-tune in 2026 always validates on a general capability eval (MMLU, HumanEval, etc.) alongside the target metric.
+
+<InlineQuiz
+  question="You have a 70B parameter LLM and 5,000 (instruction, response) pairs for a specialised customer service task. You have one A100 (80GB) GPU available. What's the most appropriate adaptation strategy?"
+  options={[
+    { text: "Full fine-tuning — that's the only way to get good quality." },
+    {
+      text: "QLoRA — 4-bit quantised backbone + LoRA adapters. Fits on 48-80GB GPU, doesn't catastrophically forget.",
+      correct: true,
+    },
+    { text: "Linear probing — train a small classifier on top of frozen features." },
+    { text: "Just prompt the model in-context; 5k examples is fine for in-context learning." },
+  ]}
+  explanation="A 70B model in full precision needs ~280GB just for weights — full fine-tuning on a single 80GB GPU is infeasible. QLoRA is exactly designed for this: quantise the backbone to 4-bit (saves 8×), train small LoRA adapters in higher precision. 5k examples is enough to fine-tune meaningful task-specific behaviour without catastrophic forgetting. In-context learning with 5k examples wouldn't fit in context. Linear probing is too restrictive for generation-style tasks."
+/>
+
+## When to fine-tune vs. just prompt
+
+Modern frontier models (GPT-4, Claude, Gemini) are so capable via prompting that fine-tuning isn't always needed. Decision tree:
+
+| Situation                                                    | Approach                                 |
+| ------------------------------------------------------------ | ---------------------------------------- |
+| Standard task, big model can do it via prompting             | Prompt engineering                       |
+| Standard task, big model is too expensive                    | Distill to smaller fine-tuned model      |
+| Specialised domain / format the model isn't natively good at | Fine-tune (LoRA / QLoRA)                 |
+| Need consistent output format                                | Fine-tune + structured outputs           |
+| Limited labelled data (<100)                                 | Few-shot prompting; consider RAG         |
+| Lots of labelled data (>10k)                                 | Fine-tune for quality and inference cost |
+| On-device deployment                                         | Fine-tune a small model                  |
+
+The decision is rarely "fine-tune or not" alone — it's often "prompt vs. fine-tune vs. distill, given the deployment budget and use case."
+
+## Closing for transfer learning
+
+In 2026 the foundation-model paradigm is mature. Every project starts from a pretrained model. Adaptation strategy is chosen by data size and compute budget — LoRA/QLoRA for most cases, full fine-tuning for serious work with enough data and compute, linear probing for tiny data or prototyping.
+
+Training from scratch is rare and rarely competitive. The economic reality: someone else spent millions of dollars producing the pretrained model; you should benefit from it.
+
+<InlineQuiz
+  question="A pretrained Llama-3.1-8B-Instruct works at 85% on your task via prompting. After fine-tuning with LoRA on 50k task-specific examples, it works at 91%. But you notice it's worse at unrelated reasoning tasks. What's the most likely fix?"
+  options={[
+    {
+      text: "Lower the LoRA learning rate from 3e-4 to 5e-5 and include a mix of general instruction data with the task-specific data.",
+      correct: true,
+    },
+    { text: "Train for more epochs." },
+    { text: "Use a larger LoRA rank." },
+    { text: "Switch to a smaller pretrained model." },
+  ]}
+  explanation="The 6% gain at the cost of general capabilities is classic catastrophic forgetting. Two mitigations help: lower lr (less weight update per step) and a 'replay buffer' of general instruction data mixed into training. Both preserve the model's general capabilities while still learning the specialised behaviour. More epochs / larger rank would make the problem worse. A smaller model has less general capability to lose but also less to gain."
+/>
+
+## Module 5 closing
+
+This module covered: CNNs, RNNs, residual connections, attention, the transformer, modern LLM-era refinements, scaling laws, and now pretraining + transfer. Together with Module 4 (neural network basics) and Modules 0-3 (foundations, supervised, unsupervised), the ML engineer has the structural vocabulary for the entire deep learning era.
+
+The remaining modules in Track A — NLP (Module 6), Computer Vision (Module 7), MLOps (Module 8), Capstone — apply these foundations to specific domains and to the engineering of production systems. Track B (GenAI Builder) goes deeper into LLMs, RAG, fine-tuning, and agents. Both paths build on the architectures we've covered here.

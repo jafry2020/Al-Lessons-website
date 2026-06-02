@@ -1,0 +1,329 @@
+---
+title: "Modern architectural choices: RMSNorm, RoPE, SwiGLU, GQA, MoE"
+description: "The seven or eight specific changes that separate a 2017 transformer from a 2026 frontier LLM. Each is a small win; together they're the difference between unusable and state-of-the-art."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: modern-architectural-choices
+lessonCode: "A5.6"
+estMinutes: 15
+prereqs:
+  - "A5.5 The Transformer architecture"
+  - "A4.6 Initialization, normalization, and regularization"
+objectives:
+  - "Apply each modern refinement (RMSNorm, RoPE, SwiGLU, GQA, sliding-window) and explain its motivation."
+  - "Decide between dense and Mixture-of-Experts (MoE) architectures for a given compute budget."
+  - "Read a Llama / Mistral / Mixtral config file and explain what each non-obvious knob does."
+pitfalls:
+  - "Treating these as independent. They're a co-designed stack — pre-norm + RMSNorm + RoPE + SwiGLU is the integrated default, not a pick-list."
+  - "Believing MoE 'gives you a bigger model for free.' It increases capacity per FLOP but costs memory bandwidth, communication, and engineering complexity."
+  - "Forgetting that long-context features (sliding window, YaRN, position interpolation) have ergonomic and quality trade-offs. Each is a research area, not a closed solution."
+  - "Confusing 'multi-query' (MQA) with 'grouped-query' (GQA). GQA is a generalisation; MQA is the extreme case (one group)."
+importantQuestions:
+  - question: "What does RMSNorm do differently from LayerNorm?"
+    shortAnswer: |
+      LayerNorm subtracts the mean and divides by standard deviation, then applies an affine transform. RMSNorm skips the mean subtraction and the bias — only rescales by the RMS. Faster, comparable quality at scale.
+    detailed: |
+      LayerNorm: y = γ · (x − μ) / σ + β.
+
+      RMSNorm: y = γ · x / √(mean(x²) + ε).
+
+      Differences:
+      - No mean subtraction (the empirical justification: subtracting the mean isn't always necessary for stable training).
+      - No bias term β.
+      - ~30% cheaper to compute.
+
+      Empirical result (Zhang & Sennrich, 2019): comparable or slightly better than LayerNorm in transformers, particularly at scale.
+
+      Used in Llama, Mistral, Mixtral, Gemma, PaLM. Mostly displaced LayerNorm in new LLMs by 2024.
+    pitfalls:
+      - "RMSNorm has been adopted in vision transformers too (some ViT variants). Not just an LLM thing."
+  - question: "How does RoPE encode position?"
+    shortAnswer: |
+      Rotate each query and key vector by an angle proportional to position. The dot product between Q at position i and K at position j ends up depending on (i − j) — relative position — naturally. Extrapolates to longer contexts than training.
+    detailed: |
+      Rotary Position Embedding (Su et al., 2021) treats each 2D slice of Q and K as a 2D vector to be rotated:
+
+      For position p, rotate (q_{2k}, q_{2k+1}) by angle p · θ_k where θ_k = 10000^(−2k/d) for slice k.
+
+      Apply the same rotation to K at position p. The dot product q_p · k_p' = function of (p − p') for typical rotation matrices.
+
+      Why this works:
+      - Encodes relative position by construction (the dot product depends on the difference).
+      - Generalises to longer contexts than training (with caveats).
+      - Easy to extend: increase the base 10000 → larger frequencies → longer context. Llama-3 uses base 500000 for 128k context.
+
+      Modern context extension techniques (YaRN, NTK-aware, Position Interpolation) all modify RoPE's frequencies to support contexts up to 1M+ tokens.
+
+      RoPE has displaced sinusoidal and learned positional encodings in nearly all new LLMs.
+    pitfalls:
+      - "Rotating Q and K in-place during inference is computationally cheap. The rotation matrices are precomputable."
+  - question: "What is SwiGLU and why does every modern LLM use it?"
+    shortAnswer: |
+      SwiGLU is a gated FFN variant: instead of FFN(x) = W₂ · GELU(W₁x), use FFN(x) = W₂ · (Swish(W_g x) ⊙ W_v x). The element-wise gating consistently improves perplexity at the same parameter count.
+    detailed: |
+      Standard FFN: h = W₂ · GELU(W₁ · x). One activation path.
+
+      SwiGLU FFN: h = W₂ · (Swish(W_g · x) ⊙ W_v · x). Two paths: one "value" (W_v), one "gate" (Swish(W_g)). Multiply element-wise.
+
+      To maintain parameter count, the hidden dim is reduced by ~2/3 (so 3 matrices of size 2.67d each ≈ 2 matrices of size 4d each).
+
+      Shazeer (2020) "GLU Variants Improve Transformer" showed consistent gains across many models. Adopted by PaLM, Llama, Mistral, Mixtral, Gemma, most modern LLMs.
+
+      Why it works: empirical. The theory is hand-wavy ("multiplicative gating allows more expressive function approximation"). The gain is small (~0.5% perplexity) but consistent and free at the parameter budget.
+    pitfalls:
+      - "Other gated variants exist: GeGLU (Gaussian-error gating), ReGLU. Most have similar gains. SwiGLU is the most popular."
+  - question: "What's grouped-query attention (GQA) and why is it standard now?"
+    shortAnswer: |
+      Multi-head attention has h independent Q, K, V projections. GQA shares K, V across groups of queries (one group per K/V), reducing KV-cache size and inference memory. Llama-2 uses GQA with 8 K/V groups instead of 32 (number of heads).
+    detailed: |
+      Standard MHA: each head has its own Q, K, V. KV-cache memory scales with num_heads.
+
+      Multi-Query Attention (MQA): all queries share a single K, V. Extreme; quality degrades slightly.
+
+      Grouped-Query Attention (GQA, Ainslie et al., 2023): num_kv_groups < num_heads. Each group of queries shares K, V. Intermediate between MHA and MQA.
+
+      For Llama-2-7B: 32 heads, 32 K/V groups → standard MHA.
+      For Llama-2-70B: 64 heads, 8 K/V groups → 8× smaller KV-cache.
+
+      Why it matters: KV-cache dominates inference memory at long contexts. For Llama-70B at 32k context, full MHA cache would be ~80 GB; GQA-8 cuts this to 10 GB.
+
+      Quality cost: minimal at 8 groups; noticeable below 4 groups.
+
+      Modern LLMs almost universally use GQA. Setting num_kv_groups = num_heads / 8 is a reasonable default.
+    pitfalls:
+      - "GQA's quality cost depends on the number of groups. Don't over-aggressively reduce — measure on your eval."
+  - question: "What is a Mixture-of-Experts (MoE) model?"
+    shortAnswer: |
+      Replace one big FFN with N "expert" FFNs and a gating network that routes each token to a subset (typically top-2). Total parameters increase but compute per token stays roughly constant. Used in Mixtral, GLaM, Grok.
+    detailed: |
+      Standard transformer: every token uses every FFN parameter.
+
+      MoE: replace each FFN with N (often 8) smaller FFNs. A gating network produces scores over experts; each token is routed to the top-k (k typically 1 or 2) experts. Only those experts compute the token; others are skipped.
+
+      Mixtral 8x7B: 8 experts per MoE layer; top-2 routing. Total parameters ~47B but compute per token ~ that of a 13B dense model.
+
+      Benefits:
+      - More capacity (parameters) without proportional compute increase.
+      - Each expert can specialise (in practice this happens partially).
+      - Faster inference per token than a dense model of the same parameter count.
+
+      Costs:
+      - Memory: must store all expert parameters even if not used per token.
+      - Communication: in distributed setups, tokens must be routed across devices to the right expert.
+      - Load balancing: gating can collapse to using only a few experts (auxiliary loss prevents this).
+      - Engineering complexity: more moving parts in training and inference.
+
+      In 2026: MoE has become a mainstream choice for frontier LLMs (Mixtral, GPT-4 reportedly, DeepSeek-V3, Llama-4 reportedly). Dense models still dominate sub-100B-parameter consumer use cases.
+    pitfalls:
+      - "MoE expert utilisation matters. A model that routes 80% of tokens to one expert has wasted parameters. Auxiliary load-balancing loss is required."
+  - question: "How are long contexts (100k–1M tokens) achieved?"
+    shortAnswer: |
+      Combination: RoPE with extended base (or YaRN scaling), sliding-window attention, GQA for KV-cache size, FlashAttention for memory, possibly hybrid attention patterns (local + global). Each is necessary; none alone is sufficient.
+    detailed: |
+      The challenges of long context:
+      - Attention is O(n² · d). Direct.
+      - KV-cache is O(n · d · L). Storage.
+      - Positional encoding must extrapolate or be trained at full length.
+
+      Solutions in production:
+
+      - **FlashAttention** (Dao et al., 2022). Reduces attention memory from O(n²) to O(n) by tiling. Doesn't change compute but enables training at long contexts at all.
+
+      - **GQA**. Reduces KV-cache memory by sharing K/V across query groups. ~8× smaller cache.
+
+      - **RoPE with extended base** or **YaRN scaling**. Extends positional encoding to longer than training context. Llama-3 has 128k context with base 500000.
+
+      - **Sliding window** (Mistral): each query attends to only the last W tokens. O(n · W) instead of O(n²). Loses long-range dependencies but is fast.
+
+      - **Hybrid local + global**: most layers use sliding window; a few use full attention. Compromise.
+
+      - **Ring attention, sequence parallelism**: distribute the attention computation across devices.
+
+      Frontier LLMs in 2026 combine most of these. The "we support 1M context" claim usually means a specific combination of these tricks plus careful training data curation.
+    pitfalls:
+      - "Long context doesn't mean useful at length. 'Needle in a haystack' evals show models often fail to use information deep in long context. Quality at long context lags behind raw capacity."
+---
+
+<TldrCallout>
+  The 2026 frontier LLM is the 2017 transformer plus a stack of refinements: pre-norm + RMSNorm +
+  RoPE + SwiGLU + GQA + FlashAttention + (sometimes) MoE + (often) sliding-window or hybrid
+  attention. Each is a small refinement; the combination is the difference between Llama-3 and the
+  original "Attention is All You Need." Reading a modern LLM config requires knowing all of them.
+</TldrCallout>
+
+## What's settled vs. what's still moving
+
+In 2026 the modern LLM architecture has converged on a recognisable pattern. The choices below are "stable defaults":
+
+| Component            | Modern default                                | What it replaced              |
+| -------------------- | --------------------------------------------- | ----------------------------- |
+| Residual structure   | Pre-norm                                      | Post-norm                     |
+| Normalisation        | RMSNorm                                       | LayerNorm                     |
+| FFN activation       | SwiGLU                                        | GELU                          |
+| Positional encoding  | RoPE                                          | Sinusoidal / learned absolute |
+| Attention type       | Causal self-attention                         | (Original was causal too)     |
+| Attention efficiency | FlashAttention                                | None                          |
+| KV cache compression | GQA (or MQA)                                  | Full multi-head               |
+| Long context         | RoPE base scaling + (optional) sliding window | Original max length           |
+
+What's still moving:
+
+- **MoE vs. dense.** Both viable at frontier scale.
+- **Long-context strategies.** Hybrid attention, ring attention, recurrence-augmented models.
+- **State-space alternatives.** Mamba, RWKV, hybrid transformer-SSM models.
+- **Reasoning / chain-of-thought training.** Substantial impact on architecture in practice.
+
+## RMSNorm: faster, just-as-good normalisation
+
+LayerNorm:
+y = γ · (x − μ) / σ + β
+
+RMSNorm:
+y = γ · x / √(mean(x²) + ε)
+
+RMSNorm skips mean subtraction and bias. ~30% cheaper to compute. Comparable quality at scale (Zhang & Sennrich, 2019).
+
+Used in Llama, Mistral, Gemma, PaLM. Effectively the new default.
+
+## RoPE: rotational position encoding
+
+For each pair (q*{2k}, q*{2k+1}) in Q, rotate by angle p · θ_k where p is the position and θ_k is a frequency that decreases with k.
+
+```
+Q_rotated[2k]   = Q[2k] cos(p·θ_k) − Q[2k+1] sin(p·θ_k)
+Q_rotated[2k+1] = Q[2k] sin(p·θ_k) + Q[2k+1] cos(p·θ_k)
+```
+
+Apply the same rotation to K. The dot product Q · K then depends on relative position (i − j), encoding position implicitly.
+
+Properties:
+
+- Relative-position-aware by construction.
+- Extrapolates somewhat to longer contexts than training.
+- Easy to extend: increase the "base" (default 10000) for longer context. Llama-3 uses base 500000 for 128k context.
+
+Variants (YaRN, NTK-aware, position interpolation) modify the frequencies further for extreme long context. RoPE is the dominant positional encoding in 2026 LLMs.
+
+## SwiGLU: gated FFN
+
+The classical FFN: h = W₂ · GELU(W₁ · x). One activation path.
+
+SwiGLU: h = W₂ · (Swish(W_g · x) ⊙ W_v · x). Two paths multiplied element-wise.
+
+Same parameter budget if hidden dim is reduced from 4d to ~2.67d. Empirically: 0.3–0.5% perplexity improvement consistent across model sizes.
+
+Used in PaLM, Llama, Mistral, Mixtral, Gemma. Effectively the new default.
+
+## GQA: KV-cache compression
+
+| Variant                       | num_kv_groups vs. num_heads | KV-cache size |
+| ----------------------------- | --------------------------- | ------------- |
+| MHA (multi-head attention)    | num_kv_groups = num_heads   | Full (1×)     |
+| GQA (grouped-query attention) | num_kv_groups < num_heads   | 1/g ×         |
+| MQA (multi-query attention)   | num_kv_groups = 1           | 1/h ×         |
+
+For Llama-2-70B: 64 heads, 8 K/V groups → 8× smaller KV-cache.
+
+Quality cost: minimal at 8 groups; degrades below 4. Modern LLMs almost universally use GQA.
+
+<AnalogyCallout>
+  GQA is like having a few common reference encyclopaedias shared across many readers, instead of
+  one personal encyclopaedia per reader. Quality is similar; shelf space is much smaller.
+</AnalogyCallout>
+
+## Mixture-of-Experts (MoE)
+
+Replace one big FFN with N smaller FFNs (experts) and a gating network that picks the top-k experts per token (usually k=2). Each token only computes through k experts; the others are skipped.
+
+| Model        | Experts | Top-k | Total params | Active params per token |
+| ------------ | ------- | ----- | ------------ | ----------------------- |
+| Mixtral 8x7B | 8       | 2     | 47B          | ~13B                    |
+| GLaM         | 64      | 2     | 1.2T         | 97B                     |
+| Grok-1       | 8       | 2     | 314B         | 86B                     |
+
+Pros:
+
+- Higher capacity per FLOP.
+- Each expert can specialise.
+- Inference compute per token similar to a smaller dense model.
+
+Cons:
+
+- Memory: all expert parameters must be loaded (even if unused per token).
+- Routing: communication overhead in distributed inference.
+- Load balancing: auxiliary loss required so experts don't collapse to using one.
+
+In 2026, MoE is a mainstream choice for frontier LLMs (Mixtral, GPT-4 reportedly, DeepSeek-V3, Llama 4 reportedly). For sub-100B-parameter use cases, dense models often win on engineering simplicity.
+
+## Long context: how 1M tokens happen
+
+Combining several tricks:
+
+1. **FlashAttention** (Dao et al., 2022): tile the attention computation in fast SRAM; O(n) memory.
+2. **GQA**: shrink KV-cache.
+3. **RoPE with extended base** (e.g., Llama-3 at 500000): position encoding generalises further.
+4. **YaRN / Position Interpolation**: fine-tune RoPE for new context lengths post-hoc.
+5. **Sliding window** (Mistral): each query attends only to the last W tokens — O(n · W).
+6. **Hybrid attention**: most layers sliding-window; a few global.
+7. **Sequence / context parallel**: distribute the attention computation across devices.
+
+Each is necessary; combinations vary. The "we support 1M context" claim is always a specific combination of these.
+
+Quality caveat: long context capacity ≠ long context utility. "Needle in a haystack" evals routinely show that models fail to use information deep in long contexts. Raw capacity has outpaced effective long-range reasoning quality.
+
+## Reading a modern LLM config
+
+A Llama-3-8B config in 2026:
+
+```python
+config = {
+    "model_dim": 4096,
+    "intermediate_dim": 14336,      # SwiGLU FFN, ~3.5× model_dim
+    "num_layers": 32,
+    "num_attention_heads": 32,
+    "num_kv_heads": 8,              # GQA: 4 query heads per K/V head
+    "vocab_size": 128256,
+    "max_position": 8192,           # extendable via RoPE base
+    "rope_base": 500000,            # extended for long context
+    "norm_eps": 1e-5,               # RMSNorm epsilon
+    "hidden_act": "silu",           # = Swish, part of SwiGLU
+    "norm_type": "rms",
+}
+```
+
+Every non-obvious knob is one of the modern refinements covered above.
+
+<InlineQuiz
+  question="You inherit a transformer training script that uses LayerNorm, post-norm residual, GELU FFN, sinusoidal positional encoding, full MHA, and no FlashAttention. What's the most impactful single change?"
+  options={[
+    { text: "Switch to RMSNorm." },
+    {
+      text: "Switch from post-norm to pre-norm — without this, training at depth requires careful warmup; with it, training stabilises across model sizes.",
+      correct: true,
+    },
+    { text: "Switch GELU to SwiGLU." },
+    { text: "Add FlashAttention." },
+  ]}
+  explanation="Pre-norm vs. post-norm has the biggest impact on training stability, especially at depth. Post-norm transformers need careful warmup; pre-norm is the modern default precisely because it eliminates this fragility. RMSNorm, SwiGLU, and FlashAttention are each smaller per-component wins. FlashAttention is huge for memory at long context but doesn't change quality. Once pre-norm is in place, the other refinements compound."
+/>
+
+## Closing for modern architectural choices
+
+The transformer architecture in 2026 is a specific stack of refinements over the 2017 original. Pre-norm + RMSNorm + RoPE + SwiGLU + GQA + FlashAttention is the converged baseline. MoE is the major capacity-vs-compute trade. Long context is achieved through multiple combined tricks.
+
+Each individual change is a 0.3–1% improvement; together they're qualitatively different.
+
+The next two lessons — scaling laws (A5.7) and pretraining + transfer (A5.8) — move from architecture to the broader recipe of training large models and deploying them on downstream tasks. Architecture is mostly settled; data, scale, and training are where current frontier work happens.
+
+<InlineQuiz
+  question="A 70B-parameter MoE model with 8 experts (top-2 routing) costs roughly how much compute per token compared to a 13B dense model?"
+  options={[
+    { text: "About the same — that's the point of MoE.", correct: true },
+    { text: "70/13 ≈ 5× more — parameters matter for compute." },
+    { text: "About 8× more (one for each expert)." },
+    { text: "Less compute but more memory only." },
+  ]}
+  explanation="In MoE with top-2 routing, each token computes through 2 of 8 experts plus the shared attention. The active parameters per token are ~2/8 of the FFN params + all attention params, which approximates a 13B dense model in compute. Memory is much higher (must load all expert parameters); inference cost per token is similar. This is exactly the MoE selling point: more capacity per FLOP."
+/>

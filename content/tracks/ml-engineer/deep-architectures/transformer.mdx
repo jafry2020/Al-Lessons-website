@@ -1,0 +1,293 @@
+---
+title: "The Transformer architecture"
+description: "Multi-head attention + feedforward + residual + norm, stacked. The single architectural template that powers GPT, BERT, Llama, Stable Diffusion, ViT, AlphaFold — most of modern AI."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: transformer
+lessonCode: "A5.5"
+estMinutes: 14
+prereqs:
+  - "A5.4 The attention mechanism"
+  - "A5.3 Residual connections and the depth revolution"
+objectives:
+  - "Draw a transformer block from memory: attention, residual, norm, FFN, residual, norm."
+  - "Explain why positional encodings are needed and the difference between absolute, learned, and rotary (RoPE)."
+  - "Distinguish encoder-only (BERT), decoder-only (GPT), and encoder-decoder (T5) transformer families."
+pitfalls:
+  - "Confusing the transformer paper's architecture with what modern LLMs use. Pre-norm, RoPE, RMSNorm, SwiGLU, GQA — all came later."
+  - "Treating positional encoding as 'just an embedding.' RoPE rotates Q and K, changing how scores are computed."
+  - "Counting only attention parameters. FFN layers dominate parameter count; attention dominates compute."
+  - "Believing 'decoder-only' is fundamentally different from 'encoder-only.' They differ in the attention mask and the training objective; the architecture is essentially the same."
+importantQuestions:
+  - question: "What does a transformer block contain?"
+    shortAnswer: |
+      Two sub-layers: multi-head attention and a position-wise FFN. Each is wrapped with a residual connection and normalisation. Modern blocks: x → norm → attn → +x → norm → FFN → +y.
+    detailed: |
+      The two sub-layers:
+
+      1. **Multi-head self-attention** (A5.4): each position attends to all positions; output mixes information across the sequence.
+
+      2. **Position-wise feedforward network (FFN)**: applied identically to each position. Typically: Linear(d → 4d) → activation (GELU or SwiGLU) → Linear(4d → d). 4d is the "FFN expansion factor."
+
+      Each sub-layer is wrapped: x → LayerNorm → sublayer → + x (pre-norm) or x → sublayer → + x → LayerNorm (post-norm). Pre-norm dominates modern LLMs.
+
+      A complete transformer "block" = attention sub-layer + FFN sub-layer. Stack N blocks to get the model. Llama-2-7B has N=32; Llama-2-70B has N=80.
+
+      Most parameters live in the FFN (W_1 and W_2 are d × 4d each). Most compute is in the attention's Q Kᵀ (O(n²d) for sequence length n).
+    pitfalls:
+      - "Position-wise means 'applied independently to each position' — not 'aware of position.' Positional information enters via positional encodings."
+  - question: "Why do transformers need positional encodings?"
+    shortAnswer: |
+      Attention is permutation-invariant: shuffling the input tokens gives the same output (just shuffled). Position must be encoded explicitly. Common choices: absolute sinusoidal, learned, and RoPE.
+    detailed: |
+      A transformer's attention treats inputs as a bag of vectors — position is not in the formula. Without explicit encoding, "the cat sat" and "sat cat the" would produce the same outputs (permuted accordingly).
+
+      Standard approaches:
+
+      **Absolute sinusoidal** (original transformer): add a sin/cos vector with frequencies geometrically spaced. Each position gets a unique vector. Generalises somewhat to longer sequences than training.
+
+      **Learned absolute**: each position has a learnable embedding. Used in BERT, GPT-2. Doesn't extrapolate beyond training length.
+
+      **Rotary Position Embedding (RoPE)** (Su et al., 2021): rotate Q and K vectors by an angle proportional to position. Encodes relative positions naturally; extrapolates well. Used in Llama, Mistral, PaLM, most modern LLMs.
+
+      **ALiBi** (Press et al., 2021): add a bias to attention scores that linearly decreases with distance. Simple, no learned parameters, decent extrapolation. Used in BLOOM, some Mosaic models.
+
+      In 2026 for new LLMs: RoPE is the dominant choice. ALiBi is a credible alternative for long-context extrapolation.
+    pitfalls:
+      - "RoPE's frequency 'base' (default 10000) determines how long the model can extrapolate. Increasing base extends context (used in long-context Llama variants)."
+  - question: "What's the difference between encoder-only, decoder-only, and encoder-decoder?"
+    shortAnswer: |
+      Encoder-only (BERT): bidirectional self-attention, no causal mask, trained with masked language modelling. Decoder-only (GPT): causal self-attention, trained autoregressively. Encoder-decoder (T5): both, plus cross-attention between them.
+    detailed: |
+      **Encoder-only** (BERT, RoBERTa). Bidirectional attention — every token sees every other. Trained with masked language modelling (predict 15% randomly masked tokens). Strong at understanding tasks (classification, sequence labelling, sentiment); weak at generation.
+
+      **Decoder-only** (GPT family, Llama, Mistral, most modern LLMs). Causal self-attention only. Trained on next-token prediction. Strong at both understanding (via prompting) and generation. The dominant architecture for LLMs in 2026.
+
+      **Encoder-decoder** (T5, BART, original Transformer). Encoder is bidirectional; decoder is causal; cross-attention connects them. Used in translation, summarisation, sequence-to-sequence tasks. Still common in some research and specialised production systems.
+
+      In 2026, decoder-only LLMs have largely subsumed the other categories. GPT-style models can do classification (via prompting), translation (via prompting), generation, and reasoning. The single architecture covers everything via task description in natural language.
+    pitfalls:
+      - "BERT-style encoders are still strong for cheap classification at fixed input length. Don't migrate to decoder-only just for fashion."
+  - question: "How does a transformer scale with model size?"
+    shortAnswer: |
+      Parameter count grows linearly with depth (N blocks) and quadratically with width (d²). Compute scales the same way per token, plus attention is O(n²d) in sequence length. Memory scales with depth + activations + KV-cache.
+    detailed: |
+      For a transformer with N layers, hidden dim d, FFN dim 4d, sequence length n:
+
+      Parameters per block:
+      - Attention: 4 · d² (Q, K, V, output projections).
+      - FFN: 2 · 4d² + d (W_1 and W_2 are d × 4d).
+      - LayerNorms: ~2d.
+      - Total per block ≈ 12d².
+
+      Total parameters: N · 12d² + embeddings + output. For Llama-2-7B: N=32, d=4096 → 12 · 32 · 4096² ≈ 6.4B (plus embeddings ≈ 0.5B = 6.9B; rounded to 7B in marketing).
+
+      Compute per token (forward): N · (4d² + 8d² + 2 · n · d) for the FFN, attention QKVO projections, and attention computation. For training (forward+backward+optimizer): ~6× this.
+
+      Scaling laws (A5.7) tell you the compute-optimal ratio of N (data), C (compute), and parameters.
+    pitfalls:
+      - "Attention compute is O(n² · d). For n in the 100k+ range, attention dominates compute even for big models."
+  - question: "How do modern LLMs differ from the original 2017 transformer?"
+    shortAnswer: |
+      Major changes: pre-norm (not post-norm), RMSNorm (not LayerNorm), SwiGLU FFN (not GELU MLP), RoPE positional encoding (not absolute sinusoidal), grouped-query attention (not full multi-head), longer context via FlashAttention + sliding windows.
+    detailed: |
+      The 2017 paper's architecture vs. 2026 frontier LLM:
+
+      | Component | 2017 (original) | 2026 (Llama-3 / Mistral) |
+      | --------- | --------------- | ------------------------ |
+      | Residual | Post-norm | Pre-norm |
+      | Normalisation | LayerNorm | RMSNorm |
+      | FFN activation | ReLU then GELU (later BERT) | SwiGLU |
+      | Positional encoding | Absolute sinusoidal | RoPE |
+      | Attention | Full multi-head | Grouped-query attention (GQA) |
+      | Attention efficient impl | None | FlashAttention |
+      | Context length | 512 | 32k – 1M+ |
+      | Parameters | ~65M | 7B – 405B+ |
+      | Training compute | ~1 GPU-day | 10⁴ – 10⁷ GPU-days |
+
+      Each individual change is a small refinement; together they make a fundamentally different system. Module 5.6 covers these modern choices in depth.
+    pitfalls:
+      - "The architecture is mature. Most of the work in modern LLMs goes into data, training, and inference engineering — not new attention variants."
+---
+
+<TldrCallout>
+  A transformer block has two sub-layers: multi-head self-attention and a position-wise FFN, each
+  wrapped in residual + norm. Stack N of them, add positional encoding to the embedding layer, and
+  you have the architecture that powers BERT, GPT, Llama, ViT, Stable Diffusion (most of),
+  AlphaFold, and most of modern AI. The original 2017 design has been refined (pre-norm, RoPE,
+  RMSNorm, GQA, FlashAttention) but the template hasn't been replaced.
+</TldrCallout>
+
+## The transformer block
+
+The fundamental unit:
+
+```
+x → LayerNorm → Multi-head attention → + x
+       ↓ (this is now y)
+y → LayerNorm → FFN → + y
+       ↓
+output
+```
+
+Two sub-layers. Each:
+
+1. Norm the input.
+2. Apply the sub-layer (attention or FFN).
+3. Add the original input (residual).
+
+The residual + norm wrapping is what makes deep stacks work (A5.3 + A4.6).
+
+Stack N of these blocks. Add input embeddings + positional encoding at the bottom, an output projection at the top, and you have a complete transformer.
+
+## What's inside each sub-layer
+
+**Multi-head attention (A5.4):**
+
+- Project input X to Q, K, V via learned matrices.
+- Split into h heads, each with dim d/h.
+- Compute attention for each head independently.
+- Concatenate and project.
+
+**Position-wise FFN:**
+
+- Linear(d → 4d).
+- Activation (GELU in classical, SwiGLU in modern).
+- Linear(4d → d).
+
+The FFN is "position-wise" because the same MLP is applied independently to each position's representation. No interaction across positions — that's the attention's job.
+
+Most parameters live in the FFN (2 × 4d²). Most compute on long sequences lives in the attention (O(n² · d)).
+
+## Positional encoding
+
+Attention is permutation-invariant: shuffle the tokens and the output shuffles the same way. Without explicit positional information, the model has no notion of order.
+
+Three main approaches:
+
+| Method              | Where it lives                | Used in                                |
+| ------------------- | ----------------------------- | -------------------------------------- |
+| Absolute sinusoidal | Added to input embeddings     | Original transformer                   |
+| Learned absolute    | Added to input embeddings     | BERT, GPT-2                            |
+| Rotary (RoPE)       | Rotates Q and K               | Llama, Mistral, PaLM, most modern LLMs |
+| ALiBi               | Adds bias to attention scores | BLOOM, some Mosaic                     |
+
+**RoPE** rotates each Q and K vector by an angle proportional to position. The attention score between positions i and j ends up depending on (i − j) — relative position — naturally. Extrapolates somewhat to longer sequences than training; modern long-context LLMs increase RoPE's frequency base to extend further.
+
+**ALiBi** adds a position-dependent bias: scores[i, j] -= m · |i − j| with a per-head slope m. No learned parameters; extrapolates well.
+
+In 2026 for new LLM training: RoPE is the dominant choice. The original sinusoidal encoding is mostly historical.
+
+## Three families: encoder-only, decoder-only, encoder-decoder
+
+| Family          | Attention          | Trained with          | Examples            | Best for                                        |
+| --------------- | ------------------ | --------------------- | ------------------- | ----------------------------------------------- |
+| Encoder-only    | Bidirectional      | Masked LM             | BERT, RoBERTa       | Classification, retrieval, NER                  |
+| Decoder-only    | Causal             | Next-token prediction | GPT, Llama, Mistral | Generation, reasoning, everything via prompting |
+| Encoder-decoder | Both (sep modules) | Sequence-to-sequence  | T5, BART            | Translation, summarisation                      |
+
+In 2026, decoder-only LLMs have absorbed most use cases. A GPT-style model can do classification (prompt + read first-token logits), translation (prompt with source + "Translate:"), generation, summarisation, reasoning. The single architecture covers everything via task-as-prompt.
+
+BERT remains the choice for high-throughput classification at fixed input lengths (often cheaper). T5 still appears in specialised settings (some Google products, research).
+
+<AnalogyCallout>
+  The transformer is like a Lego brick. Stacking attention + FFN blocks gives you BERT
+  (classification), GPT (generation), ViT (vision), Whisper (speech), AlphaFold (protein structure),
+  Stable Diffusion's UNet (diffusion). The brick is the same; what varies is the data, the training
+  objective, and the embedding scheme.
+</AnalogyCallout>
+
+## A full transformer, top to bottom
+
+```
+Input tokens → Embedding lookup → Add positional encoding
+       ↓
+Block 1: Pre-LN → Attention → Residual → Pre-LN → FFN → Residual
+       ↓
+Block 2: same
+       ↓
+...
+       ↓
+Block N: same
+       ↓
+Final LayerNorm
+       ↓
+Output projection (to vocabulary)
+       ↓
+Softmax → token probabilities
+```
+
+For Llama-2-7B: N=32 blocks, d=4096 (model dim), FFN dim ~11000 (SwiGLU is leaner than 4x), 32 attention heads, 8 KV groups (GQA), vocab ~32k, RoPE positional, RMSNorm, SwiGLU.
+
+The whole forward pass on one token is a stack of matrix multiplies and a softmax at the end. Conceptually simple; the engineering to make it fast at 7B–405B parameters is the hard part.
+
+## Why the same architecture for everything
+
+Vision Transformer (ViT) splits an image into 16×16 patches, projects each to a token, and runs a standard transformer encoder. Same blocks; different embedding.
+
+Audio Transformers (Whisper) convert spectrograms to tokens via 1D conv stem; same blocks.
+
+DiT (Diffusion Transformer) replaces U-Net in diffusion with transformer blocks; same blocks.
+
+The transformer "block" turned out to be a generic sequence-processing primitive that works on anything you can tokenise. This generality is one of the reasons foundation models (Module 6+) generalise across modalities.
+
+<InlineQuiz
+  question="Which of these statements about transformer architectures is FALSE in 2026?"
+  options={[
+    { text: "Decoder-only models dominate frontier LLM development." },
+    {
+      text: "Encoder-only models (BERT-style) are still useful for fixed-length classification at high throughput.",
+    },
+    {
+      text: "Encoder-decoder models (T5) are still widely used in production for general-purpose tasks.",
+      correct: true,
+    },
+    { text: "RoPE is the default positional encoding for new LLM training." },
+  ]}
+  explanation="Encoder-decoder models (T5, BART) appear in specialised settings (some Google products, some research) but have been largely subsumed by decoder-only LLMs for general-purpose work — you can prompt GPT/Llama for translation, summarisation, classification. The other three statements are all true in 2026."
+/>
+
+## Parameter and compute scaling
+
+For a transformer with N layers, hidden dim d, FFN factor 4, sequence length n:
+
+- **Parameters per block** ≈ 12d² (4d² for attention proj, 8d² for FFN).
+- **Total parameters** ≈ 12 · N · d² (plus embeddings, output head).
+- **Compute per token (forward)** ≈ 24 · N · d² (FFN dominates) + 2 · N · n · d (attention).
+- **Compute for training** ≈ 6 × forward (forward + backward + optimizer).
+
+For typical models:
+
+| Model         | N   | d     | Params | Train FLOPs (estimated) |
+| ------------- | --- | ----- | ------ | ----------------------- |
+| GPT-2 (small) | 12  | 768   | 124M   | ~10²⁰                   |
+| BERT-large    | 24  | 1024  | 340M   | ~10²¹                   |
+| GPT-3         | 96  | 12288 | 175B   | ~10²³                   |
+| Llama-2-7B    | 32  | 4096  | 7B     | ~10²²                   |
+| Llama-2-70B   | 80  | 8192  | 70B    | ~10²⁴                   |
+
+The scaling laws (A5.7) tell you the compute-optimal ratio of parameters to training data.
+
+<InlineQuiz
+  question="You're designing a transformer for image classification (ViT-style) on 224×224 RGB images. Each 16×16 patch becomes a token. How many tokens does each image become?"
+  options={[
+    { text: "224 (one per row)" },
+    { text: "196 (14 × 14 patches; 224 / 16 = 14)", correct: true },
+    { text: "16 (one per patch row)" },
+    { text: "512 (matches transformer max length)" },
+  ]}
+  explanation="224 / 16 = 14 patches per dimension; 14 × 14 = 196 patches total. Each patch becomes one token (after projecting 16×16×3 → d). ViT typically adds a [CLS] token for classification, making 197 tokens. The sequence length determines attention's O(n²) cost — 196 is manageable, but at 1024×1024 images with 16×16 patches you'd have 4096 tokens and attention dominates."
+/>
+
+## The architecture is mature
+
+In 2026 the transformer architecture has converged. Modern LLM training scripts are remarkably similar across organisations. The interesting variation is in:
+
+- **Data** — what tokens you train on, how many, in what mix (Module 6, 8).
+- **Scaling** — choosing parameter count and training tokens (A5.7).
+- **Inference efficiency** — quantisation, KV-cache, batching (Module 8).
+- **Modern refinements** — RMSNorm vs LayerNorm, SwiGLU vs GELU, GQA vs MHA, RoPE base, sliding window length (A5.6).
+
+The next lesson goes through these modern refinements in detail.

@@ -1,0 +1,283 @@
+---
+title: "Loss functions for neural networks"
+description: "The function gradient descent is descending. Pick wrong and even a perfect optimiser produces a useless model. The losses you'll actually use in 2026 and what each implicitly assumes."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: loss-functions
+lessonCode: "A4.4"
+estMinutes: 13
+prereqs:
+  - "A4.3 Backpropagation in detail"
+  - "A2.2 Logistic regression and the sigmoid"
+objectives:
+  - "Match a loss function to its task: regression, classification, ranking, embedding, multi-task."
+  - "Recognise the probabilistic interpretation of each loss (MLE under what noise / likelihood assumption?)."
+  - "Pick contrastive vs. triplet vs. InfoNCE for representation learning, and know what each requires."
+pitfalls:
+  - "Combining log and softmax manually. Use the framework's combined op (`CrossEntropyLoss`, `log_softmax`) for numerical stability."
+  - "Treating the loss as the metric. Cross-entropy is what you train; accuracy is what you report."
+  - "Equal-weighting multi-task losses without thought. Different scales mean one task dominates the gradient."
+  - "Using MSE on bounded probabilities. Squashes gradients near the boundary."
+  - "Reading 'Huber loss' as 'always more robust.' It's a hyperparameter (δ) you have to tune."
+importantQuestions:
+  - question: "Which loss for which task?"
+    shortAnswer: |
+      Regression → MSE (squared error) or MAE/Huber for outlier robustness. Binary classification → BCE with logits. Multi-class → cross-entropy. Ordinal → ordinal regression loss. Embedding → contrastive / triplet / InfoNCE.
+    detailed: |
+      The default mapping in 2026:
+
+      | Task | Default loss |
+      | ---- | ------------ |
+      | Real-valued regression | MSE (with logits or linear output) |
+      | Robust regression | Huber or MAE |
+      | Binary classification | BCEWithLogitsLoss |
+      | Multi-class classification | CrossEntropyLoss (combines log_softmax + NLL) |
+      | Multi-label (independent yes/no per class) | BCEWithLogitsLoss with K outputs |
+      | Ordinal | Cross-entropy with monotone constraints, or ordinal regression loss |
+      | Embedding similarity | Contrastive, triplet, InfoNCE |
+      | Sequence-to-sequence | Token-level cross-entropy |
+      | Object detection | Combined classification + bounding box regression |
+      | Segmentation | Pixel-wise cross-entropy + Dice / IoU |
+
+      "Default" means "what to start with"; for many tasks there are specialised improvements but they rarely beat the default by much without careful tuning.
+    pitfalls:
+      - "Pick the loss before the model. The loss defines what 'better' means; the model can't compensate for the wrong target."
+  - question: "Why is cross-entropy the right loss for classification?"
+    shortAnswer: |
+      It's the negative log-likelihood of the predicted class under the true label. Minimising it is maximum-likelihood estimation. Gradients are well-shaped (large for wrong predictions, small for correct ones) — exactly what you want.
+    detailed: |
+      For a single example with true class k, predicted distribution p:
+
+      L = −log p_k
+
+      Confident wrong predictions (p_k → 0) have unbounded loss; confident correct predictions (p_k → 1) have zero loss. Gradient w.r.t. logits z is (p − one_hot(k)) — a clean signal that pushes the right class up and others down.
+
+      Compare to MSE: squared error on labels {0,1} gives weak gradients near correct predictions and bounded gradients when wildly wrong. Cross-entropy gives the optimiser a much sharper signal.
+
+      The probabilistic story: cross-entropy is the MLE under a categorical likelihood. MSE corresponds to Gaussian likelihood, which doesn't fit binary or categorical targets.
+    pitfalls:
+      - "Cross-entropy as 'log loss' or 'NLL loss' depending on library — same thing. PyTorch's `CrossEntropyLoss` expects raw logits and an integer class label."
+  - question: "When does MSE beat alternatives for regression?"
+    shortAnswer: |
+      When errors are roughly Gaussian. For outlier-heavy data, use Huber (Gaussian core, linear tails) or MAE. For bounded outputs, MSE works but consider the loss surface near the boundary.
+    detailed: |
+      MSE = (1/n) Σ (y − ŷ)². Symmetric, differentiable, convex. The MLE under Gaussian noise.
+
+      Failure modes:
+      - **Outliers**: one bad point with large residual dominates the loss. Use Huber (quadratic for small errors, linear beyond threshold δ) or MAE.
+      - **Heavy-tailed targets**: same as outliers — switch to a robust loss.
+      - **Multiplicative noise**: log-transform the target and use MSE on log-space (geometric residuals).
+      - **Skewed targets**: MSE biases toward fitting the mean; for skewed data the median (MAE) is sometimes more useful.
+
+      For deep regression specifically, MSE is fine when the output has roughly normal residuals on a held-out set. If residuals are visibly non-Gaussian, switch.
+    pitfalls:
+      - "Huber loss has a hyperparameter δ (where the quadratic transitions to linear). Default in sklearn is 1.35 × σ; tune for your data."
+  - question: "What's contrastive learning and where is it used?"
+    shortAnswer: |
+      Train an encoder so that similar pairs (positive pairs) have close embeddings and dissimilar pairs (negative pairs) have far embeddings. The basis for modern self-supervised representation learning: CLIP, SimCLR, sentence-transformers.
+    detailed: |
+      Two main flavours:
+
+      **Pairwise contrastive loss** (Hadsell, Chopra, LeCun, 2006):
+
+      L = y · d² + (1−y) · max(0, m − d)²
+
+      where d is the embedding distance, y is 1 for similar pairs / 0 for dissimilar, m is the margin. Pushes positive pairs together and negative pairs at least m apart.
+
+      **InfoNCE / NT-Xent** (the dominant modern form):
+
+      L = −log [exp(sim(z_a, z_p) / τ) / Σ_{neg} exp(sim(z_a, z_neg) / τ)]
+
+      For each anchor z_a, treat one positive z_p as the "correct class" and many negatives as wrong classes. Cross-entropy over similarities. The negatives are usually other examples in the batch.
+
+      This is what SimCLR, CLIP, and sentence-transformers use. The temperature τ scales the similarities; too low and gradients explode, too high and gradients vanish.
+    pitfalls:
+      - "Hard negative mining (using *useful* negatives, not random ones) is the main lever in contrastive learning. Random negatives are usually too easy."
+  - question: "When should you use triplet loss vs. contrastive?"
+    shortAnswer: |
+      Triplet: each example is an (anchor, positive, negative) triple, loss = max(0, d(a,p) − d(a,n) + margin). Used in face recognition (FaceNet). InfoNCE has largely replaced it in modern SSL.
+    detailed: |
+      Triplet loss enforces a relative ordering: anchor closer to positive than to negative, by at least margin m.
+
+      L = max(0, ‖f(a) − f(p)‖² − ‖f(a) − f(n)‖² + m)
+
+      Strengths:
+      - Conceptually clear.
+      - Used in FaceNet (2015) and many older metric-learning papers.
+
+      Weaknesses:
+      - Sensitive to triplet selection. Easy triplets give zero loss and no gradient; only hard / semi-hard triplets contribute.
+      - InfoNCE-style losses use many negatives per anchor (one positive vs. all other batch examples), which is more efficient.
+
+      In 2026 production: InfoNCE for new SSL pipelines; triplet only for legacy systems or when InfoNCE's batch-based negatives don't fit.
+    pitfalls:
+      - "Triplet loss requires margin tuning. Too small and the loss saturates instantly; too large and gradients are unstable."
+  - question: "How do you handle multi-task losses?"
+    shortAnswer: |
+      Sum (or weighted sum) of per-task losses. The weights matter — different scales mean one task dominates. Use learned task weighting (uncertainty weighting) for hard cases.
+    detailed: |
+      A multi-task network produces multiple outputs and incurs multiple losses:
+
+      L_total = λ_1 · L_1 + λ_2 · L_2 + ... + λ_T · L_T
+
+      The λ's are hyperparameters. If L_1 is much larger in scale than L_2, even with λ_1 = λ_2 = 1 the gradient is dominated by L_1.
+
+      Approaches:
+      - **Hand-tuned weights.** Sweep on validation. Common; tedious.
+      - **Uncertainty weighting** (Kendall, Gal, Cipolla, 2018). Learn a noise parameter per task and weight inversely. Works well when task scales are very different.
+      - **GradNorm** (Chen et al., 2018). Adjust weights to equalise gradient norms.
+      - **Pareto / multi-objective**. When tasks genuinely trade off, optimise a Pareto front rather than a single weighted sum.
+
+      For most production systems, hand-tuned weights with validation sweeps are fine. Reach for fancier methods when you have many tasks (>3) and the trade-offs matter.
+    pitfalls:
+      - "Auxiliary losses (regularisers, consistency losses) usually get small weights (0.01–0.1). The main task loss should dominate."
+---
+
+<TldrCallout>
+  The loss function is what gradient descent descends. Pick wrong and a perfect optimiser produces a
+  useless model. For most tasks the default is settled: MSE for regression, cross-entropy for
+  classification, InfoNCE for self-supervised embedding learning. The interesting cases —
+  multi-task, ordinal, custom — are about choosing the loss that matches what you actually care
+  about.
+</TldrCallout>
+
+## The loss is the target
+
+A neural network can't "know what you want." It minimises whatever loss you give it. Pick the loss that aligns with what you actually care about:
+
+- Want predictions close to a real number? MSE.
+- Want a calibrated probability? Cross-entropy.
+- Want embeddings where similarity = closeness? InfoNCE.
+- Want fewer false positives than false negatives? Weight the cross-entropy or pick a cost-sensitive variant.
+
+If the loss doesn't match the goal, training will succeed and the model will fail.
+
+## The default mapping in 2026
+
+| Task                        | Loss                              | One-liner                       |
+| --------------------------- | --------------------------------- | ------------------------------- | ----- | ---------------------------- |
+| Regression (Gaussian noise) | MSE                               | (ŷ − y)²                        |
+| Regression (outliers)       | Huber                             | quadratic core, linear tails    |
+| Robust regression           | MAE (L1)                          |                                 | ŷ − y | , less sensitive to outliers |
+| Binary classification       | BCEWithLogitsLoss                 | sigmoid + cross-entropy, stable |
+| Multi-class                 | CrossEntropyLoss                  | log_softmax + NLL, stable       |
+| Multi-label                 | BCEWithLogitsLoss per output      | independent yes/no per class    |
+| Embedding similarity (SSL)  | InfoNCE / NT-Xent                 | softmax over similarities       |
+| Embedding (legacy)          | Triplet                           | margin between (a,p) and (a,n)  |
+| Object detection            | CE + bbox regression (e.g., GIoU) | combined                        |
+| Segmentation                | Per-pixel CE + Dice               | shape + count                   |
+
+For "what loss should I use?" with a standard task, this table is essentially the answer.
+
+## The probabilistic view
+
+Every common loss corresponds to a maximum-likelihood estimator under some noise assumption:
+
+| Loss          | Likelihood model                     |
+| ------------- | ------------------------------------ |
+| MSE           | Gaussian: y \| ŷ ~ N(ŷ, σ²)          |
+| MAE           | Laplace: y \| ŷ ~ Laplace(ŷ, b)      |
+| BCE           | Bernoulli: y \| p ~ Bernoulli(p)     |
+| Cross-entropy | Categorical: y \| p ~ Categorical(p) |
+| Huber         | Robustified Gaussian                 |
+
+This framing matters for two reasons:
+
+1. **It tells you when the loss is mismatched.** If residuals are heavy-tailed, MSE assumes Gaussian and will be pulled by outliers. The loss to switch to is dictated by the actual residual distribution.
+2. **It tells you what the model is implicitly computing.** A network trained with BCE outputs calibrated probabilities (in theory) because it's MLE under a Bernoulli likelihood. A network trained with MSE on binary labels is doing something less interpretable.
+
+<AnalogyCallout>
+  Picking a loss is like picking a ruler. MSE measures lengths assuming everything is
+  Gaussian-noisy. MAE measures with a robust ruler that ignores outliers. Cross-entropy measures
+  surprise in bits. The model uses whatever ruler you give it; the ruler determines what shape the
+  model will try to be.
+</AnalogyCallout>
+
+## Numerical stability traps
+
+Three pitfalls that destroy training silently:
+
+**1. log(softmax(z)) overflow.** softmax has exp() which overflows for large logits. log(softmax(z)) computed naively gives NaN. The fix: `log_softmax(z)` uses the log-sum-exp trick to stay stable.
+
+**2. sigmoid + BCE separately.** Same issue: sigmoid(large) → 1 exactly; log(1 − 1) = -inf. Use `BCEWithLogitsLoss`, which combines the two stably.
+
+**3. Division by zero in custom losses.** Any division should have an epsilon: x / (denom + 1e-8). Same for log: log(p + 1e-8).
+
+PyTorch's built-in combined losses (`CrossEntropyLoss`, `BCEWithLogitsLoss`, `NLLLoss`) are stable. Use them. If you have to write a custom loss, test on extreme inputs and add epsilons where needed.
+
+## Contrastive losses: the modern representation-learning toolkit
+
+For learning embeddings without labels (self-supervised learning, SSL), the modern default is **InfoNCE** (van den Oord et al., 2018):
+
+For each anchor z_a in a batch, designate one positive z_p (same image under augmentation, paired image-text, etc.) and treat all other batch examples as negatives:
+
+L = -log [exp(sim(z_a, z_p) / τ) / Σ_{i in batch} exp(sim(z_a, z_i) / τ)]
+
+τ is the temperature (typically 0.05-0.2). Lower τ sharpens the distribution; too low and gradients explode.
+
+This is what CLIP, SimCLR, MoCo, and sentence-transformers all use. The thing they vary is how positives are constructed:
+
+| Method                | Positive pair construction               |
+| --------------------- | ---------------------------------------- |
+| SimCLR                | Two augmentations of the same image      |
+| CLIP                  | Image and its caption                    |
+| Sentence-transformers | Sentence pairs with related semantics    |
+| MoCo                  | Same image, current vs. momentum encoder |
+
+In 2026 this single loss has eaten most of representation learning. Triplet loss appears in older systems (FaceNet); InfoNCE replaced it.
+
+<InlineQuiz
+  question="You're building an image-to-text retrieval system. You train with triplet loss on (anchor image, positive caption, negative caption) triples and find training is slow and unstable. What's the most useful change?"
+  options={[
+    { text: "Use a deeper model." },
+    {
+      text: "Switch to InfoNCE: use all other captions in the batch as negatives instead of one selected negative. More gradient signal per anchor.",
+      correct: true,
+    },
+    { text: "Reduce the batch size." },
+    { text: "Add dropout to the embedding head." },
+  ]}
+  explanation="Triplet loss with one negative per anchor gives sparse gradient signal — most triplets are 'easy' and contribute zero loss. InfoNCE uses every other batch example as a negative, generating dense signal: one positive vs. 255 negatives in a batch of 256. This is why CLIP, SimCLR, and modern retrieval systems use InfoNCE instead of triplet. The 'in-batch negatives' trick is the practical key."
+/>
+
+## Multi-task losses
+
+When a network has multiple outputs (a detector predicting class + bounding box; a multi-modal model predicting text + image), the total loss combines them:
+
+L = λ_1 · L_class + λ_2 · L_bbox + ...
+
+The λ weights determine which task dominates the gradient. If L_class is 10 and L_bbox is 0.01, with λ_1 = λ_2 = 1, the network mostly learns classification and ignores bounding boxes.
+
+Three approaches:
+
+- **Tune by hand.** Sweep on validation. Slow but reliable.
+- **Uncertainty weighting** (Kendall et al., 2018). Each task has a learnable noise parameter, and the weights become inversely proportional. Works well when tasks have wildly different scales.
+- **GradNorm.** Dynamically adjust weights to equalise gradient magnitudes.
+
+For most production cases, hand-tuned weights are fine. The exception is when you have 5+ tasks or when one task's scale shifts during training (e.g., classification accuracy plateaus before bounding box error).
+
+## Practical loss tips
+
+| Tip                                                             | Why                                                  |
+| --------------------------------------------------------------- | ---------------------------------------------------- |
+| Always use stable combined ops (BCEWithLogitsLoss, log_softmax) | Numerical stability                                  |
+| Watch loss curves per-component for multi-task                  | One task may dominate                                |
+| Train on the loss, evaluate on the metric                       | Loss is a proxy for the metric                       |
+| Add label smoothing for classification                          | Reduces overconfidence; small but consistent gain    |
+| Class weighting for imbalanced data                             | Don't let majority class dominate the gradient       |
+| Test custom losses with gradient check                          | Autograd computes what you wrote, not what you meant |
+
+The next lesson, on optimisers (A4.5), takes the gradients backprop computes and the losses this lesson defines, and turns them into parameter updates. Optimiser choice usually matters less than data and architecture, but mismatch can ruin training.
+
+<InlineQuiz
+  question="Your multi-class classifier outputs raw logits and you train with `nn.CrossEntropyLoss`. At test time you want probabilities. How do you get them?"
+  options={[
+    { text: "Apply `softmax` to the logits at inference; don't change training." },
+    { text: "Train with `BCEWithLogitsLoss` instead." },
+    { text: "The model already outputs probabilities — no conversion needed." },
+    { text: "Apply `sigmoid` to the logits." },
+  ]}
+  explanation="Correct: `nn.CrossEntropyLoss` internally applies log_softmax for numerical stability, so the model outputs raw logits. At inference, apply softmax(logits) to get a probability distribution. Don't change training — the combined loss is more stable. BCEWithLogitsLoss is for binary/multi-label. Sigmoid gives independent per-class probabilities (multi-label), not a normalised distribution."
+/>

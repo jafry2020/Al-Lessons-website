@@ -1,0 +1,285 @@
+---
+title: "Initialization, normalization, and regularization"
+description: "The three tricks that turn a deep neural net from 'doesn't train' to 'trains.' Weight init keeps gradients alive; batch/layer norm stabilises activations; dropout regularises against overfit."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: initialization-normalization
+lessonCode: "A4.6"
+estMinutes: 13
+prereqs:
+  - "A4.3 Backpropagation in detail"
+  - "A0.7 Bias, variance, and overfitting"
+objectives:
+  - "Pick the right initialisation (Xavier vs. He) based on activation function and explain why it matters for deep networks."
+  - "Distinguish BatchNorm from LayerNorm and decide which to use for CNNs vs. transformers."
+  - "Apply dropout, weight decay, and early stopping as complementary regularisers — and know when each helps."
+pitfalls:
+  - "Using N(0, 1) initialisation for deep networks. Activations explode or vanish before layer 10."
+  - "Using BatchNorm in transformers. Sequence-length-dependent statistics break it; LayerNorm is the right choice."
+  - "Stacking dropout, weight decay, and BatchNorm without thought. The three regularisers interact; together they often over-regularise."
+  - "Forgetting that dropout's behaviour differs train vs eval. Call model.eval() or you'll evaluate with dropout on."
+importantQuestions:
+  - question: "Why does weight initialisation matter so much?"
+    shortAnswer: |
+      Initial weights determine the variance of activations and gradients at every layer. Bad init → activations blow up or vanish through depth, gradients follow, training fails before it starts.
+    detailed: |
+      For a layer z = Wx with W initialised with variance σ_W², input variance σ_x², the output variance is roughly n · σ_W² · σ_x² where n is the input dimension. If σ_W² is too large, activations grow with depth; too small, they shrink. Through L layers, multiplicative effects compound dramatically.
+
+      **Xavier / Glorot init** (Glorot & Bengio, 2010): Var(W) = 2 / (n_in + n_out). Keeps activations roughly constant through the network for sigmoid / tanh activations.
+
+      **He / Kaiming init** (He et al., 2015): Var(W) = 2 / n_in. Tuned for ReLU, which kills half the units on average. Without this correction, ReLU networks underflow within ~10 layers.
+
+      Default in PyTorch: `nn.Linear` uses Kaiming uniform by default. `nn.Conv2d` same. If you write a custom layer, initialise explicitly.
+    pitfalls:
+      - "For SwiGLU and other gated activations, init is a research topic. Most modern LLMs use a custom init derived empirically."
+  - question: "What does Batch Normalization actually do?"
+    shortAnswer: |
+      For each feature (channel), normalise to zero mean and unit variance using batch statistics, then apply a learned affine transform. Stabilises training, allows higher learning rates, mild regularising effect.
+    detailed: |
+      For activation z ∈ ℝ^(B × C × ...):
+
+      1. Compute mean μ and variance σ² across batch dim for each channel.
+      2. Normalise: ẑ = (z − μ) / √(σ² + ε).
+      3. Affine: y = γẑ + β, where γ and β are learnable per-channel parameters.
+
+      At training, batch stats are used. At inference, running averages of training stats (maintained by moving average during training) are used. The train/eval distinction matters — forgetting model.eval() at inference uses the current minibatch stats and breaks predictions.
+
+      Effects:
+      - Stabilises forward pass (constant variance per layer).
+      - Allows higher learning rates.
+      - Slight regularising effect (batch dependency adds noise).
+      - Breaks if batch size is very small (1–4) — batch stats too noisy.
+
+      Introduced by Ioffe & Szegedy (2015); the explanation in the paper ("internal covariate shift") is now considered partial — the actual benefit is more about loss landscape smoothing.
+    pitfalls:
+      - "BatchNorm with batch size 1 is broken — variance is undefined. Use LayerNorm or GroupNorm for small batches."
+  - question: "When should you use LayerNorm instead of BatchNorm?"
+    shortAnswer: |
+      LayerNorm normalises across feature dimensions per example, independent of batch. Used in transformers, RNNs, anywhere batch size varies or sequence dimension dominates. Default for any non-CNN architecture.
+    detailed: |
+      LayerNorm (Ba, Kiros, Hinton, 2016) normalises each example individually:
+
+      For activation z ∈ ℝ^(B × D), compute mean and variance over the D dim, per example.
+
+      Advantages over BatchNorm:
+      - No batch dependency. Works with batch size 1.
+      - Works for variable sequence lengths (transformers, RNNs).
+      - Same behaviour train and eval (no running averages).
+
+      In 2026: BatchNorm dominates CNNs (vision); LayerNorm dominates transformers (NLP, multimodal). Some recent vision models (ConvNeXt) use LayerNorm even in convolutional contexts.
+
+      Variants: **RMSNorm** (Zhang & Sennrich, 2019) drops the mean subtraction and bias, keeping only the rescaling — cheaper and comparable in quality, now used in Llama, Mistral, and other modern LLMs.
+    pitfalls:
+      - "GroupNorm sits between LayerNorm and BatchNorm: normalise within groups of channels, per example. Useful when channel structure matters and batch is small."
+  - question: "How does dropout work, and is it still relevant?"
+    shortAnswer: |
+      During training, randomly set each activation to zero with probability p (typically 0.1–0.5). Scales remaining activations by 1/(1−p) to maintain expected value. At inference, no dropout — use full network.
+    detailed: |
+      Srivastava et al. (2014). The intuition: prevent neurons from co-adapting (relying on specific other neurons being present). The math: trains an ensemble of exponentially many sub-networks with shared weights; inference approximates the ensemble average.
+
+      In 2026:
+      - Still standard in vision CNNs (dropout=0.1–0.2 in fully connected heads).
+      - Still standard in transformers (attention dropout, FFN dropout, residual dropout).
+      - Rarely the dominant regulariser. Data augmentation and weight decay matter more.
+
+      Variants: **DropPath** (stochastic depth) drops entire residual blocks instead of individual activations — used in modern vision transformers. **AttentionDropout** drops elements of the attention weight matrix.
+
+      Strong opinion: don't tune dropout heavily. Set it to 0.1 and move on. The gains from careful dropout tuning are smaller than from architecture or data choices.
+    pitfalls:
+      - "Inverted dropout (scaling at training time) is standard now; original dropout scaled at inference. Both equivalent; modern frameworks use inverted."
+  - question: "What's weight decay and how does it relate to L2 regularisation?"
+    shortAnswer: |
+      Weight decay penalises ‖W‖² in the loss, equivalent to L2 regularisation. Standard for neural networks; default coefficient 1e-4 to 1e-2. AdamW separates weight decay from the optimiser step.
+    detailed: |
+      Plain SGD with L2: L_total = L_data + λ‖W‖². Gradient: ∇L_data + 2λW. Update: W ← W − η∇L_data − 2ηλW. The 2ηλW term "decays" the weights toward zero each step.
+
+      Adam with L2: the decay term gets normalised by the gradient magnitude estimate (RMS), which makes the effective regularisation hyperparameter-dependent. AdamW (Loshchilov & Hutter, 2017) decouples weight decay from the gradient normalisation:
+
+      W ← W − η · m̂/(√v̂ + ε) − η · λ · W
+
+      AdamW is now the default optimiser for transformers; the decoupling matters more than the math suggests.
+
+      Typical λ for transformers: 0.01–0.1. For CNNs: 1e-4. Smaller models tolerate less regularisation; large models need more.
+    pitfalls:
+      - "Don't apply weight decay to biases or normalisation parameters. PyTorch's AdamW lets you exclude them via parameter groups."
+  - question: "Why does training a deep network suddenly work in the 2010s?"
+    shortAnswer: |
+      The combination: ReLU + Xavier/He init + (eventually) BatchNorm + residual connections + dropout + Adam. No single piece was sufficient; together they removed every obstacle to training depth.
+    detailed: |
+      Pre-2010 obstacles:
+      - Vanishing gradients (sigmoid + bad init) — ReLU + He init.
+      - Activation drift across layers — BatchNorm / LayerNorm.
+      - Overfit on small data — dropout, weight decay, augmentation.
+      - Slow / unstable convergence — Adam.
+      - Depth itself blowing up — residual connections (Module 5).
+
+      Each was solved separately, and the assembled stack lets you train networks with hundreds (or thousands) of layers reliably. None of the individual ideas is conceptually deep; the engineering together is what changed.
+
+      For a modern transformer training script: He init for linear/conv weights, LayerNorm or RMSNorm, AdamW with weight decay 0.01, no dropout (modern LLMs often disable it), residual connections everywhere. The recipe has converged.
+    pitfalls:
+      - "Modern LLMs sometimes turn off dropout entirely. Sufficient data and scale handle the regularisation."
+---
+
+<TldrCallout>
+  Three tricks turned deep neural networks from "doesn't train" to "trains reliably." Weight
+  initialisation (Xavier/He) controls activation variance through depth. Normalisation (BatchNorm
+  for CNNs, LayerNorm/RMSNorm for transformers) keeps gradients well-behaved layer by layer.
+  Regularisation (dropout, weight decay) prevents overfit. Together they're the difference between
+  2010 and 2026 deep learning.
+</TldrCallout>
+
+## Initialisation: don't start with N(0, 1)
+
+A deep network's forward pass is a chain of matrix multiplies and non-linearities. The variance of activations and gradients depends on the initialisation; bad init makes them explode or vanish through depth.
+
+**Xavier / Glorot init** (2010) for sigmoid / tanh:
+
+Var(W_ij) = 2 / (n_in + n_out)
+
+**He / Kaiming init** (2015) for ReLU:
+
+Var(W_ij) = 2 / n_in
+
+The factor of 2 in He init compensates for ReLU killing half the activations on average. Without it, even a 10-layer ReLU network has activations collapsing toward zero by the output.
+
+The widget below shows the activation distribution at each layer for three init strategies on a 6-layer ReLU MLP. Watch the activation magnitudes either preserve, explode, or vanish across layers.
+
+<WeightInitDemo />
+
+What's well-initialised: each layer's activations have roughly the same variance as the inputs. The widget's "He" panel shows this. The "too small" panel shows activations vanishing; "too large" shows them exploding.
+
+In 2026 PyTorch: `nn.Linear` and `nn.Conv2d` use He / Kaiming uniform by default. You don't usually call init explicitly — it happens at construction. For custom layers, use `torch.nn.init.kaiming_normal_` or similar.
+
+## Normalisation: keep activations sane through training
+
+Even with good init, training can drive activation distributions away from the init regime as weights change. **Batch Normalization** (Ioffe & Szegedy, 2015) fixes this by re-normalising activations every layer.
+
+For activation z (shape: batch × features):
+
+1. Compute mean μ and variance σ² over batch dimension, per feature.
+2. Normalise: ẑ = (z − μ) / √(σ² + ε).
+3. Affine: y = γẑ + β, where γ and β are learnable per-feature.
+
+Benefits:
+
+- Stabilises forward pass (constant variance per layer).
+- Permits 10–100× higher learning rates.
+- Mild regularising effect (batch dependency adds noise).
+- Empirically: makes deep networks trainable that weren't before.
+
+Limitations:
+
+- Breaks at batch size 1–4 (statistics are unreliable).
+- Sequence-length-dependent (which transformers hate).
+- Train/eval discrepancy: training uses batch stats; eval uses running averages. Forgetting `model.eval()` ruins predictions.
+
+## LayerNorm and RMSNorm: what transformers actually use
+
+**LayerNorm** (Ba, Kiros, Hinton, 2016) normalises across features per example instead of across batch:
+
+For z (shape: batch × ... × features), compute mean and variance over the last dim, per example.
+
+Advantages: no batch dependency, identical train/eval behaviour, works for variable sequence lengths. Standard in transformers, RNNs, everything non-CNN.
+
+**RMSNorm** (Zhang & Sennrich, 2019) is a cheaper variant — drops the mean subtraction and bias, just rescales by RMS:
+
+ẑ = z / √(mean(z²) + ε), y = γ · ẑ
+
+Used in Llama, Mistral, and most modern open LLMs. Roughly half the compute of LayerNorm, comparable quality at scale.
+
+| Architecture                                         | Normalisation          |
+| ---------------------------------------------------- | ---------------------- |
+| CNNs (vision)                                        | BatchNorm              |
+| Classical transformers (BERT, GPT-2/3)               | LayerNorm              |
+| Modern LLMs (Llama, Mistral, PaLM)                   | RMSNorm                |
+| Small batch / RNN                                    | LayerNorm or GroupNorm |
+| Variable batch (object detection at multiple scales) | GroupNorm              |
+
+<AnalogyCallout>
+  Initialisation is the starting weight on a barbell — pick wrong and the lifter can't even begin.
+  Normalisation is the spotter — keeps the bar moving even as fatigue sets in. Regularisation is the
+  trainer — stops the lifter from getting too specialised to one exercise. All three are needed for
+  a deep network to train and generalise.
+</AnalogyCallout>
+
+## Dropout and weight decay: the regularisers
+
+**Dropout** (Srivastava et al., 2014): during training, randomly zero out each activation with probability p, scale survivors by 1/(1−p). At inference, no dropout. The intuition: prevents neurons from co-adapting; trains an implicit ensemble of sub-networks.
+
+Typical p:
+
+- Vision CNN FC head: 0.5 (heavy)
+- Transformer attention / FFN: 0.1
+- Modern LLM training: often 0 (data scale handles regularisation)
+
+**Weight decay** (L2 regularisation): penalise ‖W‖² in the loss. Standard λ:
+
+- Vision CNN: 1e-4
+- Transformer: 0.01–0.1
+- LLM (AdamW): 0.01–0.1
+
+**AdamW** (Loshchilov & Hutter, 2017) decouples weight decay from Adam's gradient normalisation — the correct way to combine Adam with regularisation. The default optimiser for transformers in 2026.
+
+**Early stopping**: stop training when validation loss stops improving. Free regulariser; always worth doing.
+
+These four — dropout, weight decay, early stopping, data augmentation — are the regularisation toolkit. Combine them; tune the strongest one for your problem.
+
+<InlineQuiz
+  question="You train a ResNet-50 from scratch on a custom 50k-image dataset. Training accuracy is 99%, validation is 73%. You add BatchNorm (which is already in ResNet) and dropout (which isn't). Performance doesn't change. What's the most likely fix?"
+  options={[
+    { text: "Train for more epochs." },
+    {
+      text: "More aggressive data augmentation (RandomCrop, Mixup, RandAugment) — the regularisation gap is data-related, not architecture-related.",
+      correct: true,
+    },
+    { text: "Use a deeper model (ResNet-152)." },
+    { text: "Reduce the learning rate." },
+  ]}
+  explanation="A 26-point train/val gap with 50k images is the classic 'not enough data' regime. Data augmentation is the most powerful regulariser for image data — Mixup, CutMix, RandAugment together can close 10-15 points of overfit gap. Adding more dropout to a CNN that already has BatchNorm doesn't help much (the two interact awkwardly). A deeper model would overfit worse, not less. This is why production vision pipelines spend more time on augmentation than on architecture."
+/>
+
+## The standard recipe
+
+For a from-scratch deep network in 2026:
+
+| Choice         | Default                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| Init           | He / Kaiming (default in PyTorch nn.Linear, nn.Conv2d)                                     |
+| Normalisation  | BatchNorm for CNN; LayerNorm or RMSNorm for transformer                                    |
+| Regularisation | Weight decay 0.01 (AdamW), light dropout (0.1 in transformer attention/FFN, 0.5 in CNN FC) |
+| Optimizer      | AdamW (A4.5)                                                                               |
+| Scheduler      | Cosine or linear with warmup (A4.7)                                                        |
+
+This is the converged starting point. Deviations are research questions, not defaults.
+
+## When to deviate
+
+- **Very deep networks** (50+ layers): use residual connections (Module 5) plus everything above.
+- **Very large batches** (>1024): consider Layer-wise Adaptive Rate Scaling (LARS, LAMB).
+- **Very small batches** (1–4): switch BatchNorm to GroupNorm or LayerNorm.
+- **Reinforcement learning** (non-stationary data): often disable BatchNorm; use LayerNorm.
+- **Modern LLM training**: often disable dropout entirely; scale handles it.
+
+<InlineQuiz
+  question="Your transformer-based text classifier shows train loss decreasing steadily but validation loss oscillating wildly between epochs. What's the most likely cause?"
+  options={[
+    {
+      text: "Forgot to call model.eval() at validation — dropout is on during eval, randomising predictions.",
+      correct: true,
+    },
+    { text: "Validation set is too small." },
+    { text: "Learning rate is too high." },
+    { text: "Weight decay is too low." },
+  ]}
+  explanation="The single most common cause of erratic validation: forgetting `model.eval()`. Dropout (or BatchNorm in train mode) introduces randomness that destroys consistent evaluation. Always call `model.eval()` before validation/test and `model.train()` before training. PyTorch's `with torch.no_grad():` only disables gradient tracking, not dropout / BN mode."
+/>
+
+## Closing notes
+
+These three families of tricks — init, normalisation, regularisation — are the unsexy infrastructure that makes deep learning work. The headlines go to architectures (transformers, residual connections); the trenches are these.
+
+For interview-style understanding: be able to derive why He init has the factor of 2, explain BatchNorm's train/eval distinction, and articulate why LayerNorm beats BatchNorm in transformers. These are the questions that separate "knows the recipe" from "knows what each ingredient does."
+
+The next lessons — A4.7 (training stack) and A4.8 (debugging) — turn this knowledge into a runnable, fixable training loop.

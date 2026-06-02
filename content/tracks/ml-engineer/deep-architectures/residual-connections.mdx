@@ -1,0 +1,293 @@
+---
+title: "Residual connections and the depth revolution"
+description: "The single architectural change that made networks 100+ layers deep trainable. Everything since ResNet — including every transformer — uses some form of skip connection."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: residual-connections
+lessonCode: "A5.3"
+estMinutes: 10
+prereqs:
+  - "A5.1 Convolutional neural networks"
+  - "A4.6 Initialization, normalization, and regularization"
+objectives:
+  - "Explain what a residual connection is and how it changes the gradient path through depth."
+  - "Distinguish pre-norm and post-norm residual variants in transformers and decide which to use."
+  - "Recognise skip-connection patterns in U-Net, ResNet, DenseNet, and transformers."
+pitfalls:
+  - "Treating residual connections as a 'regulariser.' They're an architectural primitive — they change what the network computes, not just how it trains."
+  - "Stacking ResNet blocks without LayerNorm or BatchNorm. The combination is what made depth tractable; either alone is weaker."
+  - "Believing post-norm transformers (original 'Attention is All You Need') are still the default. Modern transformers are pre-norm for training stability."
+  - "Confusing residual connections with dense connections (DenseNet). Different patterns, different costs."
+importantQuestions:
+  - question: "What is a residual connection, in one equation?"
+    shortAnswer: |
+      y = x + f(x), where f is a learnable block (e.g., a few conv layers + activation). The block learns the residual (delta) over the input, not the full transformation.
+    detailed: |
+      He et al. (2015) introduced residual blocks in ResNet, winning ImageNet that year. The block:
+
+      y = x + f(x)
+
+      where x is the input, f is a small block (typically 2-3 layers with a final ReLU). The key change vs. plain stacking: f only has to learn the delta from x to y, not y itself.
+
+      Why this matters:
+      - **Gradient flow.** ∂y/∂x = 1 + ∂f/∂x. The "1" provides a direct gradient path that doesn't compound through the block. Vanishing gradients across many blocks largely disappear.
+      - **Identity initialisation.** If f initialises to zero, y = x — the block is harmless at start. Easier optimisation.
+      - **Depth becomes free.** ResNet trained 150-layer networks successfully when 20-layer plain networks couldn't. Modern transformers use 50–100+ blocks.
+
+      Every modern architecture — ResNet, Transformer, U-Net, ViT, ConvNeXt — uses residual connections in some form. Without them, depth doesn't pay.
+    pitfalls:
+      - "If f's output shape differs from x's, you need a 1×1 projection on the skip path. ResNet handles this transparently."
+  - question: "Why doesn't plain deep stacking work?"
+    shortAnswer: |
+      Past ~20 layers, vanilla networks (pre-ResNet) suffered from vanishing gradients, harder optimisation, and an empirical degradation where deeper networks performed worse on training set, not better. Skip connections solved all three.
+    detailed: |
+      Three problems past depth ~20:
+
+      1. **Vanishing gradients.** Each layer's Jacobian is multiplied through; for ReLU + good init, the product still shrinks. Gradients reaching early layers are tiny.
+
+      2. **Optimisation difficulty.** Even with valid gradients, the loss landscape gets harder. Plain deep networks routinely failed to converge.
+
+      3. **Degradation.** He et al. observed: 56-layer plain CNN had HIGHER training error than 20-layer plain CNN. This wasn't overfitting (training error worse, not test) — deeper plain networks were *worse-optimisable*, not just less generalisable.
+
+      Residual connections fixed all three: gradient has a direct path back, identity init makes the block harmless to start, and the optimization landscape becomes smoother.
+
+      In 2026, no production architecture goes deep without skip connections. The 20-layer plain network is a curiosity.
+    pitfalls:
+      - "Residual connections don't directly fix overfitting. They make depth trainable; depth still needs regularisation and data."
+  - question: "How do residual connections work in transformers?"
+    shortAnswer: |
+      Each sub-layer (attention or feedforward) is wrapped with x + sublayer(x), plus normalisation. Pre-norm vs. post-norm differs in where the LayerNorm sits.
+    detailed: |
+      **Original transformer (Vaswani et al., 2017) — post-norm:**
+
+      ```
+      y = LayerNorm(x + Attention(x))
+      z = LayerNorm(y + FFN(y))
+      ```
+
+      The norm is applied *after* the residual sum.
+
+      **Modern LLMs — pre-norm:**
+
+      ```
+      y = x + Attention(LayerNorm(x))
+      z = y + FFN(LayerNorm(y))
+      ```
+
+      The norm is applied *before* the sub-layer; the skip path bypasses norm entirely.
+
+      Why the switch? Post-norm transformers needed careful learning rate warmup to train stably at depth. Pre-norm transformers train more stably with simpler schedules. Almost all modern LLMs (GPT-2 onwards, Llama, Mistral, T5) use pre-norm. The original post-norm survives mostly in BERT-style models.
+
+      Pre-norm also tends to produce smaller gradients in the residual path — useful for very deep networks but can lead to under-trained sub-layers if not balanced.
+    pitfalls:
+      - "There's an ongoing debate about which is genuinely better. Pre-norm is the practical default; specific tasks may benefit from post-norm with careful tuning."
+  - question: "What's a U-Net, and how does it use skip connections?"
+    shortAnswer: |
+      An encoder-decoder that downsamples then upsamples, with skip connections from each encoder level to the corresponding decoder level. Used in image segmentation (medical, satellite), and as the backbone of diffusion models.
+    detailed: |
+      U-Net (Ronneberger et al., 2015) was designed for medical image segmentation. Structure:
+
+      1. **Encoder**: standard CNN, downsampling spatial resolution while increasing channels.
+      2. **Decoder**: upsampling (transposed conv or interpolation) back to input resolution.
+      3. **Skip connections**: at each spatial scale, the encoder activation is concatenated (not added) with the decoder activation.
+
+      Why skips matter here: the encoder loses spatial precision through downsampling. The decoder needs that fine detail to produce precise segmentation masks. The skips reintroduce high-resolution features at each upsampling stage.
+
+      In 2026 U-Net is the standard backbone for:
+      - Medical image segmentation (still).
+      - Semantic / instance segmentation in general (with modifications).
+      - **Diffusion models** (Stable Diffusion, Imagen, DALL-E, almost all image generators). The U-Net's symmetry matches the denoising process. ViT-based diffusion (DiT) is gaining ground but U-Net dominates production.
+
+      A different skip-connection pattern (concatenation, not addition) than ResNet but the same principle: don't lose information unnecessarily through depth.
+    pitfalls:
+      - "U-Net skips concatenate (cat); ResNet skips add. Different shapes downstream."
+  - question: "Does this affect transformer training in practice?"
+    shortAnswer: |
+      Yes — pre-norm vs. post-norm changes whether you need long warmup, and which initialisation works. Practical setups are converged: pre-norm + RMSNorm + AdamW + cosine schedule with short warmup.
+    detailed: |
+      A modern transformer training recipe in 2026 includes:
+
+      - **Pre-norm** residual structure.
+      - **RMSNorm** or LayerNorm.
+      - **Residual scaling** at deep models — sometimes the residual contribution is scaled by 1/√L where L is depth, to keep activation magnitudes stable. Common in GPT-3 and beyond.
+      - **Init**: small init in deep models (1/√(layer_depth) scaling) to avoid initial blowup.
+
+      Without these, training 100+ layer transformers becomes flaky. With them, it's routine — and the same training script scales from 100M to 70B parameters with minor adjustments.
+
+      The earliest deep-transformer papers (GPT-2, GPT-3) had to figure out these tricks empirically. By 2026 the recipe is open-sourced (look at Llama, Mistral training configs) and reusable.
+    pitfalls:
+      - "Don't over-scale residuals. If you scale too aggressively, the network becomes 'effectively' shallower and underuses its parameter count."
+  - question: "Is ResNet still relevant in 2026?"
+    shortAnswer: |
+      Yes — ResNet-50 and ResNet-101 are still the canonical 'baseline strong vision backbone' for many production tasks. ConvNeXt and ViT outperform them at scale, but ResNet remains a healthy default for small-data and mid-data regimes.
+    detailed: |
+      Reasons ResNet endures:
+
+      - **Well-trained pretrained checkpoints** are everywhere — every major framework ships ResNet-50 ImageNet weights.
+      - **Strong baselines.** New architectures get compared to "ResNet-50 fine-tuned for the same number of epochs."
+      - **Production maturity.** Many vision systems shipped with ResNet, and the maintenance / debugging knowledge is broad.
+      - **Computational efficiency.** ResNet-50 runs at 100+ FPS on consumer GPUs at 224×224; reasonable for many production constraints.
+
+      What's faded:
+      - **From-scratch CNN architecture research.** Most new architectures (ConvNeXt, Swin, etc.) are improvements over ResNet, not replacements.
+      - **Large-scale image classification** — ViT-style models dominate.
+
+      In 2026, a reasonable vision baseline is: pretrained ResNet-50 + fine-tuned head. Beats most from-scratch approaches on most realistic data.
+    pitfalls:
+      - "Pretrained ResNets from different sources differ subtly. Document which weights you're starting from."
+---
+
+<TldrCallout>
+  Residual connections — y = x + f(x) — are the single architectural change that made very deep
+  networks (100+ layers) trainable. They provide a direct gradient path through depth, make the
+  optimisation landscape smoother, and allow safe identity initialisation. Every modern architecture
+  (ResNet, ViT, transformer-LLM, U-Net diffusion) uses them.
+</TldrCallout>
+
+## The pre-residual depth wall
+
+Before 2015, deep CNNs ran into a depth wall around layer 20-30. Vanishing gradients, harder optimisation, and an empirically observed "degradation" — deeper plain networks had _worse training error_, not just worse generalisation.
+
+ResNet (He et al., 2015) won ImageNet with a 152-layer network by introducing one change: skip connections.
+
+The trick is one equation:
+
+y = x + f(x)
+
+Each block adds its input to its output. The block learns the _residual_ (delta) over the input, not the full transformation.
+
+## Why this works
+
+Three reasons, all important:
+
+**1. Gradient flow.** ∂y/∂x = 1 + ∂f/∂x. The constant "1" is a direct gradient path that doesn't compound through f. Through L blocks, the gradient that reaches the input has an unobstructed component, not just the product of L Jacobians.
+
+**2. Identity initialisation.** Initialise f's parameters near zero. Then y ≈ x at start — the block doesn't break anything. Training learns small deltas on top of identity; much easier to optimise than learning the full transformation from scratch.
+
+**3. Loss landscape.** Empirically (Li et al., 2018), residual networks have visibly smoother loss landscapes than plain networks. Optimisation is easier in addition to gradient flow.
+
+All three together — gradient path, init, landscape — turn depth from a liability into a free lunch. Modern transformers stack 70+ residual blocks routinely.
+
+<AnalogyCallout>
+  Think of a delivery courier. Plain network: rebuild the entire address from scratch at each stop.
+  Residual network: keep the existing address and add a small correction at each stop. The latter is
+  faster, more reliable, and tolerates many more stops without confusion.
+</AnalogyCallout>
+
+## Variants: how the skip is wired
+
+**ResNet basic block (CNN):**
+
+```
+x → Conv → BN → ReLU → Conv → BN → + → ReLU → y
+                                     ↑
+                                     x
+```
+
+The skip path bypasses the inner conv layers; the addition happens before the final ReLU.
+
+**Transformer pre-norm:**
+
+```
+x → LN → Attention → + → ...
+                     ↑
+                     x
+```
+
+Norm before the sub-layer; skip is unnormalised.
+
+**Transformer post-norm (original):**
+
+```
+x → Attention → + → LN → ...
+                ↑
+                x
+```
+
+Norm after the addition; the skip goes through norm.
+
+**U-Net concatenation skip:**
+
+```
+encoder activation at scale s → cat → decoder activation at scale s
+```
+
+Concatenation along channel dim, not addition. Used in segmentation and diffusion U-Nets.
+
+## Pre-norm vs. post-norm in transformers
+
+The original "Attention is All You Need" (2017) used post-norm. It worked but required careful warmup and was finicky to scale beyond ~12 layers.
+
+Modern LLMs (GPT-2 onwards, Llama, Mistral, T5) use pre-norm. Trains more stably at depth; simpler schedule.
+
+| Pre-norm                               | Post-norm                          |
+| -------------------------------------- | ---------------------------------- |
+| Standard in modern LLMs                | Standard in BERT-era models        |
+| Stable at depth (50+)                  | Needs warmup; flaky at large depth |
+| Slightly worse final quality (debated) | Slightly better in some benchmarks |
+| Easier to train                        | Harder to train                    |
+
+In 2026: pre-norm is the production default. Use post-norm only if you have a specific reason and the engineering budget for careful tuning.
+
+## Residual scaling at extreme depth
+
+For very deep transformers (50+ layers), even residual connections can let activations grow with depth. Modern practice scales the residual contribution:
+
+y = x + α · sublayer(x), with α = 1/√L or similar.
+
+Used in GPT-3, scaling laws papers, modern LLMs. Keeps activation magnitudes constant at init across arbitrary depth, allowing 100+ layer transformers without retuning.
+
+## What residual connections are not
+
+- **Not regularisation.** They change what the network computes, not just how it trains.
+- **Not memory.** ResNet-50 takes more memory than VGG-16 because of the activation skip paths to be retained for backward.
+- **Not a substitute for normalization.** BatchNorm / LayerNorm + residuals together made depth tractable. Either alone is weaker.
+
+<InlineQuiz
+  question="You implement a 50-layer transformer from scratch with post-norm and standard learning rate (3e-4). Training diverges within 100 steps. What's the most likely fix?"
+  options={[
+    { text: "Reduce the model size." },
+    {
+      text: "Switch to pre-norm — modern transformers use pre-norm precisely because it's stable at depth without complex warmup.",
+      correct: true,
+    },
+    { text: "Switch to SGD." },
+    { text: "Disable residual connections." },
+  ]}
+  explanation="Post-norm transformers at depth 50 are known to be unstable without careful warmup and learning rate management. The single most effective fix is pre-norm — the modern default precisely because it eliminates this fragility. SGD is much weaker for transformers (Adam-family is standard). Disabling residuals would make training impossible. Reducing model size avoids the issue rather than fixing it."
+/>
+
+## Skip patterns across architectures
+
+| Architecture       | Skip type     | Connection                                           |
+| ------------------ | ------------- | ---------------------------------------------------- |
+| ResNet             | Additive      | Skip every 2-3 conv layers                           |
+| DenseNet           | Concatenative | All previous layers feed into each layer (expensive) |
+| U-Net              | Concatenative | Symmetric encoder ↔ decoder at each scale            |
+| Transformer (any)  | Additive      | Around each attention and FFN sub-layer              |
+| Vision Transformer | Additive      | Same as transformer                                  |
+| Diffusion U-Net    | Both          | U-Net concat skips + ResBlock additive skips inside  |
+
+The common idea: don't lose information through depth. Different domains use different specific patterns but the principle is unchanged since 2015.
+
+<InlineQuiz
+  question="Without residual connections, what's the practical depth limit of a transformer in 2026?"
+  options={[
+    { text: "1000+ layers." },
+    {
+      text: "Roughly 6–12 layers. Beyond that, training becomes unstable and degraded, regardless of optimiser or normalisation.",
+      correct: true,
+    },
+    { text: "About 50 layers." },
+    { text: "Depth is unlimited; transformers don't need residuals." },
+  ]}
+  explanation="The original 1986 'untrained deep network' problem applies. Transformers depend on residual connections precisely to enable depth. A transformer block (attention + FFN) without skip connections degenerates rapidly past ~6-12 layers — gradients vanish or explode, optimisation fails. Every published transformer uses residuals; the architecture is *defined* with them. Removing them would be like building a CNN without convolutions."
+/>
+
+## The depth revolution in one paragraph
+
+Before 2015: depth was hard because gradients vanished and optimisation was fragile. ResNet's residual connections gave gradients a direct path and made each block harmless at initialisation. Every architecture since — ConvNeXt, Vision Transformer, U-Net, GPT, BERT, Llama — uses some form of skip connection. The "deep" in deep learning is conditional on this single architectural primitive working.
+
+The next lesson introduces attention, the other ingredient of the modern transformer.

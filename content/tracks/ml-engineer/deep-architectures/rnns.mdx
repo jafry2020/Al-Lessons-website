@@ -1,0 +1,231 @@
+---
+title: "Recurrent networks: historically important, mostly replaced"
+description: "LSTMs and GRUs dominated sequence modelling for a decade. Transformers replaced them in nearly every domain by 2020. The conceptual ideas (gating, hidden state) still matter; the architectures themselves rarely do."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: rnns
+lessonCode: "A5.2"
+estMinutes: 9
+prereqs:
+  - "A4.6 Initialization, normalization, and regularization"
+objectives:
+  - "Sketch what an RNN computes step by step, and why vanishing gradients made vanilla RNNs hard to train."
+  - "Explain LSTM and GRU gating as a fix for long-term dependency."
+  - "Identify the few niches where RNNs still appear in 2026."
+pitfalls:
+  - "Treating LSTMs as a 2026 default for sequence modelling. Transformers replaced them for nearly every text, audio, and time-series application above small-data scale."
+  - "Building from scratch when a pretrained transformer is available. Transfer learning has displaced LSTM-from-scratch even for niche tasks."
+  - "Confusing RNNs with state-space models (S4, Mamba). Those are a different, more recent family."
+  - "Believing 'attention is all you need' means recurrence is dead conceptually. Hidden-state ideas persist in S4, Mamba, RWKV, and any sequential reasoning system."
+importantQuestions:
+  - question: "What does an RNN compute?"
+    shortAnswer: |
+      A hidden state h_t = f(h_{t-1}, x_t) updated at each time step. The hidden state summarises the history. Output at each step is g(h_t). Shared parameters across time steps.
+    detailed: |
+      Vanilla RNN: h_t = tanh(W_h h_{t-1} + W_x x_t + b). Output y_t = W_o h_t + b_o.
+
+      The same W_h, W_x, W_o are used at every time step. This weight sharing across time is the analog of weight sharing across spatial position in CNNs.
+
+      Pros: works on variable-length sequences; modest parameter count.
+
+      Cons: vanishing/exploding gradients when sequences are long. The gradient at time t depends on a product of T Jacobians of W_h; for ‖W_h‖ < 1 it vanishes, for > 1 it explodes. This made vanilla RNNs essentially untrainable for sequences longer than ~20 steps.
+
+      LSTMs (Hochreiter & Schmidhuber, 1997) fixed this with gating: paths through the network that don't multiplicatively compound. GRUs (Cho et al., 2014) simplified the LSTM. Both work for sequences of hundreds of steps.
+    pitfalls:
+      - "RNN training requires backpropagation *through time* (BPTT) — unroll the network, backprop, accumulate gradients."
+  - question: "What is the LSTM's gating mechanism?"
+    shortAnswer: |
+      A "cell state" c_t and three sigmoid gates: forget (what to drop from c_{t-1}), input (what new info to add), output (what to expose as h_t). The cell state flows mostly multiplication-free, enabling long-term memory.
+    detailed: |
+      Long Short-Term Memory (Hochreiter & Schmidhuber, 1997). At each time step:
+
+      f_t = σ(W_f · [h_{t-1}, x_t] + b_f)   # forget gate
+      i_t = σ(W_i · [h_{t-1}, x_t] + b_i)   # input gate
+      g_t = tanh(W_g · [h_{t-1}, x_t] + b_g)# candidate cell
+      c_t = f_t ⊙ c_{t-1} + i_t ⊙ g_t       # new cell state
+      o_t = σ(W_o · [h_{t-1}, x_t] + b_o)   # output gate
+      h_t = o_t ⊙ tanh(c_t)                 # new hidden state
+
+      Six learnable matrices, four times the parameters of vanilla RNN. The key innovation: c_t is updated *additively*, not multiplicatively. Gradients can flow back through c_t for many time steps without compounding.
+
+      In practice: works for sequences up to a few hundred steps; struggles beyond ~500. The transformer's self-attention removed this length limitation by giving every position direct access to every other position.
+    pitfalls:
+      - "Initialise the forget gate bias to a positive value (e.g., 1). Otherwise the network forgets everything by default at initialisation."
+  - question: "Why did transformers replace RNNs?"
+    shortAnswer: |
+      Three reasons: (1) attention scales O(n²) but parallelises across the sequence, while RNN is sequential O(n) wall-clock, (2) long-range dependencies are direct in attention, not through L hidden-state hops, (3) easier to train at scale.
+    detailed: |
+      The transformer's "Attention is All You Need" (Vaswani et al., 2017) replaced recurrent and convolutional building blocks for sequence modelling.
+
+      Wins over RNNs:
+      - **Parallelism.** Self-attention computes all positions in parallel; RNN must compute step 1, then step 2, etc. On modern GPUs, this is a 10-100× training speedup.
+      - **Direct long-range dependencies.** Position 1 can attend to position 1000 in one operation; an RNN would need 1000 sequential hops.
+      - **Scale.** Transformers continue improving with model size and data; LSTMs plateaued around 1B parameters.
+
+      Wins of RNNs that still matter:
+      - **Inference cost** for streaming applications (one token at a time): O(1) per token; transformer is O(n) per token (linear in context).
+      - **Memory** for very long sequences: RNN has fixed hidden state; transformer keeps all tokens in KV-cache.
+
+      The recent state-space models (S4, Mamba, RWKV) try to reclaim both — linear scaling and parallelism. Whether they dethrone transformers is an open question in 2026.
+    pitfalls:
+      - "Transformer training is parallel; inference (autoregressive generation) is sequential. RNN inference is also sequential. The asymptotic advantage is in training."
+  - question: "Where do RNNs still appear in 2026?"
+    shortAnswer: |
+      Tiny on-device models for keyword spotting / wake words. Older production systems that haven't been migrated. Online time series forecasting at small scale. As components in some hybrid architectures (e.g., LSTM-on-top-of-transformer-embeddings).
+    detailed: |
+      Surviving niches:
+
+      - **Speech/keyword spotting on microcontrollers.** A 50KB LSTM running on an embedded device for "Hey, Siri" detection. The simplicity matters.
+      - **Streaming time series at modest scale**. Energy demand forecasting, financial tick data. Where you need a strong sequential prior and don't have transformer-scale compute.
+      - **Older production systems** that still work. ML engineering is conservative; if an LSTM trained in 2019 ships fraud detection at 99.5% accuracy, it stays.
+      - **Hybrid architectures**: LSTM as a small head on top of transformer features for some sequence tasks.
+
+      What's *not* a 2026 use case:
+      - Language modelling at scale (transformers won).
+      - Machine translation (transformers won).
+      - Speech recognition (transformers + CTC or attention won).
+      - Music generation (transformers + diffusion won).
+      - Most reasonable production NLP (BERT/GPT/Llama).
+    pitfalls:
+      - "If a paper from 2018 used an LSTM, the 2026 equivalent almost certainly uses a transformer."
+  - question: "What's a state-space model and why is everyone suddenly excited?"
+    shortAnswer: |
+      State-space models (S4, Mamba) compute sequence outputs in linear time with a recurrence that can be parallelised during training. They aim to match transformer quality without quadratic attention. Whether they fully replace transformers is unsettled.
+    detailed: |
+      Classical state-space models: y_t depends on a hidden state h_t evolving via linear recurrence h_t = A·h_{t-1} + B·x_t. The recurrence can be unrolled and parallelised (via parallel scan), giving training-time parallelism similar to transformers.
+
+      **S4** (Gu, Goel, Re, 2021) made this trainable at scale with careful initialisation.
+
+      **Mamba** (Gu & Dao, 2023) added input-dependent gating (the recurrence parameters depend on the input). Matches transformer quality on language modelling at moderate scale, with linear (not quadratic) compute in context length.
+
+      **RWKV** is a related approach, popular in the open-source LLM community.
+
+      In 2026, state-space models are real and growing but haven't displaced transformers at frontier scale. Most production LLMs are still transformers. Watch this space — the long-context advantage may eventually matter more than the current quality gap.
+    pitfalls:
+      - "S4/Mamba/RWKV are not RNNs in the LSTM sense. They borrow the 'hidden state' framing but their dynamics are designed for parallel training."
+---
+
+<TldrCallout>
+  RNNs (LSTM, GRU) ruled sequence modelling from 2014 to 2018. Transformers replaced them for nearly
+  every modern task — text, audio, vision, code. The conceptual ideas (hidden state, gating) survive
+  in state-space models (S4, Mamba). For 2026 production, learn that RNNs exist and how they work
+  conceptually; reach for transformers in any new project unless edge-deployment or streaming costs
+  force the older choice.
+</TldrCallout>
+
+## What an RNN is
+
+A network that processes a sequence one element at a time, maintaining a hidden state that summarises history:
+
+```
+h_t = f(h_{t-1}, x_t)
+y_t = g(h_t)
+```
+
+Same weights at every time step. Backpropagation through time (BPTT) unrolls the network across the sequence and applies the chain rule.
+
+Vanilla RNNs use f(h, x) = tanh(W_h h + W_x x). Simple, elegant, mostly untrainable on long sequences.
+
+## The vanishing gradient story
+
+Gradient at time T propagating back to time t involves a product of T − t Jacobians of W_h tanh. If ‖W_h‖ < 1: gradient shrinks exponentially. If ‖W_h‖ > 1: gradient explodes.
+
+In practice, vanilla RNNs lose dependencies beyond ~20 time steps. The hidden state forgets distant past.
+
+LSTM (Hochreiter & Schmidhuber, 1997) fixed this with **gating**: a cell state c_t that flows mostly multiplication-free through time, with sigmoid gates controlling what to keep and add.
+
+| Gate            | What it controls                  |
+| --------------- | --------------------------------- |
+| Forget gate f_t | What fraction of c\_{t-1} to keep |
+| Input gate i_t  | How much new candidate to add     |
+| Output gate o_t | How much of c_t to expose as h_t  |
+
+The cell state update c*t = f_t ⊙ c*{t-1} + i_t ⊙ g_t is additive (mostly), so gradients don't compound multiplicatively. Sequences of hundreds of steps become trainable.
+
+GRU (Cho et al., 2014) simplifies LSTM into one fewer gate; similar performance with fewer parameters. They co-existed for years; LSTM is more common in published work.
+
+<AnalogyCallout>
+  A vanilla RNN is like writing notes in pencil and erasing some at each step — earlier notes fade.
+  An LSTM has both pencilled notes (hidden state h) and indelible ink (cell state c). The gates
+  decide what to ink in, what to erase from the ink, and what to show.
+</AnalogyCallout>
+
+## Why transformers won
+
+Transformer self-attention (Module 5.4 next) lets every position attend directly to every other position. Three structural advantages over RNNs:
+
+1. **Parallel training.** All positions computed simultaneously. RNN must compute t=1, then t=2, etc.
+2. **Direct long-range dependencies.** Position 1 → position 1000 in one operation; RNN takes 1000 sequential hops.
+3. **Scales further.** Transformer quality keeps improving with parameter count to 1T+; RNNs plateaued around 1B.
+
+The trade-off: attention is O(n²) in sequence length (transformers do all-pairs comparison). RNN inference is O(1) per token; transformer inference is O(n) per token (must compare against the cache of previous tokens).
+
+For training: parallelism wins, transformers cheaper. For streaming inference at scale: RNN's constant-time-per-token property matters and is part of the motivation for state-space models.
+
+## What's an RNN's 2026 niche?
+
+| Use case                                | Why RNN                                 |
+| --------------------------------------- | --------------------------------------- |
+| Tiny on-device keyword spotting         | Memory + compute constraint             |
+| Streaming financial time series (small) | Sequential + constant-time-per-step     |
+| Legacy production NLP / classification  | "If it works, don't touch it"           |
+| Component in some hybrid architectures  | Sometimes a small RNN head              |
+| Teaching example                        | Builds intuition for state-space models |
+
+Not a 2026 use case:
+
+- Language modelling.
+- Translation.
+- Speech recognition / synthesis.
+- Music / audio generation.
+- Any context where transformer pretraining is available.
+
+In open-source code, the most common LSTM usage in 2026 is to recognize it in older codebases and decide whether to migrate to a transformer.
+
+<InlineQuiz
+  question="You're building a wake-word detector for a microcontroller (e.g., 'Hey, computer'). The device has 128 KB of RAM and runs at low power. Which architecture should you reach for?"
+  options={[
+    { text: "A 1B parameter transformer." },
+    {
+      text: "A small LSTM or GRU (50–500 KB). Constant memory per time step; streamable; runs on microcontrollers.",
+      correct: true,
+    },
+    { text: "A medium ConvNet." },
+    { text: "Vision Transformer." },
+  ]}
+  explanation="The constraint set — microcontroller, KB-scale memory, streaming, low power — is exactly where small RNNs still shine. Transformers and large CNNs don't fit. A small LSTM or GRU keyword spotter is the canonical embedded-AI pattern. Modern Edge TPU and TensorFlow Lite Micro both support these. This is one of the few surviving production niches."
+/>
+
+## Conceptual descendants: state-space models
+
+Even though LSTMs themselves are mostly gone, the idea of "process sequences with a recurrent hidden state" came back in the 2020s in a new form:
+
+- **S4** (Gu et al., 2021): structured state-space sequence model with carefully chosen recurrence. Long context, linear compute.
+- **Mamba** (Gu & Dao, 2023): adds input-dependent recurrence parameters. Competitive with transformers on language modelling at moderate scale.
+- **RWKV**: an open-source community effort combining RNN-style inference with transformer-style training.
+
+These are not LSTMs but inherit the "sequential state" framing. Whether they replace transformers at frontier scale is an open question — the long-context advantage is significant if quality matches.
+
+For now: most production sequence models are transformers. RNNs are taught for history, edge deployment, and as conceptual scaffolding for state-space models.
+
+<InlineQuiz
+  question="True or false: An LSTM trained on a sequence-classification task in 2018 should always be replaced with a transformer in 2026."
+  options={[
+    { text: "True — transformers are always better." },
+    {
+      text: "False — if the LSTM is in production and works, replacing it costs engineering effort with uncertain ROI; quantify the upside before migrating.",
+      correct: true,
+    },
+    { text: "True if the dataset is small." },
+    { text: "False — LSTMs are inherently superior for classification." },
+  ]}
+  explanation="ML engineering decisions are about cost-benefit, not technical superiority. A working LSTM in production might be 1% worse than a pretrained transformer but much cheaper to serve, audit, and maintain. Always quantify the upside (accuracy, throughput, latency) and the engineering cost before migrating. 'Newer is better' is a research mindset; production is more conservative."
+/>
+
+## Closing for RNNs
+
+The next lesson (A5.3) covers residual connections — the architectural primitive that lets you train arbitrarily deep networks. Both CNNs and transformers use them; without residuals, deep models don't train. After that, A5.4 introduces attention, and A5.5 assembles the full transformer.
+
+The arc of Module 5 is: from spatial inductive bias (CNNs) and sequential inductive bias (RNNs), through residuals (depth) and attention (long-range), to transformers (the synthesis) and modern LLM-era refinements (RMSNorm, RoPE, MoE, scaling laws). The 2010s and 2020s architectural story is essentially complete in eight lessons.

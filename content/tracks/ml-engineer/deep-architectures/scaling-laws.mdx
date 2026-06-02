@@ -1,0 +1,261 @@
+---
+title: "Scaling laws and compute"
+description: "How model loss falls predictably with parameters, data, and compute. Why a fixed compute budget has an optimal model size — and why most pre-2022 models were undertrained."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: scaling-laws
+lessonCode: "A5.7"
+estMinutes: 12
+prereqs:
+  - "A5.5 The Transformer architecture"
+objectives:
+  - "State the Chinchilla scaling law and use it to predict optimal model size for a compute budget."
+  - "Compute approximate training FLOPs for a transformer given parameters and tokens."
+  - "Identify undertrained and overtrained models from their parameter-to-token ratio."
+pitfalls:
+  - "Treating scaling laws as exact. They're empirical regressions over a range; extrapolation is dangerous and the constants update with new evidence."
+  - "Assuming the optimal model is the right model for your use case. Chinchilla gives the loss-optimal size; deployment cost may pull you smaller."
+  - "Confusing parameters (capacity) with active parameters (MoE compute) when applying scaling laws."
+  - "Believing 'bigger is better' even past Chinchilla. Past optimal, you're overspending compute for marginal gains."
+importantQuestions:
+  - question: "What is a scaling law?"
+    shortAnswer: |
+      An empirical relationship between language modelling loss and resources (parameters N, training tokens D, compute C). Loss falls as a power law in each: L(N, D) ≈ A · N^(−α) + B · D^(−β) + irreducible.
+    detailed: |
+      Kaplan et al. (2020) and Hoffmann et al. (2022, "Chinchilla") fit power laws to model loss across many scales:
+
+      L(N, D) = A · N^(−α) + B · D^(−β) + L_∞
+
+      where:
+      - N: number of parameters
+      - D: number of training tokens
+      - L_∞: irreducible loss (data has finite entropy)
+      - α, β: exponents (around 0.34 for both in Chinchilla)
+      - A, B: scaling constants
+
+      The power-law form means each doubling of N or D yields a fixed *fractional* reduction in (L − L_∞). Not zero progress, but diminishing returns.
+
+      Compute is roughly C ≈ 6 · N · D (forward + backward + optimizer for a transformer). For a fixed C, the loss is minimised by a specific N* and D* — the compute-optimal balance.
+    pitfalls:
+      - "Scaling laws are fit on small models extrapolated to large. The exponents update as new evidence accumulates; Chinchilla revised Kaplan's; future work will revise again."
+  - question: "What does Chinchilla say about optimal model size?"
+    shortAnswer: |
+      For compute budget C, the optimal model has approximately N ≈ √(C / 6) / 20 parameters and D ≈ 20N tokens. In simpler form: for every model parameter, train on ~20 tokens.
+    detailed: |
+      Hoffmann et al. (2022) found that earlier large models (GPT-3, Gopher) were undertrained — they had too many parameters for their training data. The compute-optimal ratio is roughly:
+
+      D / N ≈ 20 (tokens per parameter)
+
+      So for a 7B parameter model, optimal training data ≈ 140B tokens. For 70B, ≈ 1.4T tokens. For 175B (GPT-3), Chinchilla-optimal would have been ~3.5T tokens; GPT-3 trained on 300B tokens — drastically undertrained.
+
+      The Chinchilla 70B model (trained on 1.4T tokens) outperformed Gopher 280B (trained on 300B tokens) at less than the compute. Same compute, smaller model, more data — better outcome.
+
+      Important caveat: "optimal" means "lowest loss per training FLOP." If you're going to serve the model billions of times, deploying a smaller model trained on more data (Llama-2-7B was trained on 2T tokens — 3× the Chinchilla-optimal ratio) makes sense because inference cost dominates.
+    pitfalls:
+      - "Chinchilla optimal vs. Llama-style overtraining is a deliberate trade-off. Inference cost matters; Llama models are often overtrained because they're deployed."
+  - question: "How do you compute training FLOPs?"
+    shortAnswer: |
+      For a transformer training step: forward FLOPs ≈ 2 · N · D_tokens; backward + optimizer ≈ 4 · N · D_tokens. Total ≈ 6 · N · D_tokens per training token.
+    detailed: |
+      For a transformer with N parameters trained on D total tokens (= num_tokens_per_step × num_steps):
+
+      - Forward: ~2 · N · D (one multiply-add per parameter per token)
+      - Backward: ~4 · N · D (gradient computation + optimizer step)
+      - Total: ~6 · N · D
+
+      Example: Llama-2-7B trained on 2T tokens.
+      Compute = 6 · 7 × 10⁹ · 2 × 10¹² = 8.4 × 10²² FLOPs.
+
+      On H100 GPU (~1000 TFLOPS at BF16): 8.4 × 10²² / 10¹⁵ = 8.4 × 10⁷ seconds = 970 days of compute — or 121 H100-days at 8× utilisation. Llama-2 reported ~184k A100-hours.
+
+      The 6ND formula is the rule of thumb for transformer training FLOPs. Memory and communication costs are extra and complicate distributed training, but for comparing scales, 6ND is the canonical estimate.
+    pitfalls:
+      - "The 6ND formula assumes attention is dominated by FFN. For very long contexts, attention FLOPs add a noticeable extra term."
+  - question: "Why was GPT-3 undertrained?"
+    shortAnswer: |
+      Pre-Chinchilla, the practical wisdom was 'go bigger.' GPT-3 had 175B parameters trained on 300B tokens — a tokens/parameter ratio of 1.7. Chinchilla showed the optimum was ~20. With the same compute, a smaller model on more data would have done better.
+    detailed: |
+      Kaplan et al. (2020) — the pre-Chinchilla scaling laws — were biased by their data: they trained on fixed token budgets and varied parameter count. They concluded "scale up parameters." This led to a generation of giant models with too little data: GPT-3 (175B / 300B tokens), Gopher (280B / 300B), MT-NLG (530B / 270B).
+
+      Hoffmann et al. (2022, Chinchilla) varied both N and D and found the optimal ratio is much closer to D/N = 20. They trained Chinchilla 70B on 1.4T tokens with the same compute as Gopher 280B and beat it on most benchmarks.
+
+      The lesson: data scarcity, not parameter scarcity, was the real bottleneck. Llama-2 trained on 2T tokens per parameter at the same scale; Llama-3 on 15T tokens. Modern models are trained on dramatically more data than their pre-Chinchilla predecessors.
+
+      Open question in 2026: as we approach the limits of available high-quality text (10–20T tokens), synthetic data and reasoning-traced data are increasingly important.
+    pitfalls:
+      - "Chinchilla's exponents are specific to text. Other modalities (images, code, multimodal) have different scaling exponents."
+  - question: "When should you deviate from Chinchilla-optimal?"
+    shortAnswer: |
+      When inference cost matters. Llama-2-7B trained on 2T tokens (Chinchilla-optimal would be ~140B) because at 7B, deployment is cheap enough that the extra training is worth it. Inference-frequency × inference-cost dominates training-cost for popular models.
+    detailed: |
+      Chinchilla optimises training compute. In practice:
+
+      - If you're training once and deploying many times → overtrain a smaller model. Llama-2-7B's 2T tokens is 14× Chinchilla; the inference cost saving over a 70B model dwarfs the extra training cost.
+      - If you're training many models and exploring → Chinchilla-optimal is the sweet spot.
+      - If you're constrained by data quality → smaller model trained on better-quality data may beat a larger model on noisy data.
+
+      Modern deployment patterns:
+      - Frontier API models (GPT-4, Claude, Gemini): trained as large as compute permits, even past Chinchilla — capability gains beat compute efficiency.
+      - Open-source LLMs (Llama, Mistral, Qwen): overtrained smaller models — optimised for deployment cost.
+      - On-device models (Llama-3.2-1B, Phi-4): aggressively overtrained, distilled, quantised.
+
+      Knowing scaling laws lets you reason about each trade-off explicitly instead of relying on intuition.
+    pitfalls:
+      - "Overtraining has diminishing returns. Past ~20× Chinchilla, additional tokens add little. Find the right point empirically."
+  - question: "Do scaling laws still hold in 2026?"
+    shortAnswer: |
+      Roughly, yes — but with caveats. The constants have changed (data quality matters more than predicted). Different objectives (instruction tuning, reasoning) have their own scaling. Architectural changes (MoE) shift the curves. The basic form (power law in N, D) remains a useful framework.
+    detailed: |
+      The original Chinchilla framework is robust for "predict next token in cleaned web text" — the standard pretraining objective. Recent findings:
+
+      - **Data quality dominates** at marginal scales. Phi models trained on synthetic high-quality data outperform expectations from raw token count.
+      - **Repetition matters**. Re-training on the same tokens has diminishing returns; "effective tokens" is what counts.
+      - **Reasoning chains** (chain-of-thought, GRPO, RLHF training): different scaling, harder to predict.
+      - **MoE**: per-FLOP scaling looks different; total parameters matter for capacity but compute scaling is per-active-parameter.
+      - **Multimodal**: images, audio scale differently than text.
+
+      The takeaway for a 2026 ML engineer: scaling laws give you the right order-of-magnitude intuition. The exact constants change with research progress; the framework (loss as power law in resources) holds.
+    pitfalls:
+      - "Don't extrapolate scaling laws beyond the regime they were fit on. Going from 1B to 70B is interpolation; from 70B to 7T is extrapolation."
+---
+
+<TldrCallout>
+  Language modelling loss falls predictably with model size, data, and compute, following power
+  laws. Chinchilla (2022) showed the compute-optimal ratio is ~20 tokens per parameter — meaning
+  pre-2022 models like GPT-3 were drastically undertrained. In 2026, frontier models overtrain past
+  Chinchilla (Llama-3 at 15T tokens for 70B parameters) because inference cost dominates training
+  cost for deployed models.
+</TldrCallout>
+
+## The basic form
+
+For a transformer trained on language modelling:
+
+L(N, D) ≈ A · N^(−α) + B · D^(−β) + L_∞
+
+where N is parameters, D is training tokens, and L_∞ is the irreducible loss (data has finite entropy). Empirical fits put α and β both near 0.34 (Chinchilla).
+
+This is a power law in each resource: each doubling reduces (L − L_∞) by a fixed _fraction_. Returns diminish but never vanish.
+
+## The compute-optimal model
+
+Compute is roughly C = 6 · N · D for a transformer. For a fixed C, the loss-optimal (N*, D*) is the (N, D) pair that minimises the formula above subject to 6ND = C.
+
+Chinchilla's empirical answer:
+
+D* / N* ≈ 20
+
+For every parameter, train on ~20 tokens. For a 7B model: 140B tokens. For 70B: 1.4T tokens. For 175B: 3.5T tokens.
+
+| Model             | Parameters | Training tokens | Ratio (D/N) | Chinchilla-optimal?      |
+| ----------------- | ---------- | --------------- | ----------- | ------------------------ |
+| GPT-3 (2020)      | 175B       | 300B            | 1.7         | Drastically undertrained |
+| Gopher (2021)     | 280B       | 300B            | 1.1         | Drastically undertrained |
+| PaLM (2022)       | 540B       | 780B            | 1.4         | Drastically undertrained |
+| Chinchilla (2022) | 70B        | 1.4T            | 20          | Optimal                  |
+| Llama-2 (2023)    | 70B        | 2T              | 29          | Slightly overtrained     |
+| Llama-3 (2024)    | 70B        | 15T             | 214         | Heavily overtrained      |
+| Llama-3 (2024)    | 8B         | 15T             | 1875        | Extremely overtrained    |
+
+The shift from "drastically undertrained giants" (GPT-3 era) to "deliberately overtrained smaller models" (modern Llama, Mistral) is the practical fallout of Chinchilla.
+
+## Why overtrain?
+
+If Chinchilla gives the loss-optimal model for a compute budget, why overtrain? Because deployment cost dominates training cost for popular models.
+
+Llama-2-7B serves 100M+ users. Training cost: ~$2-3M. Inference cost (estimated): tens of $M per year at scale.
+
+Compare:
+
+- Chinchilla-optimal 7B on 140B tokens: ~$200K training; runs at X tokens/sec at inference.
+- Llama-2-7B on 2T tokens: ~$3M training; same X tokens/sec at inference but ~3 perplexity points better quality.
+
+The training cost increase is one-time and absorbed; the quality improvement compounds across billions of inference calls. Overtraining is rational deployment economics.
+
+For research / experimentation, Chinchilla-optimal is correct (you want best quality per training FLOP). For deployed production models, overtraining smaller models is correct.
+
+<AnalogyCallout>
+  Chinchilla scaling says: for the cheapest training, spend equally on size and data. Real-world
+  deployment says: for the cheapest *amortised* model lifecycle, smaller models with more training
+  data win because inference scales with deployment, not with training. Same equation, different
+  objective.
+</AnalogyCallout>
+
+## Computing FLOPs
+
+For a transformer with N parameters trained on D tokens, total training compute is approximately:
+
+C ≈ 6 · N · D
+
+Breakdown:
+
+- Forward: 2 · N · D (one multiply-add per parameter per token).
+- Backward: 2 · N · D (gradient computation matches forward).
+- Optimizer: 2 · N · D (Adam-family with momentum and variance).
+
+Examples:
+
+| Model        | N        | D          | FLOPs (≈ 6ND) | GPU-hours (H100 at 1 PFLOPS, 50% util) |
+| ------------ | -------- | ---------- | ------------- | -------------------------------------- |
+| Llama-2-7B   | 7 × 10⁹  | 2 × 10¹²   | 8.4 × 10²²    | 47k                                    |
+| Llama-2-70B  | 7 × 10¹⁰ | 2 × 10¹²   | 8.4 × 10²³    | 470k                                   |
+| Llama-3-405B | 4 × 10¹¹ | 1.5 × 10¹³ | 3.6 × 10²⁵    | 20M+                                   |
+
+A 405B-parameter model on 15T tokens needs ~20M H100-hours — i.e., a few thousand H100s for months. That's the entry ticket to frontier-scale training in 2026.
+
+## What scaling laws tell you in practice
+
+Before training a model:
+
+1. **Set the compute budget** C (FLOPs). For most teams this is fixed by infrastructure availability.
+2. **Pick a deployment target**. Will this be served? If yes, lean toward smaller + overtrain. If research, Chinchilla-optimal.
+3. **Compute N and D**. With Chinchilla ratio D/N ≈ 20 and C = 6ND, N\* = √(C / 120).
+4. **Sanity-check**. Is your data quality good enough to support N\* parameters' worth of pattern? If data is the bottleneck, smaller model.
+5. **Estimate the loss**. Use the published L(N, D) constants for a rough prediction.
+
+After training, the post-hoc loss should fall on the predicted curve (within ~10%). Significant deviation indicates data quality, architecture, or training issues.
+
+<InlineQuiz
+  question="You have a compute budget of 10²³ FLOPs and want to train a Chinchilla-optimal model. Approximately what parameter count and training tokens should you target?"
+  options={[
+    { text: "N ≈ 30B parameters, D ≈ 0.5T tokens.", correct: true },
+    { text: "N ≈ 175B parameters, D ≈ 100B tokens (GPT-3 style)." },
+    { text: "N ≈ 1B parameters, D ≈ 20T tokens." },
+    { text: "Doesn't matter, scale only depends on training time." },
+  ]}
+  explanation="C = 6ND, with D/N = 20 (Chinchilla). Substitute: C = 6 · N · 20N = 120 N². So N = √(C/120) = √(10²³/120) ≈ √(8.3 × 10²⁰) ≈ 29 × 10⁹ = 29B parameters. D = 20N = 580B tokens. The 175B / 100B option (GPT-3 style) is undertrained; the 1B / 20T option is heavily overtrained (data-bound)."
+/>
+
+## In 2026
+
+Scaling laws are now an engineering tool. Before launching a frontier training run, every major lab estimates the optimal N and D from the compute budget. Llama-3, GPT-4, Claude, Gemini training runs are all sized this way (with overtraining adjustments for deployment).
+
+Recent refinements:
+
+- **Data quality scaling** (Phi models): with very high-quality data, the constant A in L = AN^(−α) is much smaller. Effective scale is higher than raw N suggests.
+- **Reasoning scaling** (chain-of-thought training, GRPO): different objective, different scaling. RL fine-tuning produces gains that don't fit the standard L(N, D) curve.
+- **MoE scaling**: scaling with respect to total parameters (capacity) and active parameters (compute) differ. Mixture-of-Experts models score better than dense models of the same active-parameter count but worse than dense models of the same total-parameter count.
+
+For a 2026 ML engineer: know the basic form, the Chinchilla ratio of 20, and the 6ND compute estimate. Apply them as order-of-magnitude tools, not exact predictions.
+
+<InlineQuiz
+  question="You estimate your 70B model needs 1.4T tokens (Chinchilla-optimal). Your team has 5T tokens of high-quality web text available. What should you do?"
+  options={[
+    { text: "Train on exactly 1.4T tokens — Chinchilla says that's optimal." },
+    {
+      text: "Train on 5T tokens. Overtraining beyond Chinchilla still improves quality and the model will be deployed many times — extra training amortises across inference.",
+      correct: true,
+    },
+    { text: "Train a 250B parameter model instead (5T / 20 = 250B)." },
+    { text: "Skip pretraining and just fine-tune from an existing 70B checkpoint." },
+  ]}
+  explanation="Chinchilla-optimal is the *training-compute-optimal* point, not the lifetime-optimal point. If you'll deploy this model many times, train on all 5T tokens — Llama-2 and Llama-3 both overtrain heavily for this reason. Training a 250B model on 5T tokens (Chinchilla-optimal at that scale) would cost ~3-4× more compute and serve at higher inference cost; only worth it if quality matters more than deployment cost."
+/>
+
+## Closing for scaling laws
+
+The basic story: more parameters, more data, more compute → lower loss, predictably. Chinchilla gives you the right balance for training-compute-optimal models; modern deployment economics suggests overtraining for serving. Compute = 6ND is the rule of thumb for transformer training cost.
+
+The next and final Module 5 lesson covers pretraining and transfer learning — how the loss reductions predicted by scaling laws turn into useful capabilities, and how those capabilities transfer to downstream tasks.

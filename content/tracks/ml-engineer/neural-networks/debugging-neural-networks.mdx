@@ -1,0 +1,336 @@
+---
+title: "Debugging neural networks"
+description: "Karpathy's recipe in 2026 terms. When a network doesn't train, the answer is almost never 'increase model size.' Here's the systematic checklist that catches the actual bug."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: debugging-neural-networks
+lessonCode: "A4.8"
+estMinutes: 13
+prereqs:
+  - "A4.7 The training stack: schedules, mixed precision, distributed"
+  - "A4.3 Backpropagation in detail"
+objectives:
+  - "Apply the 'overfit a single batch' test as the first diagnostic for any new model."
+  - "Interpret loss curves and gradient norms to localise where training is failing."
+  - "Distinguish data, model, optimisation, and infrastructure bugs by their signatures."
+pitfalls:
+  - "Trusting the validation curve before the model can overfit one batch. If it can't memorise 10 examples, it can't learn 10 million."
+  - "Adding regularisation to fix underfitting. They're opposites — underfitting needs more capacity, more data, or less regularisation."
+  - "Tweaking hyperparameters before checking data. The most common bug is in the dataloader, not the optimiser."
+  - "Believing tensorboard / wandb plots over print statements when debugging. Print the loss every step until you trust the pipeline."
+importantQuestions:
+  - question: "What's the first thing to do when a new model 'doesn't train'?"
+    shortAnswer: |
+      Overfit a single small batch (5–20 examples). If the model can't drive training loss to ~zero on that batch, you have a model or pipeline bug, not a learning rate / regularisation issue. Fix that first.
+    detailed: |
+      The "overfit single batch" test is Karpathy's first diagnostic and it should be yours too. The procedure:
+
+      1. Take 10 random examples from your dataset.
+      2. Train on them with no regularisation, no augmentation, no shuffling.
+      3. Run for many epochs. Watch loss.
+
+      What should happen: loss drops to near zero (the model memorises 10 examples).
+
+      What it tells you when it works: the forward pass, backward pass, optimiser, and data pipeline are all functional. Now you can debate learning rate, regularisation, and architecture.
+
+      What it tells you when it fails: you have a real bug. The model isn't even learning when you removed all sources of difficulty.
+
+      Common causes when it fails:
+      - Wrong loss function (e.g., MSE on classification logits).
+      - Dataloader bug (labels shuffled, augmentation gone wrong).
+      - Model architecture issue (output too small, missing activation).
+      - Gradient blocked somewhere (.detach(), .data, no_grad block).
+    pitfalls:
+      - "If you can't overfit 10 examples, no amount of hyperparameter tuning will fix the actual problem."
+  - question: "What does the train/validation loss gap tell you?"
+    shortAnswer: |
+      Small train loss, large val loss → overfitting. Both losses high → underfitting or insufficient capacity. Both losses low but val unstable → optimisation issue (too high lr, bad regularisation). Specific patterns indicate specific fixes.
+    detailed: |
+      The standard diagnostic patterns:
+
+      | Train loss | Val loss | Diagnosis |
+      | ---------- | -------- | --------- |
+      | Plummets | Drops then rises | Classic overfitting; add regularisation or data |
+      | High, flat | High, flat | Underfitting; bigger model, more capacity, more time |
+      | Both decreasing | Both decreasing, val plateaus | Almost done; consider early stopping |
+      | Spiky | Spiky | Learning rate too high; gradient instability |
+      | NaN at step 1 | N/A | Numerical issue: bad init, bad loss, FP16 underflow |
+      | Spike then NaN | N/A | Gradient explosion; clip gradients |
+
+      For overfitting: add dropout, weight decay, data augmentation, more data. Add them one at a time and measure.
+
+      For underfitting: bigger model, more epochs, different architecture. Don't add regularisation — it makes underfit worse.
+    pitfalls:
+      - "A gap of 0.05 between train and val is fine. A gap of 0.50 is overfitting. Calibrate intuition on small clean experiments first."
+  - question: "How do you debug 'loss is NaN'?"
+    shortAnswer: |
+      Three usual suspects: (1) log of zero (use log_softmax / numerically stable variants), (2) division by zero (add epsilon), (3) FP16 overflow (use BF16 or loss scaling, lower learning rate). Find the first step where NaN appears.
+    detailed: |
+      Workflow:
+
+      1. **Find when** NaN first appears. Print loss every step; note the step number.
+      2. **Check the input** at that step. Bad data (corrupted image, infinity in tabular)?
+      3. **Check intermediate activations**. Add `assert torch.isfinite(x).all()` after each layer.
+      4. **Check gradients**. Print gradient norms; spike before NaN?
+      5. **Check loss formula.** log(0)? exp(huge)? divide by zero? Replace with numerically stable versions.
+
+      Common fixes:
+      - Lower learning rate (especially if NaN appears mid-training).
+      - Switch from FP16 to BF16 (eliminates many underflow issues).
+      - Use `F.log_softmax` not `log(softmax(.))`.
+      - Use `F.cross_entropy(logits, labels)` not `F.nll_loss(F.log_softmax(logits))`.
+      - Add gradient clipping at norm 1.0.
+
+      NaN that appears at step 1 is usually init or loss formula. NaN that appears at step 1000 is usually gradient instability or bad data.
+    pitfalls:
+      - "Setting `torch.autograd.set_detect_anomaly(True)` slows training but pinpoints which op produced the NaN. Use during debugging, turn off for production runs."
+  - question: "When should you use a learning rate finder?"
+    shortAnswer: |
+      Always, for any new model or task. Run training with the lr increasing exponentially each step; loss vs lr is a curve. The "good" lr is one order of magnitude below the steepest descent.
+    detailed: |
+      LR finder (popularised by Smith, 2017 and fastai):
+
+      1. Start training with very low lr (1e-7).
+      2. Multiply lr by ~1.1 each step.
+      3. Plot loss vs log(lr).
+      4. Identify the steepest descent region.
+      5. Pick lr ≈ steepest_descent_lr / 10.
+
+      The "steepest descent" point is where loss is dropping fastest; the conservative choice is one order of magnitude below, which gives margin for gradient noise and prevents divergence.
+
+      In 2026: PyTorch Lightning, fastai, and HuggingFace Trainer all have lr finder utilities. Run before any new training run; takes 5–10 minutes; saves hours.
+
+      For LLMs and transformers specifically: lr is well-known per architecture family (3e-4 for Adam on transformer, 1e-3 for AdamW on smaller models). LR finder is more useful for novel architectures or small tasks.
+    pitfalls:
+      - "LR finder needs many small training steps. Don't run it on a slow data pipeline; pre-cache a small subset first."
+  - question: "What's the right order of operations when debugging?"
+    shortAnswer: |
+      Data → model → optimisation → regularisation → scale. Check the data first (most common bug). Then check the model can fit a tiny dataset. Only then worry about optimiser and hyperparameters.
+    detailed: |
+      Karpathy's debugging order (paraphrased and updated):
+
+      **1. Look at the data.** Display 100 examples with their labels. Check augmentations. Verify class balance. The single most common cause of training failure is a data pipeline bug.
+
+      **2. Set up the eval skeleton.** Implement evaluation before training. Verify it runs without errors on random outputs.
+
+      **3. Overfit a single batch.** Can the model memorise 10 examples? If not, fix the model or loss.
+
+      **4. Train on the full dataset.** Watch loss curves. Identify the regime (underfit, overfit, plateau).
+
+      **5. Tune learning rate and schedule.** LR finder; warmup duration; total steps.
+
+      **6. Regularise.** Only after the model is overfitting. Dropout, weight decay, augmentation, early stopping.
+
+      **7. Scale up.** Bigger model, more data, longer training. Each is a separate axis.
+
+      Most ML engineers skip steps 1–3 and jump to step 5. Then they wonder why nothing works.
+    pitfalls:
+      - "Tuning hyperparameters before the data and model are clean wastes weeks. Steps 1–3 should take an afternoon."
+  - question: "What are the 'silent failures' to know about?"
+    shortAnswer: |
+      Data leakage (high training and validation; low test). Wrong evaluation metric (accuracy on imbalanced data). Distribution shift (good in dev, bad in production). Augmentation bugs (labels and inputs misaligned). Mixed-precision underflow (gradients silently zero).
+    detailed: |
+      The most insidious bugs don't cause obvious failures — training "works" but the model is broken.
+
+      **Data leakage.** Features computed using future or test information. Train and val both look great; production fails. Audit each feature's data lineage. See [A2.8](/tracks/ml-engineer/supervised/feature-engineering).
+
+      **Wrong metric.** Reporting accuracy on 99% / 1% imbalanced data. The model predicts majority and scores 99%. Use precision-recall, F1, or PR-AUC.
+
+      **Augmentation misalignment.** In computer vision: when you augment an image, you need to apply the same transform to its mask / bounding box. Easy to forget. Visually inspect augmented samples.
+
+      **Mixed-precision underflow.** With FP16, gradients of very small magnitudes underflow to zero. Training continues but stops learning at some scale. BF16 fixes this; or use loss scaling carefully.
+
+      **Off-by-one in tokenisation.** Sequence length mismatches between training and inference. Predictions look fine in dev (same off-by-one applied) and fail in production.
+
+      Common thread: the loss / metric doesn't reveal the problem. Verification requires going outside the training loop — testing on synthetic data with known answers, examining specific predictions by hand, or A/B testing in production.
+    pitfalls:
+      - "Make a habit of examining 20 random predictions every epoch. The aggregate metrics hide individual disasters."
+---
+
+<TldrCallout>
+  When a neural network won't train, the answer is rarely "bigger model" or "more tuning."
+  Karpathy's recipe still works: examine the data, overfit a single batch, then progressively scale
+  up. Most failures are pipeline bugs (wrong labels, broken augmentation, broken graph), not
+  optimisation issues. Knowing the systematic checklist saves weeks.
+</TldrCallout>
+
+## The first diagnostic: overfit one batch
+
+Before anything else, when you have a new model or task:
+
+1. Take 10 random training examples.
+2. Disable shuffling, augmentation, regularisation, dropout.
+3. Train repeatedly on those 10 examples.
+4. Watch the training loss.
+
+It should reach ~zero. A modern network with millions of parameters can memorise 10 examples easily; if it can't, something is wrong before learning starts.
+
+This single test catches:
+
+- Wrong loss function (MSE on classification logits).
+- Wrong output activation (softmax twice).
+- Disconnected gradient graph (detach, no_grad, numpy roundtrip).
+- Wrong target shape.
+- Dataloader bug shuffling labels.
+
+If overfit-single-batch works, your model and pipeline are sound, and you can debate hyperparameters productively.
+
+If it fails, no amount of hyperparameter tuning matters. Find the bug.
+
+## The data is almost always the problem
+
+Counter-intuitive but true: the most common cause of training failure in 2026 is a data pipeline bug, not a model or optimiser problem.
+
+Before training:
+
+- Display 100 examples with their labels. Do they look right?
+- Verify class balance. Is your "balanced" dataset actually balanced?
+- Check augmentations on individual examples. Did random-crop crop out the object? Did image-text augmentations align?
+- Trace a single example end-to-end. Same target before and after?
+
+This takes 30 minutes; it routinely saves weeks of debugging.
+
+<AnalogyCallout>
+  Debugging a neural network is like debugging a programme — most bugs are in the boring
+  infrastructure (dataloader, evaluation, file paths), not in the elegant core algorithm. Treat the
+  model as the last suspect, not the first.
+</AnalogyCallout>
+
+## Interpreting loss curves
+
+What loss curves reveal at a glance:
+
+| Pattern                                      | What it means                                 | What to do                              |
+| -------------------------------------------- | --------------------------------------------- | --------------------------------------- |
+| Train ↓, val ↑                               | Overfit                                       | Regularise; more data; smaller model    |
+| Train flat, val flat                         | Underfit or stuck                             | Bigger model, longer warmup, lr too low |
+| Train ↓ then jumps up                        | Catastrophic overshoot                        | lr too high; clip gradients             |
+| Train sometimes goes up                      | Stochastic noise, normal                      | Smaller learning rate, bigger batch     |
+| NaN at step 1                                | Init or loss bug                              | Check loss formula; init values         |
+| NaN at step N (N > 100)                      | Gradient instability                          | Clip gradients; lower lr; BF16          |
+| Train ↓, val starts to diverge after epoch 5 | Overfitting begins                            | Early stop here                         |
+| Curves identical                             | Regulariser too strong (train can't even fit) | Reduce regularisation                   |
+
+The fastest way to learn this vocabulary is to look at loss curves often, including from successful runs. Make a habit of reviewing W&B / TensorBoard plots; the patterns become familiar.
+
+## Gradient diagnostics
+
+Inside training, monitor:
+
+- **Loss every step** (you'll quickly see NaN or spikes).
+- **Gradient norms** (`torch.nn.utils.clip_grad_norm_` returns the norm before clipping; log it).
+- **Learning rate** (verify your scheduler is doing what you think).
+- **Per-task loss** (in multi-task setups).
+
+Patterns:
+
+- Gradient norm growing exponentially → exploding gradients. Lower lr; clip.
+- Gradient norm at early layers near zero → vanishing gradients. Check init; consider residual connections (Module 5).
+- Gradient norm spikes occasionally → bad data batches. Clip gradients.
+- All gradient norms identical → likely a bug in your gradient computation.
+
+## Underfit vs. overfit: the wrong fix for each
+
+| Symptom                 | Wrong fix           | Right fix                                              |
+| ----------------------- | ------------------- | ------------------------------------------------------ |
+| Train and val both high | More dropout        | Bigger model, longer training, lower regularisation    |
+| Train low, val high     | Bigger model        | More data, regularisation, augmentation                |
+| Train low, val unstable | More layers         | Lower learning rate, EMA, gradient clipping            |
+| Train doesn't decrease  | Different optimizer | Check pipeline; check loss; check single-batch overfit |
+
+The most common mistake: adding regularisation when the model is underfitting. They're opposites. The model needs more capacity (or more data) to learn what's there; restricting it makes things worse.
+
+<InlineQuiz
+  question="You're training a new image classifier. Training loss plateaus near 2.0 (random would be ~2.3 for 10 classes). Validation matches training. You overfit a batch of 10 successfully. What's the most likely diagnosis?"
+  options={[
+    { text: "Overfitting; add dropout." },
+    {
+      text: "Underfitting: the model isn't learning the structure of the full dataset. Check architecture, learning rate, and training duration.",
+      correct: true,
+    },
+    { text: "Data leakage." },
+    { text: "Wrong evaluation metric." },
+  ]}
+  explanation="Train and val both stuck near random is the underfitting signature. Adding regularisation makes underfitting worse. Since single-batch overfit works, the model has capacity; the problem is in scaling that fitting capability to the full dataset. Try: (1) more epochs, (2) higher learning rate or longer warmup, (3) bigger model. Examine data once more — sometimes a label encoding bug presents as 'random-level' performance."
+/>
+
+## The order of operations
+
+Karpathy's debugging order, in 2026 terms:
+
+1. **Inspect data.** 100 random examples with labels. Plot distributions. Run dataloader once and inspect outputs by eye.
+2. **Set up evaluation.** Write the eval loop before the training loop. Verify on random outputs — does the metric compute? Does it report sane numbers?
+3. **Overfit one batch.** Smallest possible test of correctness.
+4. **Train on the full dataset.** Identify the failure regime from loss curves.
+5. **Tune learning rate / schedule.** LR finder; warmup; total steps.
+6. **Add regularisation if overfitting.** Dropout, weight decay, augmentation.
+7. **Scale.** Bigger model, more data, longer training.
+
+Most engineers jump to step 5. Then they get stuck. The reason is almost always something in steps 1–3.
+
+## Three silent killers
+
+These are the bugs that don't crash training but ruin the model:
+
+### Data leakage
+
+Features computed using future or test information. Training and validation accuracy both look great; production accuracy collapses.
+
+Audit: trace each feature's data lineage. Could this value have been computed at the prediction time? See [A2.8](/tracks/ml-engineer/supervised/feature-engineering).
+
+### Wrong evaluation metric
+
+Accuracy on 99/1 imbalanced data. The model predicts majority and scores 99%. Useful metric: PR-AUC, F1 on minority class, recall at fixed FPR.
+
+### Distribution shift train → deploy
+
+Model great on test, fails on production users. The training distribution doesn't match deployment. Solutions: monitor input distributions, retrain regularly, set up anomaly detection on production inputs (see [A3.7](/tracks/ml-engineer/unsupervised/anomaly-detection)).
+
+## Practical debugging tools
+
+| Problem                    | Tool                                      |
+| -------------------------- | ----------------------------------------- |
+| Find which op produced NaN | `torch.autograd.set_detect_anomaly(True)` |
+| Check gradient shapes      | `print(p.grad.shape)` on parameters       |
+| Verify backward graph      | `print(loss.grad_fn)` traverses graph     |
+| Sanity-check custom op     | `torch.autograd.gradcheck(...)`           |
+| LR sweep                   | PyTorch Lightning `LearningRateFinder`    |
+| Profile bottleneck         | `torch.profiler` or NVIDIA Nsight         |
+| Visualise activations      | hook on forward; plot distributions       |
+| Compare runs               | Weights & Biases sweeps                   |
+
+You will need most of these eventually. Build muscle memory for them on small problems before you're under deadline pressure on a large one.
+
+<InlineQuiz
+  question="A colleague is training a transformer from scratch. Loss decreases for 2k steps then suddenly spikes to NaN. Which diagnostic should they run first?"
+  options={[
+    { text: "Reduce model size." },
+    {
+      text: "Add gradient clipping (max_norm=1.0) and lower the learning rate by half. NaN after stable training is almost always a gradient explosion event.",
+      correct: true,
+    },
+    { text: "Switch from BF16 to FP32." },
+    { text: "Increase batch size." },
+  ]}
+  explanation="Mid-training NaN spike = gradient explosion. The first interventions: gradient clipping (bounds the spike), lower lr (smaller steps), longer warmup (better initial state). FP32 might mask the issue but it's slower. Smaller model doesn't address the cause. If clipping + lr halving doesn't fix it, examine batches near the spike — sometimes the cause is a corrupted data sample. Sometimes the cause is the data loader returning identical batches due to a sampler bug. Investigate systematically."
+/>
+
+## Closing notes for Module 4
+
+This module has covered the bare bones of neural networks: the perceptron, MLPs, activations, backpropagation, losses, optimisers, initialisation, normalisation, regularisation, the training stack, and debugging.
+
+The structural pieces — convolutions, attention, residual connections, the transformer — come in Module 5. The patterns you've learned here (overfit single batch, watch loss curves, debug data first) apply to those architectures unchanged.
+
+For a single working framework to remember:
+
+- **Forward pass**: chain of layers, each producing activations.
+- **Loss**: scalar that gradient descent will minimise.
+- **Backward pass**: chain rule, computed by autograd.
+- **Update**: optimiser converts gradients into parameter changes.
+- **Training loop**: warmup + cosine schedule + mixed precision + clipping + DDP/FSDP.
+- **Validation**: same forward pass, no backward, model.eval() mode.
+- **Debugging**: overfit single batch, then scale up; data first, model last.
+
+That's the whole framework. Module 5 adds the architectural sophistication.

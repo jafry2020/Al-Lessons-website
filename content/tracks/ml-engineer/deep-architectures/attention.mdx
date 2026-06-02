@@ -1,0 +1,273 @@
+---
+title: "The attention mechanism"
+description: "The operation that lets each position in a sequence pull information from every other position. The heart of the transformer — and one of the most consequential architectural ideas of the 2010s."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: attention
+lessonCode: "A5.4"
+estMinutes: 14
+prereqs:
+  - "A5.3 Residual connections and the depth revolution"
+  - "A4.4 Loss functions for neural networks"
+objectives:
+  - "Compute scaled dot-product attention by hand: queries, keys, values, softmax."
+  - "Explain why multi-head attention helps and what each head can specialise on."
+  - "Identify the differences between self-attention, cross-attention, and causal (masked) attention."
+pitfalls:
+  - "Treating attention as 'soft retrieval.' The analogy is useful but Q, K, V are learned projections that don't necessarily match the retrieval intuition."
+  - "Forgetting the √d_k scaling. Without it, softmax saturates for high-dim queries and gradients vanish."
+  - "Confusing self-attention with cross-attention. Both use the same operation; they differ in what queries / keys come from."
+  - "Believing attention's O(n²) cost is fundamental. Linear / flash / sparse variants exist; the original attention was a starting point, not a ceiling."
+importantQuestions:
+  - question: "What is scaled dot-product attention in one equation?"
+    shortAnswer: |
+      Attention(Q, K, V) = softmax(Q Kᵀ / √d_k) V. Compute compatibility scores between each query and all keys, normalise to probabilities, use as weights over the values.
+    detailed: |
+      Three matrices:
+      - **Queries Q ∈ ℝ^(n × d_k)**: what each position is "looking for."
+      - **Keys K ∈ ℝ^(n × d_k)**: what each position "offers" as a key.
+      - **Values V ∈ ℝ^(n × d_v)**: what each position "carries" as content.
+
+      Compute compatibility: scores = Q Kᵀ ∈ ℝ^(n × n). Entry (i,j) = how much position i should attend to position j.
+
+      Scale by √d_k to keep softmax in a regime with non-vanishing gradients (without this, large d_k makes scores spread huge and softmax becomes nearly one-hot).
+
+      Softmax row-wise to convert scores into attention weights (each row sums to 1).
+
+      Multiply weights by V: each position's output is a weighted sum of values.
+
+      In a transformer, Q, K, V are produced by linear projections of the input: Q = X W_Q, K = X W_K, V = X W_V. The projections W_Q, W_K, W_V are the learnable parameters of the attention layer.
+    pitfalls:
+      - "FlashAttention (Dao et al., 2022) computes the same thing more efficiently by tiling. Same math; much better memory access."
+  - question: "Why √d_k scaling?"
+    shortAnswer: |
+      Without it, for high d_k the dot products have variance ~d_k. Softmax of large values produces near-one-hot outputs, killing gradients. Dividing by √d_k normalises variance to ~1.
+    detailed: |
+      Assume Q and K have i.i.d. entries with mean 0 and variance 1. The dot product q·k = Σᵢ qᵢ kᵢ has variance ≈ d_k.
+
+      With d_k = 64, the standard deviation of scores is 8 — so values range across [−24, +24] or more in typical cases. Softmax(24, 0, 0, ...) ≈ (1, 0, 0, ...) — a near-one-hot distribution. Gradients almost vanish; learning stalls.
+
+      Dividing by √d_k gives the scores variance ~1, so softmax stays in a useful regime where multiple positions get non-trivial weight.
+
+      This is one of those "small detail with big consequence" pieces. The original transformer paper notes it explicitly. Modern implementations always include it.
+    pitfalls:
+      - "If you scale by d_k instead of √d_k, the gradients go too small the other way. The square root is calibrated."
+  - question: "What is multi-head attention and why use it?"
+    shortAnswer: |
+      Run h independent attention operations in parallel, each with different learned Q, K, V projections, then concatenate. Each head can specialise on different relations (syntactic, semantic, positional).
+    detailed: |
+      Multi-head attention (h heads, each with dimension d_k = d_model / h):
+
+      For each head i:
+      - Q_i = X W_Q^i, K_i = X W_K^i, V_i = X W_V^i
+      - head_i = Attention(Q_i, K_i, V_i)
+
+      Concatenate: concat(head_1, ..., head_h)
+      Project: W_O · concat(...) → output
+
+      The parameter count of multi-head attention with h heads of dim d_k = d/h is the same as one head of dim d (because each head is smaller).
+
+      Why this helps: different heads can specialise. Empirically, BERT's heads include "attends to next token", "attends to subject of sentence", "attends to coreferent pronoun", etc. (Clark et al., 2019 "What does BERT look at?"). Each head can do one thing well; the combination is more expressive than a single big head.
+
+      Modern LLMs use 16–128 heads. Llama-2-70B uses 64 attention heads.
+    pitfalls:
+      - "Multi-query attention (MQA) and grouped-query attention (GQA) share K/V across heads for inference efficiency. Standard in modern LLMs."
+  - question: "What's the difference between self-attention, cross-attention, and causal attention?"
+    shortAnswer: |
+      Self-attention: Q, K, V all from the same input sequence. Cross-attention: Q from one sequence, K and V from another (encoder-decoder). Causal: each position can only attend to previous positions (used in autoregressive generation).
+    detailed: |
+      **Self-attention**: X attends to X. Used in BERT, GPT, all encoder-only and decoder-only models. Q, K, V are all derived from the same input.
+
+      **Cross-attention**: Y attends to X. Q comes from decoder positions; K and V come from encoder positions. Used in encoder-decoder models (T5, original transformer, BART). The decoder uses cross-attention to "look back at" the encoded source.
+
+      **Causal (masked) self-attention**: each position can only attend to earlier positions. Implemented by setting attention scores to −∞ for future positions before the softmax, so they get zero weight. Required for autoregressive language modelling (GPT-style) — you can't peek at tokens you haven't generated yet.
+
+      Almost every modern LLM uses causal self-attention exclusively (decoder-only). BERT uses bidirectional self-attention (no mask). T5 uses both: bidirectional self-attention in encoder, causal in decoder, cross-attention between them.
+    pitfalls:
+      - "The mask is per-token, not per-sequence. Each position in a causal attention can only see positions ≤ itself."
+  - question: "Why is attention O(n²) and what are the alternatives?"
+    shortAnswer: |
+      Computing all pairwise scores takes O(n² · d). For n = 100k tokens, this becomes the bottleneck. Sparse, linear, and flash attention variants reduce or restructure the cost. Flash attention is the production default; long-context LLMs use combinations.
+    detailed: |
+      Full attention's cost:
+      - Memory: O(n²) for the attention matrix.
+      - Compute: O(n² · d) for Q·Kᵀ and attention · V.
+
+      For n = 1024 (typical context), this is fine. For n = 100k (long-context modern LLMs), the n² term dominates.
+
+      **FlashAttention** (Dao et al., 2022): the same O(n² · d) compute, but reduces *memory* to O(n) by recomputing the attention matrix in tiles in fast SRAM instead of materialising it in slow HBM. 2-4× speedup. Standard in modern LLM training and inference.
+
+      **Sparse attention** (Longformer, BigBird): only compute scores for a sparse pattern (local + global). O(n) memory.
+
+      **Linear attention** (Performer, Linformer, Mamba-style state-space): approximate attention with linear-time alternatives. Trade quality for speed.
+
+      **Sliding window** (Mistral): each query only attends to the previous K tokens. O(n · K) instead of O(n²).
+
+      **Multi-scale** combinations: dense within blocks, sparse across blocks.
+
+      In 2026 production: FlashAttention is the default; sliding-window and grouped-query attention are common in long-context LLMs. Truly linear attention has not yet displaced softmax-attention at frontier scale.
+    pitfalls:
+      - "Inference cost differs: prompt processing is O(n²); generation is O(n) per token (using the KV-cache)."
+  - question: "What's the KV-cache?"
+    shortAnswer: |
+      During autoregressive generation, cache the keys and values for all previous tokens. New token's attention only needs to compute Q for itself and look up cached K, V — O(n) per token instead of O(n²).
+    detailed: |
+      In generation, each new token's attention compares its Q against the K of all previous tokens (and combines V accordingly). The K and V for previous tokens don't change as the new token is generated — so cache them.
+
+      For a generated sequence of length T with model dimension d and L layers:
+      - KV-cache size: ~2 · L · T · d (per request).
+      - For Llama-2-70B at L=80, d=8192, T=32k: ~80 GB of KV-cache. This is why long-context generation is memory-hungry.
+
+      Reducing this is one of the main motivations for:
+      - **Multi-query attention (MQA)**: one K/V shared across all attention heads. Cuts KV-cache by num_heads ×.
+      - **Grouped-query attention (GQA)**: K/V shared across groups of heads. A compromise.
+      - **Sliding-window attention**: only cache the last W tokens.
+      - **PagedAttention** (vLLM): manage KV-cache memory like virtual memory pages.
+
+      Production LLM inference performance is largely about managing the KV-cache.
+    pitfalls:
+      - "KV-cache assumes greedy / autoregressive decoding. Beam search complicates things — each beam needs its own cache."
+---
+
+<TldrCallout>
+  Attention computes a weighted average of "values" using compatibility scores between "queries" and
+  "keys": softmax(Q Kᵀ / √d_k) V. Three properties make it dominant: every position can attend to
+  every other position in one step, the operation parallelises trivially across positions, and
+  stacking it produces transformers. Modern variants (FlashAttention, GQA, sliding-window) make it
+  efficient at scale.
+</TldrCallout>
+
+## The operation
+
+Three matrices, one equation:
+
+Attention(Q, K, V) = softmax(Q Kᵀ / √d_k) V
+
+Let's unpack:
+
+- **Q**, **K**, **V** are matrices of shape (n × d). Each row corresponds to one position in the sequence.
+- **Q Kᵀ** ∈ ℝ^(n × n): scores, entry (i,j) is the dot product of query i and key j.
+- **/√d_k**: scaling to keep variances unit-ish.
+- **softmax row-wise**: each row becomes a probability distribution over positions.
+- **· V**: each position's output is a weighted sum of value rows.
+
+In a transformer, Q, K, V are all derived from the same input X:
+
+Q = X W_Q, K = X W_K, V = X W_V
+
+The projections W_Q, W_K, W_V are the learnable parameters.
+
+## See the attention pattern
+
+The widget below shows a small attention matrix for a toy input. Each row is one query; each column is one key. Brighter cells = higher attention weight. Try different attention "modes" (uniform, sharp focus, causal mask).
+
+<AttentionHeatmap />
+
+Real attention matrices are rarely this clean — patterns shift across layers and heads. But the colour-coded grid is exactly the kind of visualisation researchers use to study what BERT and GPT pay attention to.
+
+<AnalogyCallout>
+  Attention is like a meeting where every participant first writes down what they're looking for
+  (Q), what expertise they offer (K), and what they actually contribute (V). Compatibility = does
+  the questioner's need match my expertise? The participants with the best match contribute their
+  values, weighted by relevance. Stack many such meetings and you get a transformer.
+</AnalogyCallout>
+
+## Multi-head attention
+
+A single attention head with dim d can specialise on one type of relationship. Multi-head attention runs h heads in parallel, each with smaller dim d_k = d / h, and concatenates the results.
+
+```
+MultiHead(Q, K, V) = Concat(head_1, ..., head_h) W_O
+
+head_i = Attention(Q W_Q^i, K W_K^i, V W_V^i)
+```
+
+Same total parameter count as one big head. The h heads can specialise:
+
+- One head attends to the previous token.
+- One head attends to the most-similar token.
+- One head attends to the syntactic head of the current word.
+- And so on, learned from data.
+
+In BERT and GPT, researchers have identified roughly interpretable head functions (Clark et al., 2019). Most heads in large LLMs are uninterpretable in isolation but contribute in aggregate.
+
+## Three flavours: self, cross, causal
+
+**Self-attention.** Q, K, V all from the same input. Every position attends to every other in the same sequence. Used in BERT, GPT, ViT.
+
+**Cross-attention.** Q from one sequence, K and V from another. Used in encoder-decoder models — the decoder's Q attends to the encoder's K, V. Used in T5, BART, original Transformer.
+
+**Causal (masked) self-attention.** Each position can only attend to earlier positions. Implemented by setting future-position scores to −∞ before softmax. Required for autoregressive generation (GPT). Without the mask, the model would peek at tokens it's supposed to predict.
+
+| Model                          | Attention type                                            |
+| ------------------------------ | --------------------------------------------------------- |
+| BERT                           | Bidirectional self-attention                              |
+| GPT, Llama, Mistral            | Causal self-attention                                     |
+| T5, BART, original Transformer | Encoder: bidirectional self; Decoder: causal self + cross |
+| ViT                            | Bidirectional self-attention (over image patches)         |
+
+## Complexity: the n² problem
+
+Computing Q Kᵀ takes O(n² · d) time and O(n²) memory. For n = 1024, fine. For n = 100,000 (modern long-context LLMs), the n² term dominates.
+
+Mitigations in 2026:
+
+- **FlashAttention** (Dao et al., 2022). Same math, computed tile-by-tile in SRAM. 2-4× faster on GPU; O(n) memory. Standard.
+- **Sliding window** (Mistral): each query attends to the previous K tokens only. O(n · K).
+- **Sparse attention** (Longformer, BigBird): structured sparse pattern. Linear memory.
+- **Multi-query / grouped-query attention**: share K, V across heads to reduce KV-cache memory.
+- **PagedAttention** (vLLM): efficient KV-cache memory management.
+
+The frontier of long-context (1M+ tokens) is currently a combination of these tricks. Pure quadratic attention can't scale.
+
+## Why attention won
+
+Three structural advantages over RNNs and CNNs:
+
+1. **All-pairs interaction in one step.** Position 1 → position 1000 directly, not through 1000 hidden-state hops or many conv layers.
+2. **Parallelisable across positions.** Every position's attention can be computed simultaneously during training. RNN is sequential.
+3. **Scales gracefully.** Quality keeps improving with parameter count and data. RNNs plateaued; CNNs plateau too at very large scale.
+
+The trade-off: quadratic cost, no built-in inductive bias for spatial or sequential structure (handled by positional encodings — see next lesson).
+
+For language: the all-pairs property is exactly what's needed. Distant words can be syntactically or semantically related. Attention handles this directly.
+
+<InlineQuiz
+  question="You implement multi-head attention but forget the √d_k scaling. Training the model, you observe that attention weights become near-one-hot (one position gets weight ~1, others ~0) very early, and the model fails to learn. What's happening?"
+  options={[
+    { text: "The model is overfitting." },
+    {
+      text: "Without scaling, dot-product scores have variance proportional to d_k, leading to saturated softmax outputs and vanishing gradients.",
+      correct: true,
+    },
+    { text: "The learning rate is too low." },
+    { text: "Multi-head attention requires fewer heads at training start." },
+  ]}
+  explanation="Without the √d_k scaling, scores have standard deviation √d_k. For d_k = 64, std = 8 — softmax of such scores is nearly one-hot. The chosen position gets weight ~1, others ~0, and gradients to the unchosen positions are essentially zero. The model stops exploring; learning fails. The √d_k scaling normalises the score variance back to ~1, keeping softmax in a useful regime. This is exactly why the original transformer paper includes the scaling explicitly."
+/>
+
+## Cost in inference
+
+In generation, the KV-cache stores the keys and values of all previously generated tokens. Each new token only computes a fresh Q and attends to the cached K, V — O(n) per generated token instead of O(n²).
+
+For Llama-2-70B with 32k context: KV-cache is ~80 GB per request. Managing this efficiently is a major part of LLM inference engineering — vLLM, TensorRT-LLM, and SGLang all spend significant effort on KV-cache management.
+
+<InlineQuiz
+  question="What does a causal attention mask look like, and when is it applied?"
+  options={[
+    { text: "A diagonal matrix; applied after softmax." },
+    {
+      text: "A strict upper-triangular mask (above the diagonal is −∞); applied to the scores before softmax, so future positions get zero weight.",
+      correct: true,
+    },
+    { text: "A random mask; applied during training only." },
+    { text: "An identity matrix; applied after the V multiplication." },
+  ]}
+  explanation="Causal attention masks future positions so each token can only attend to earlier (and itself). The standard implementation: set scores[i, j] = -inf for j > i, then softmax zeroes them. Applied during both training and inference for autoregressive models (GPT, Llama). Without it, the model could peek at the next token during training and cheat. With it, training matches inference (one token at a time). The diagonal IS allowed — each token can attend to itself."
+/>
+
+## Closing for attention
+
+Attention is the operation. The transformer (next lesson) is what you get by stacking multi-head self-attention with feedforward blocks, residuals, and layer norm. The 2017 paper is one of the most cited in deep learning for good reason — it made the architectural recipe for language, vision, and multimodal models converge to a single template.

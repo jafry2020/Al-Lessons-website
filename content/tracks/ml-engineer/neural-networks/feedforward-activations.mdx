@@ -1,0 +1,232 @@
+---
+title: "Feedforward networks and activation functions"
+description: "What an MLP layer actually computes, why the activation function is the whole game, and which non-linearity to reach for in 2026."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: feedforward-activations
+lessonCode: "A4.2"
+estMinutes: 12
+prereqs:
+  - "A4.1 The perceptron and what neural nets actually compute"
+  - "A1.5 Matrix calculus, just enough"
+objectives:
+  - "Write down a feedforward layer as a matrix multiplication, bias add, and element-wise non-linearity."
+  - "Compare ReLU, sigmoid, tanh, GELU, and SwiGLU on shape, derivative, and when each is the right choice."
+  - "Identify dead ReLU, vanishing gradient, and saturating activations from training curves."
+pitfalls:
+  - "Using sigmoid in hidden layers. It saturates and vanishes gradients in deep networks. ReLU or variants for hidden layers; sigmoid only for binary output."
+  - "Treating activation choice as a hyperparameter to grid-search. In 2026 it's mostly settled: ReLU/GELU for vision, SwiGLU for LLMs, sigmoid/softmax for outputs."
+  - "Forgetting that ReLU has zero gradient for negative inputs. 'Dead ReLU' is a real failure mode in poorly initialised networks."
+  - "Stacking linear layers without activations between them. The composition collapses to a single linear map."
+importantQuestions:
+  - question: "What does one feedforward layer compute?"
+    shortAnswer: |
+      h = σ(Wx + b), where W ∈ ℝᵐˣⁿ is a weight matrix, b ∈ ℝᵐ is a bias, σ is an element-wise non-linearity. n features in, m activations out.
+    detailed: |
+      The layer has two parts:
+
+      1. **Affine map**: z = Wx + b. Pure linear algebra — a rotation, scaling, and shift.
+      2. **Non-linearity**: h = σ(z), applied element-wise.
+
+      Without the non-linearity, stacking layers gives W₂(W₁x + b₁) + b₂ = W₂W₁x + W₂b₁ + b₂ = W'x + b' — a single linear map. Depth without non-linearity is wasted.
+
+      The number of parameters in a layer is m·n + m (weights + biases). For an LLM with hidden size 4096 and a feedforward expansion to 16384, one MLP layer alone has 67M parameters. Most of a transformer's parameters live in its feedforward layers.
+    pitfalls:
+      - "The 'feedforward' here refers to information flow direction (input to output, no loops). Recurrent networks loop information back; transformers technically feedforward but with self-attention."
+  - question: "Why is ReLU the dominant hidden-layer activation?"
+    shortAnswer: |
+      ReLU(z) = max(0, z). Cheap, doesn't saturate for large positive inputs (no vanishing gradient on the active side), sparse activations (many zeros). Empirically trains deeper networks better than sigmoid or tanh.
+    detailed: |
+      ReLU's gradient is 1 for z > 0 and 0 for z ≤ 0. Compare to sigmoid: derivative max ~0.25 at z=0, near-zero for |z| > 6. In a deep network, sigmoid gradients multiply through layers and shrink exponentially — the vanishing gradient problem that made deep training nearly impossible before 2010.
+
+      ReLU's gradient is constant on its active half, which is why deep networks with ReLU train. Krizhevsky et al. (2012) used ReLU in AlexNet and reported 6× faster convergence than tanh.
+
+      The downside: "dead ReLU." If a unit's pre-activation is consistently negative, its gradient is always zero — the unit never updates. Bad initialisation or aggressive learning rates can leave half the network dead.
+
+      Variants address this: Leaky ReLU (small negative slope), PReLU (learnable slope), ELU (exponential below zero). They help in pathological cases but plain ReLU is still the default.
+    pitfalls:
+      - "Dead ReLU isn't always bad — sparse activations are sometimes desirable. Don't fix what isn't broken."
+  - question: "When should you use sigmoid or tanh?"
+    shortAnswer: |
+      Sigmoid only for binary output (probability). Tanh almost never — replaced by ReLU/variants for hidden layers and by sigmoid for outputs.
+    detailed: |
+      **Sigmoid** σ(z) = 1/(1+e⁻ᶻ) outputs in (0,1). Use for:
+      - Final layer of binary classifier (the probability).
+      - Gates in older recurrent architectures (LSTM, GRU).
+
+      Never use in hidden layers of deep networks — gradients saturate and vanish.
+
+      **Tanh** outputs in (-1,1). Used to be the default hidden activation in the 1990s-2000s. Better than sigmoid for hidden layers (zero-centred output) but still saturates. Replaced by ReLU/variants.
+
+      Still appears in: LSTMs, some normalisation contexts, output layers when you need bounded symmetric output. Otherwise rare.
+
+      **Softmax** is sigmoid's K-way generalisation: outputs a probability distribution over K classes. Standard for multi-class output layer.
+    pitfalls:
+      - "Softmax + cross-entropy is usually written as a single combined operation for numerical stability (PyTorch's CrossEntropyLoss does this internally)."
+  - question: "What is GELU and why do transformers use it?"
+    shortAnswer: |
+      GELU(z) = z · Φ(z), where Φ is the standard normal CDF. A smooth approximation of ReLU. Used in BERT, GPT, most transformers. Slight empirical improvement over ReLU in language modelling.
+    detailed: |
+      Gaussian Error Linear Unit (Hendrycks & Gimpel, 2016). For z >> 0, GELU(z) ≈ z (like ReLU). For z << 0, GELU(z) ≈ 0 (also like ReLU). The transition near zero is smooth instead of sharp.
+
+      Practical implementations use an approximation: GELU(z) ≈ 0.5z(1 + tanh(√(2/π)(z + 0.044715z³))).
+
+      Why it took over in transformers: a small empirical edge on benchmarks. The shape and gradient are similar to ReLU's; the smoothness near zero apparently helps optimisation in transformers. It's compute-cheap enough that the gain is worth taking.
+
+      In 2026 GELU appears in: BERT (original), GPT-1/2/3, T5, most "classical" transformers. Modern LLMs have moved further to SwiGLU.
+    pitfalls:
+      - "GELU and 'GeGLU' are different. GeGLU is a gated variant of GELU used in some recent models."
+  - question: "What is SwiGLU and why have LLMs adopted it?"
+    shortAnswer: |
+      SwiGLU is a gated activation: SwiGLU(x) = (Wx ⊙ Swish(Vx)), where ⊙ is element-wise product and Swish is GELU's cousin. Used in Llama, Mistral, PaLM. Slight perplexity gain in language modelling.
+    detailed: |
+      Shazeer (2020) introduced "GLU variants" — gated linear units where the activation has both a "value" path and a "gate" path multiplied element-wise. SwiGLU uses Swish (z · σ(z), close to GELU) as the gate.
+
+      In a transformer MLP block:
+      - Standard: h = W₂ · activation(W₁x).
+      - SwiGLU: h = W₂ · (Swish(W_g x) ⊙ W_v x).
+
+      The gating effectively doubles the parameter count of the FFN (W_g and W_v vs. one W₁). To match parameter count to a non-gated FFN, the hidden dim is reduced by ~2/3.
+
+      Empirically: SwiGLU FFNs train to slightly lower loss for the same parameter and compute budget. Llama, Mistral, PaLM, Gemini all use SwiGLU or close variants. The gain is small but consistent; for trillion-scale training, small consistent gains compound.
+    pitfalls:
+      - "The 'why SwiGLU works' answer is 'empirically' — there's no clean theoretical reason. Shazeer's paper title is literally 'GLU Variants Improve Transformer'."
+  - question: "Which activation should I pick in 2026?"
+    shortAnswer: |
+      ReLU for vision and most "default" feedforward layers. GELU for classical transformers. SwiGLU for modern LLMs from scratch. Sigmoid only for binary output, softmax for multi-class output. Don't grid-search this.
+    detailed: |
+      The decision tree is small:
+
+      - **Vision CNN, MLP for tabular, anything basic**: ReLU. It's well-understood, fast, works fine.
+      - **Transformer (BERT-era)**: GELU. Standard in HuggingFace defaults.
+      - **LLM from scratch**: SwiGLU or close variant. What every modern open-weights LLM uses.
+      - **Binary output**: sigmoid.
+      - **Multi-class output**: softmax.
+
+      What's not worth tuning: switching between ReLU, Leaky ReLU, ELU, PReLU in hidden layers. The differences are tiny; data and architecture matter much more.
+
+      What's worth tuning: occasionally, swapping ReLU for GELU in a small transformer if early loss is suspiciously high. Worth a 30-minute experiment, not a multi-day search.
+    pitfalls:
+      - "Newer activations (Mish, Snake, SiLU) appear in papers regularly. Almost none of them displace the canonical choice for production use. Don't chase them."
+---
+
+<TldrCallout>
+  A feedforward layer is an affine map followed by an element-wise non-linearity: h = σ(Wx + b). The
+  non-linearity is what makes depth meaningful — without it, stacked layers collapse to a single
+  linear map. In 2026 the activation choices are mostly settled: ReLU for vision and basics, GELU
+  for classical transformers, SwiGLU for modern LLMs, sigmoid/softmax only for output layers.
+</TldrCallout>
+
+## What a layer does
+
+Given input x ∈ ℝⁿ, a feedforward layer with m output units computes:
+
+z = Wx + b ∈ ℝᵐ (affine map)
+h = σ(z) ∈ ℝᵐ (element-wise non-linearity)
+
+W is m × n weights; b is m biases; σ is one of a handful of standard functions applied independently to each component.
+
+Stack L such layers and you get an MLP: a function with m₁·n + m₂·m₁ + ... + m*L·m*{L−1} learnable parameters that can in principle approximate any continuous function.
+
+**Why the non-linearity matters.** Without σ, layer 2 applied to layer 1 gives:
+
+W₂(W₁x + b₁) + b₂ = (W₂W₁)x + (W₂b₁ + b₂)
+
+That's another affine map. Depth without non-linearity is wasted; the entire network collapses to one effective linear layer. Every activation function in this lesson exists to make depth do useful work.
+
+## See the activations side by side
+
+The widget below plots four activations (ReLU, sigmoid, tanh, GELU) and their derivatives. Toggle which one to show. The derivative panel is where the action is: the gradient through the activation determines what propagates back during training.
+
+<ActivationFunctions />
+
+Things to notice:
+
+- **ReLU**: gradient 1 on the active half, 0 on the dead half. Sharp transition at zero.
+- **Sigmoid / tanh**: gradients saturate near ±∞. Multiply enough of these through layers and you get nothing.
+- **GELU**: smoothly approaches 0 below the origin instead of clamping. Closer to ReLU than sigmoid.
+
+## The activation cheat sheet for 2026
+
+| Activation             | Use case                                           | Why                                                      |
+| ---------------------- | -------------------------------------------------- | -------------------------------------------------------- |
+| **ReLU**               | Vision CNNs, MLPs for tabular, basic hidden layers | Cheap, doesn't vanish on active side, sparse activations |
+| **Leaky ReLU / PReLU** | When dead-ReLU is happening                        | Tiny negative slope keeps gradient flowing               |
+| **GELU**               | Classical transformers (BERT, GPT, T5)             | Smooth approximation of ReLU; small empirical gain       |
+| **SwiGLU**             | Modern LLMs (Llama, Mistral, PaLM)                 | Gated variant; ~0.5% perplexity gain at scale            |
+| **Sigmoid**            | Binary output layer                                | Outputs probability in (0,1)                             |
+| **Softmax**            | Multi-class output layer                           | Outputs probability distribution over K classes          |
+| **Tanh**               | LSTM gates, niche cases                            | Mostly historical; zero-centred output                   |
+
+What's _not_ on this list: SELU, Mish, Snake, ELU, Sigmoid-as-hidden-layer. They appear in papers, rarely in production-grade open-weights models. Don't chase them without a specific reason.
+
+<AnalogyCallout>
+  Think of activations as the "edges" the network can carve. ReLU draws sharp hinges. GELU draws
+  smooth ones. Sigmoid draws gentle S-shapes. You can compose simple primitives to approximate any
+  function; the choice of primitive affects how easily training finds it.
+</AnalogyCallout>
+
+## Dead ReLU and vanishing gradients
+
+Two failure modes worth recognising from training curves:
+
+**Dead ReLU.** A unit's pre-activation z is consistently negative (often due to a large negative bias from bad initialisation). Output is always 0; gradient is always 0; unit never updates. In a poorly initialised network, half the units can be dead from epoch 1 and never recover. Fixes: better initialisation (Kaiming/He init — covered in A4.6), lower learning rate, or switch to Leaky ReLU.
+
+**Vanishing gradient.** Sigmoid's derivative peaks at 0.25; tanh's at 1.0 but only at z=0. Through L layers, gradients multiply L sigmoid derivatives → 0.25^L → effectively zero by L=10. Output layers learn; early layers don't. This is why pre-2010 deep networks were so hard to train.
+
+ReLU + good initialisation + batch normalisation + residual connections (Module 5) together resolved vanishing gradients. The combination, not any single piece, is what made deep learning work.
+
+<InlineQuiz
+  question="You train a 50-layer feedforward network with sigmoid activations. After many epochs, the early layers' weights have barely changed while the last layer trained fine. What's the likely cause?"
+  options={[
+    { text: "The learning rate is too low for the early layers." },
+    {
+      text: "Vanishing gradients: sigmoid derivatives multiply through layers and shrink to near zero before reaching early layers.",
+      correct: true,
+    },
+    { text: "The network is overfit." },
+    { text: "The input data isn't standardised." },
+  ]}
+  explanation="The canonical vanishing gradient pattern. Sigmoid's derivative is bounded above by 0.25; through 50 layers, the product is ~0.25⁵⁰ ≈ 10⁻³⁰ — effectively zero. Late layers see meaningful gradients (one or two sigmoid hops back); early layers see nothing. Switching to ReLU, adding batch normalisation, or adding residual connections all help. This bug ended a lot of careers in the 2000s before the fixes were known."
+/>
+
+## What's actually in a transformer FFN
+
+The feedforward block in a modern transformer is itself an MLP. Two configurations dominate:
+
+**Classical (BERT, GPT-2, GPT-3 era):**
+
+```
+h = W₂ · GELU(W₁ · x + b₁) + b₂
+```
+
+Hidden dim of W₁ output is typically 4× the model dim. For GPT-3 (12,288 model dim), each FFN has W₁ ∈ ℝ⁴⁹¹⁵² × ¹²²⁸⁸. That's 600M+ parameters per layer.
+
+**Modern (Llama, Mistral, PaLM):**
+
+```
+h = W₂ · (Swish(W_g · x) ⊙ W_v · x)
+```
+
+Three matrices instead of two, hidden dim reduced to ~2.67× model dim to match parameter count. The element-wise gating is the key change.
+
+Either way, the FFN dominates the parameter count in a transformer — attention is the famous part, FFNs hold most of the weights.
+
+<InlineQuiz
+  question="You're building an MLP for tabular regression with 4 hidden layers. Which activation should you reach for first?"
+  options={[
+    { text: "Sigmoid in every layer." },
+    { text: "ReLU in hidden layers; linear output for regression.", correct: true },
+    { text: "Tanh in hidden layers; tanh output." },
+    { text: "SwiGLU — it's what LLMs use." },
+  ]}
+  explanation="ReLU is the default for hidden layers in 2026, including basic MLPs. For regression the output should be linear (no activation) so predictions aren't bounded. Sigmoid in hidden layers would saturate; tanh is dated for hidden layers; SwiGLU is engineered for transformer FFN blocks and not a sensible default for a small tabular MLP. Don't overthink the activation."
+/>
+
+## What's actually rare in 2026
+
+Practitioners spent years grid-searching activation functions in the 2010s. By 2026 the decision is essentially closed for production work: pick ReLU or GELU based on architecture family, use SwiGLU if you're training an LLM from scratch, sigmoid/softmax for outputs. Spend your tuning budget on data, scale, learning rate, and architecture variants — not on which exotic activation might beat ReLU by 0.3% on CIFAR-10.
+
+The next lesson tackles backpropagation: how gradients flow through these activations and weights, and why autograd in PyTorch / JAX makes the math invisible (but worth understanding when something breaks).

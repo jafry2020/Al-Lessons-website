@@ -1,0 +1,292 @@
+---
+title: "Backpropagation in detail"
+description: "The chain rule applied layer by layer — the algorithm that lets you train arbitrarily deep networks. Once you see it, autograd stops being magic."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: backpropagation
+lessonCode: "A4.3"
+estMinutes: 14
+prereqs:
+  - "A4.2 Feedforward networks and activation functions"
+  - "A1.5 Matrix calculus, just enough"
+objectives:
+  - "Trace gradients backward through a 2-layer network by hand, computing ∂L/∂W for each layer."
+  - "Explain reverse-mode automatic differentiation in terms of vector-Jacobian products."
+  - "Identify what autograd does for you and what it can't fix (numerical instability, computation graph bugs)."
+pitfalls:
+  - "Mixing up forward and backward shapes. The gradient w.r.t. a parameter has the same shape as the parameter."
+  - "Treating autograd as infallible. In-place operations, detached tensors, and disconnected graphs silently break gradients."
+  - "Implementing custom losses without testing gradients. Autograd computes what you wrote, not what you meant."
+  - "Confusing backprop with the learning rule. Backprop computes gradients; the optimiser (A4.5) uses them."
+importantQuestions:
+  - question: "What does backpropagation actually compute?"
+    shortAnswer: |
+      The gradient of the scalar loss L with respect to every parameter in the network — efficiently, in time proportional to one forward pass, by applying the chain rule from output back to input.
+    detailed: |
+      Forward pass: input flows through layers, producing intermediate activations and a final scalar loss L.
+
+      Backward pass: starting from ∂L/∂L = 1, compute ∂L/∂(previous layer output), then ∂L/∂(layer before that), continuing back to the input. At each layer, also compute ∂L/∂W and ∂L/∂b — the parameter gradients that the optimiser will use.
+
+      The key efficiency insight: every gradient you need is computed using only the layer's local Jacobian and the upstream gradient (∂L/∂output). No need to expand the full chain symbolically.
+
+      The whole algorithm is the chain rule, applied by a computer, in the right order. Rumelhart, Hinton, Williams (1986) popularised it; the idea predates them in control theory.
+    pitfalls:
+      - "Backpropagation is just one form of automatic differentiation (reverse mode). Forward mode also exists and is better for some Jacobian computations."
+  - question: "What is a vector-Jacobian product (VJP)?"
+    shortAnswer: |
+      For an operation y = f(x) with Jacobian J = ∂y/∂x, and an upstream gradient u = ∂L/∂y, the VJP computes Jᵀu = ∂L/∂x. Backprop is just chained VJPs.
+    detailed: |
+      For each primitive operation (matmul, add, ReLU, softmax), the framework defines a VJP rule: given u (the gradient flowing back from above), return the gradient with respect to each input.
+
+      For matmul y = Wx:
+      - VJP w.r.t. W: u · xᵀ
+      - VJP w.r.t. x: Wᵀ · u
+
+      For ReLU y = max(0, x):
+      - VJP w.r.t. x: u ⊙ (x > 0)
+
+      These are derived once per primitive; autograd composes them by traversing the computation graph in reverse. The full Jacobian is never materialised — only its product with the incoming gradient. This is what makes reverse-mode AD efficient: O(operations) memory and time, not O(parameters²).
+
+      Reverse mode wins when you have many inputs and few outputs (one scalar loss, millions of parameters — neural networks). Forward mode wins when you have few inputs and many outputs.
+    pitfalls:
+      - "For ops with multiple inputs (add, matmul), the VJP returns one gradient per input. Autograd accumulates them at each parameter."
+  - question: "How does autograd build the computation graph?"
+    shortAnswer: |
+      Each tensor operation registers itself as a node, recording its inputs and the VJP function. The graph is built dynamically during the forward pass (PyTorch) or symbolically before (TensorFlow 1.x, JAX with jit).
+    detailed: |
+      In PyTorch's eager mode, each operation on a tensor with `requires_grad=True` creates a node in a directed acyclic graph (the autograd graph). Calling `loss.backward()` traverses this graph in reverse topological order, calling each node's VJP function with the upstream gradient.
+
+      JAX uses a different model: `jax.grad` traces the function symbolically (tracing through Python), builds the graph, and produces a differentiated function you can call repeatedly. This is closer to TensorFlow 1.x graph mode but with much better ergonomics.
+
+      Both approaches converge to the same VJP-based backprop. The difference is when graph construction happens (eager vs traced) and how composable transformations work (`jit`, `vmap`, `grad`).
+    pitfalls:
+      - "In PyTorch, `tensor.detach()` removes a tensor from the graph. `tensor.data` returns the underlying storage without gradient tracking. Both are 'how to silently break backprop' patterns."
+  - question: "What's the gradient of a linear layer, in shape terms?"
+    shortAnswer: |
+      For z = Wx + b, with upstream gradient u = ∂L/∂z: ∂L/∂W = u xᵀ, ∂L/∂x = Wᵀ u, ∂L/∂b = u. Shapes: W is m×n, x is n, u is m, so W's gradient is m×n (same as W). ✓
+    detailed: |
+      The "shape check" is the single most useful debugging tool for backprop:
+
+      | Parameter | Forward shape | Gradient shape |
+      | --------- | ------------- | -------------- |
+      | W         | m × n         | m × n          |
+      | b         | m             | m              |
+      | x         | n             | n              |
+
+      The gradient of a scalar w.r.t. a tensor has the same shape as the tensor — always. If your custom backward function returns a shape that doesn't match, you've made an error.
+
+      For a batch of B examples (X is B × n, Z is B × m), the gradient ∂L/∂W = (1/B) · Uᵀ · X with proper averaging. Convention varies (sum vs mean); PyTorch's nn.Linear uses sum (you divide by batch size in the loss).
+    pitfalls:
+      - "Batch dimension handling is the most common source of shape bugs. PyTorch's first dim is conventionally batch; broadcasting rules apply to everything else."
+  - question: "How do you check that gradients are correct?"
+    shortAnswer: |
+      Gradient checking: compute ∂L/∂W via backprop, then via numerical finite differences ((L(W+ε) − L(W−ε)) / 2ε). They should match to ~5 decimal places. For implementing custom layers, this is non-negotiable.
+    detailed: |
+      Numerical gradient: g_num = (L(W + ε) − L(W − ε)) / (2ε) for each scalar in W. Slow (one forward pass per parameter) but unambiguous.
+
+      Backprop gradient: g_bp from autograd or your custom backward.
+
+      Check: relative error = |g_num − g_bp| / (|g_num| + |g_bp| + 1e-8). Should be < 1e-5 for double precision, < 1e-3 for single precision.
+
+      In practice: when implementing a custom op (a new loss, a custom layer with a closed-form gradient), always gradient check on a small example before scaling up. `torch.autograd.gradcheck` does this for you.
+
+      For standard layers built from autograd primitives, gradient checking is unnecessary — the autograd machinery is correct by construction.
+    pitfalls:
+      - "Gradient checks need double precision (float64) to be reliable. Single precision (float32) has too much rounding noise."
+  - question: "What can go wrong with backpropagation in practice?"
+    shortAnswer: |
+      Vanishing/exploding gradients (network depth + bad activations), in-place operations breaking the graph, detached tensors, NaN propagation from numerical instability (log(0), softmax overflow), and silent shape bugs.
+    detailed: |
+      Common failure modes and fixes:
+
+      **Vanishing gradients.** Deep sigmoid networks. Fix: ReLU, better init, batch norm, residual connections.
+
+      **Exploding gradients.** Recurrent networks, badly initialised networks. Fix: gradient clipping (`torch.nn.utils.clip_grad_norm_`), normalisation.
+
+      **NaN in loss.** Often: log of zero (use logsoftmax instead of log(softmax)), divide by zero, overflow in exp(). Fix: numerically stable implementations (`torch.nn.CrossEntropyLoss`, not log+softmax separately).
+
+      **In-place ops breaking autograd.** `x += y` on a tensor needed for backward can corrupt the graph. Fix: avoid in-place ops on tensors that require gradients.
+
+      **Detached subgraphs.** Calling `.detach()` or `.data` on a tensor that should require grad. Fix: trace the data flow; ensure all parameters are reached by the loss.
+
+      **Silent shape bugs.** Broadcasting hides errors. Fix: assert shapes at key points; use named tensors if available.
+    pitfalls:
+      - "`loss.backward()` accumulates gradients. Always `optimizer.zero_grad()` before the backward pass, or gradients from previous batches carry over."
+---
+
+<TldrCallout>
+  Backpropagation computes the gradient of the loss with respect to every parameter — efficiently,
+  by applying the chain rule layer by layer from output back to input. Modern frameworks (PyTorch,
+  JAX, TensorFlow) implement this as reverse-mode automatic differentiation: each operation defines
+  a vector-Jacobian product, and autograd composes them. Understanding what it does demystifies
+  training and makes debugging tractable.
+</TldrCallout>
+
+## The setup
+
+A 2-layer MLP for binary classification:
+
+```
+x → W₁x + b₁ → ReLU → W₂h + b₂ → sigmoid → ŷ → BCE loss
+```
+
+Forward pass: input flows left to right, ending in a scalar loss L.
+
+Backward pass: gradient flows right to left, ending with ∂L/∂W₁, ∂L/∂b₁, ∂L/∂W₂, ∂L/∂b₂ — the four tensors the optimiser will use to update parameters.
+
+This is backpropagation. It works for any computation graph as long as every operation has a known derivative.
+
+## The chain rule, applied carefully
+
+For a composition z = f(g(x)), basic calculus gives dz/dx = (df/dg)(dg/dx). For vectors and matrices, "multiplication" becomes matrix multiplication of Jacobians.
+
+For our 2-layer network, the chain looks like:
+
+∂L / ∂W₁ = (∂L/∂ŷ) · (∂ŷ/∂z₂) · (∂z₂/∂h) · (∂h/∂z₁) · (∂z₁/∂W₁)
+
+Each piece is a Jacobian (or, for the final scalar loss, a row vector). The product runs from left to right but the computation runs right to left — at each step, the upstream gradient gets multiplied by the local Jacobian.
+
+The clever bit: we never materialise the full Jacobians. Each layer just needs to compute the VJP: given the gradient flowing in from the next layer, produce the gradients to send back.
+
+## Vector-Jacobian products in three layers
+
+For a linear layer z = Wx with upstream gradient u = ∂L/∂z:
+
+- ∂L/∂W = u · xᵀ (rank-1 outer product)
+- ∂L/∂x = Wᵀ · u (sent back to previous layer)
+
+For ReLU h = max(0, z) with upstream gradient u = ∂L/∂h:
+
+- ∂L/∂z = u ⊙ 𝟙[z > 0] (element-wise mask)
+
+For sigmoid ŷ = σ(z) with upstream gradient u = ∂L/∂ŷ:
+
+- ∂L/∂z = u · σ(z) · (1 − σ(z))
+
+For BCE loss L = −y log ŷ − (1−y) log(1−ŷ):
+
+- ∂L/∂ŷ = (ŷ − y) / (ŷ(1 − ŷ)) ... or, combined with sigmoid: ∂L/∂z = ŷ − y.
+
+That last simplification is why frameworks use `BCEWithLogitsLoss` — combining sigmoid and BCE avoids the unstable middle step.
+
+<AnalogyCallout>
+  Think of backprop as a relay race in reverse. The final loss carries a baton (the gradient). At
+  each layer, the runner doesn't know the entire course — only their leg. They take the baton from
+  upstream, run their leg using their local knowledge (their layer's derivative), and hand it to the
+  next runner. By the time the baton reaches the start, everyone has done a tiny bit of
+  differentiation.
+</AnalogyCallout>
+
+## Worked example: backprop through a 2-layer MLP
+
+<WorkedExample title="Backward pass for one example">
+
+Setup: x ∈ ℝ³, hidden size 2, binary output. W₁ ∈ ℝ²ˣ³, W₂ ∈ ℝ¹ˣ². For one example:
+
+**Forward.**
+
+z₁ = W₁x + b₁ ∈ ℝ²
+h = ReLU(z₁) ∈ ℝ²
+z₂ = W₂h + b₂ ∈ ℝ
+ŷ = σ(z₂) ∈ ℝ
+L = -y log(ŷ) - (1-y) log(1-ŷ)
+
+**Backward (right to left).**
+
+Step 1. ∂L/∂z₂ = ŷ - y (the combined sigmoid+BCE shortcut).
+
+Step 2. Backprop through linear layer z₂ = W₂h + b₂:
+
+- ∂L/∂W₂ = (∂L/∂z₂) · hᵀ ∈ ℝ¹ˣ²
+- ∂L/∂b₂ = ∂L/∂z₂ ∈ ℝ
+- ∂L/∂h = W₂ᵀ · (∂L/∂z₂) ∈ ℝ²
+
+Step 3. Backprop through ReLU h = ReLU(z₁):
+
+- ∂L/∂z₁ = ∂L/∂h ⊙ (z₁ > 0) ∈ ℝ²
+
+Step 4. Backprop through linear layer z₁ = W₁x + b₁:
+
+- ∂L/∂W₁ = (∂L/∂z₁) · xᵀ ∈ ℝ²ˣ³
+- ∂L/∂b₁ = ∂L/∂z₁ ∈ ℝ²
+
+Done. Four gradients, all the right shape. PyTorch executes exactly this sequence (and a batched version) when you call `loss.backward()`.
+
+</WorkedExample>
+
+## What autograd does for you
+
+Frameworks like PyTorch and JAX implement reverse-mode AD generically:
+
+1. **Build a computation graph** during the forward pass (PyTorch eager) or by tracing (JAX `jit`, TF graph mode). Each tensor knows its parent ops.
+2. **For each primitive op**, the framework has a registered VJP rule.
+3. **`loss.backward()`** traverses the graph in reverse topological order, invoking VJPs in turn and accumulating gradients on leaf tensors (parameters).
+
+You write the forward pass; backprop is automatic. This is why deep learning research moved 100× faster after PyTorch (2016) and TensorFlow (2015) appeared.
+
+## What autograd can't do for you
+
+Autograd computes derivatives of _what you wrote_. It can't fix:
+
+- **Numerical instability.** `torch.log(softmax(z))` overflows; `F.log_softmax(z)` doesn't. Same math; different numerical behaviour.
+- **Disconnected graphs.** If you cast to numpy and back, autograd loses the trail. Same for `.detach()`, `.data`, `with torch.no_grad():` blocks.
+- **In-place operations** on tensors needed for backward. `x.relu_()` instead of `x = F.relu(x)` saves memory but breaks autograd in some cases. The framework usually catches this; sometimes it doesn't.
+- **Custom ops** you wrote without a backward. If you implement a layer with a numpy operation in the middle, you need to wrap it as a custom autograd function with a `backward` method.
+
+When something is wrong with training (NaN losses, no gradient flow, wrong shapes), 80% of the time it's one of these — not a math error, but a graph error.
+
+<InlineQuiz
+  question="You implement a custom loss function in PyTorch but get an error: 'element 0 of tensors does not require grad and does not have a grad_fn.' What's the likely cause?"
+  options={[
+    { text: "The learning rate is too high." },
+    {
+      text: "Somewhere in the loss computation, you broke the autograd graph (e.g., converted to numpy, used .detach(), or .data).",
+      correct: true,
+    },
+    { text: "The model has too few parameters." },
+    { text: "You forgot to call optimizer.zero_grad()." },
+  ]}
+  explanation="The error means the loss tensor isn't connected to anything trainable. The graph is broken somewhere. Common culprits: a `.detach()` call, conversion to/from numpy mid-computation, indexing operations that drop the gradient context, or using torch.no_grad() inside the loss. Trace the loss computation back; you'll find where the gradient path was severed."
+/>
+
+## Gradient checking: still worth doing
+
+For any _custom_ layer or loss with a non-trivial backward, gradient check before training:
+
+```python
+torch.autograd.gradcheck(my_custom_op, (input,), eps=1e-6)
+```
+
+This compares the autograd-computed gradient to a finite-difference estimate. If they match to ~6 decimal places (double precision), the backward is correct. If they don't, there's a bug.
+
+For standard layers built from autograd primitives, gradient checking is unnecessary — autograd's correctness is guaranteed by the correctness of each primitive's VJP.
+
+## What you can stop worrying about, what you can't
+
+| Concern                                                 | Worry?                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------ |
+| Whether matmul's gradient is right                      | No — PyTorch nails it                                  |
+| Whether your custom loss's gradient is right            | Yes — gradient check                                   |
+| Whether your code path keeps the autograd graph         | Yes — always                                           |
+| Whether autograd is fast enough for production          | No — it's heavily optimised                            |
+| Whether your computation is numerically stable          | Yes — use library log-softmax, etc.                    |
+| Whether to derive backward by hand for a standard layer | No — autograd does it                                  |
+| Whether to understand backprop conceptually             | Yes — when things break, this is what you fall back on |
+
+The next lesson covers the loss functions that sit at the end of the backward pass — the function whose gradient backprop is propagating.
+
+<InlineQuiz
+  question="You're implementing a 50-layer ReLU MLP. Training loss decreases smoothly for the first few epochs, then plateaus. Gradient norms at early layers are ~10⁻⁸; at late layers, ~10⁻². What's happening?"
+  options={[
+    { text: "The model is overfitting; add dropout." },
+    {
+      text: "Vanishing gradients: through 50 layers, gradients shrink before reaching early layers. Fix with better init (He), residual connections, batch norm — or all three.",
+      correct: true,
+    },
+    { text: "Increase batch size." },
+    { text: "Use a smaller learning rate." },
+  ]}
+  explanation="Gradient norm 10⁻⁸ at early layers vs 10⁻² at late layers is the textbook vanishing-gradient signature. Each ReLU layer multiplies the gradient by ~0.5 on average (roughly half the units are active), so 50 layers compound to ~2⁻⁵⁰ ≈ 10⁻¹⁵ if init is bad. Fixes: He initialisation tunes the variance so this doesn't compound, batch normalisation rescales activations layer by layer, and residual connections (Module 5) give gradients a direct path to early layers. All three are now standard for deep networks."
+/>

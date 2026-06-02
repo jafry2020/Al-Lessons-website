@@ -23,6 +23,10 @@ import { KnnRegions } from "../viz/KnnRegions";
 import { KMeansIterations } from "../viz/KMeansIterations";
 import { PCAProjection } from "../viz/PCAProjection";
 import { IsolationForestDemo } from "../viz/IsolationForestDemo";
+import { ActivationFunctions } from "../viz/ActivationFunctions";
+import { WeightInitDemo } from "../viz/WeightInitDemo";
+import { ConvolutionDemo } from "../viz/ConvolutionDemo";
+import { AttentionHeatmap } from "../viz/AttentionHeatmap";
 
 /**
  * Components available inside any .mdx lesson file.
@@ -60,6 +64,10 @@ export const mdxComponents: MDXComponents = {
   KMeansIterations,
   PCAProjection,
   IsolationForestDemo,
+  ActivationFunctions,
+  WeightInitDemo,
+  ConvolutionDemo,
+  AttentionHeatmap,
 
   // Markdown overrides: align native MD output with the design system.
   h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,

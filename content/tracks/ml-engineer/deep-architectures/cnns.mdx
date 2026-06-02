@@ -1,0 +1,294 @@
+---
+title: "Convolutional neural networks"
+description: "Translation-equivariant networks that won computer vision in the 2010s. Still the workhorse for production image classification, detection, and segmentation in 2026 — even with Vision Transformers eating market share."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: deep-architectures
+moduleLabel: "Module 5 · Deep Learning Architectures"
+lesson: cnns
+lessonCode: "A5.1"
+estMinutes: 14
+prereqs:
+  - "A4.6 Initialization, normalization, and regularization"
+  - "A4.2 Feedforward networks and activation functions"
+objectives:
+  - "Compute the output shape of a Conv2d layer given input, kernel, stride, padding."
+  - "Explain why convolutions are translation-equivariant and what that buys you for images."
+  - "Pick between ResNet, EfficientNet, and ViT for a 2026 vision project."
+pitfalls:
+  - "Treating CNNs as 'always best for vision.' Vision Transformers (ViT) match or beat them at scale; CNNs win on small data and on compute-constrained inference."
+  - "Forgetting that conv layers have many fewer parameters than fully connected. A 3×3 conv on 64 → 64 channels has 36,864 weights; an FC equivalent would have millions."
+  - "Using max pooling reflexively. Strided convolutions and global average pooling have largely replaced it."
+  - "Building from scratch on small data. Always start from a pretrained backbone (ImageNet, JFT, or a foundation model)."
+importantQuestions:
+  - question: "What does a convolution layer actually do?"
+    shortAnswer: |
+      Slides a learnable filter (kernel) across the spatial dimensions of the input, computing a weighted sum at each position. Output channels are produced from different filters; spatial structure is preserved.
+    detailed: |
+      For input X ∈ ℝ^(C_in × H × W) and a kernel K ∈ ℝ^(C_out × C_in × k × k):
+
+      Y[c_out, h, w] = Σ_{c_in, i, j} K[c_out, c_in, i, j] · X[c_in, h + i, w + j] + b[c_out]
+
+      That's a dot product between the kernel and a k × k patch of the input, summed over input channels. Slide the kernel by stride s across the entire input.
+
+      Output spatial shape: ⌊(H + 2p − k) / s⌋ + 1, same formula for width.
+
+      Why convolutions instead of fully connected layers for images:
+
+      1. **Translation equivariance** — moving the input shifts the output the same way. Useful because cats look like cats no matter where they appear in the image.
+      2. **Parameter efficiency** — the same kernel applies everywhere. A 3×3 conv on 64 → 64 channels has 64 · 64 · 9 = 36,864 weights. An FC layer between the same activations on a 224 × 224 image would have ~3.2 billion weights.
+      3. **Inductive bias** — local connectivity matches the structure of natural images, where nearby pixels are correlated.
+
+      LeCun's 1989 CNN (handwritten digit recognition) introduced these ideas; AlexNet (2012) scaled them up; ResNet (2015) made them deep. The fundamentals haven't changed.
+    pitfalls:
+      - "Strictly: convolution in deep learning is cross-correlation (no kernel flipping). The math is the same in the symmetric case but matters in some derivations."
+  - question: "What's the difference between convolution, stride, padding, and pooling?"
+    shortAnswer: |
+      Convolution: the weighted-sum operation. Stride: how far the kernel moves per step (larger = smaller output). Padding: pixels added around the input (preserves spatial size). Pooling: non-learned downsampling (max or average over patches).
+    detailed: |
+      **Stride.** Stride 1: kernel moves one pixel at a time, output ≈ input size. Stride 2: output is half size. Stride > 1 is the modern way to downsample (replaces pooling in many architectures).
+
+      **Padding.** Add p pixels of zeros around input. Padding 'same' keeps spatial dim constant (for k=3 → p=1, k=5 → p=2). Padding 'valid' means no padding, output shrinks by k−1 per side.
+
+      **Pooling.** Max pool (typically 2×2 stride 2): take the max of each 2×2 patch. Average pool: take the mean. Downsamples by 2× spatially, no learnable parameters.
+
+      Modern architectures usually replace max pooling with strided convolutions (learnable downsampling) and use global average pooling at the end (replaces flatten + FC).
+    pitfalls:
+      - "Dilation (atrous convolutions) inflate the receptive field without more parameters. Used in segmentation (DeepLab) and sometimes detection."
+  - question: "How does a CNN see the whole image despite using small (3×3) kernels?"
+    shortAnswer: |
+      Stack many conv layers. Each layer's output 'sees' a 3×3 patch of the previous layer, which itself sees a 5×5 patch of the input. After L layers (with downsampling), the receptive field grows to cover most of the image.
+    detailed: |
+      Receptive field after one 3×3 conv: 3×3. After two: 5×5. After L convs with stride 1: (2L+1) × (2L+1). With downsampling (stride 2 every few layers), the receptive field grows much faster.
+
+      A typical ResNet-50 has a final receptive field of ~200 pixels — covering most of a 224×224 input. The last layers reason about the whole image; the first layers reason about edges and textures.
+
+      This hierarchical view is why CNNs work: early layers extract local features (edges, colours); middle layers compose them (shapes, textures); late layers reason semantically (object parts, then objects). The hierarchy is implicit in the architecture, not learned from explicit supervision.
+
+      Vision Transformers replace this with global self-attention from layer 1, but pay a quadratic cost in image patches.
+    pitfalls:
+      - "Receptive field is theoretical; the *effective* receptive field is usually smaller because some paths through the network contribute more than others (Luo et al., 2016)."
+  - question: "When should you use ResNet, EfficientNet, ConvNeXt, or ViT?"
+    shortAnswer: |
+      ResNet for legacy compat and strong baselines. EfficientNet for mobile / compute-constrained. ConvNeXt for modern CNN performance. ViT for large data + compute. In 2026 most production starts with pretrained foundation backbones (CLIP, DINOv2) regardless of architecture.
+    detailed: |
+      **ResNet** (He et al., 2015). Residual connections, BatchNorm, stride-2 downsampling. Trained well; understood deeply. Standard 'reasonable strong baseline.' Used everywhere as feature extractors.
+
+      **EfficientNet** (Tan & Le, 2019). Compound scaling of depth/width/resolution. Better accuracy per FLOP than ResNet. Used in mobile + edge deployment.
+
+      **ConvNeXt** (Liu et al., 2022). 'Modernised' CNN — adopts ideas from transformers (LayerNorm, GELU, large kernels). Matches ViT performance while keeping CNN inductive bias. Strong on medium data.
+
+      **Vision Transformer (ViT)** (Dosovitskiy et al., 2020). Splits image into patches, treats as a sequence, applies a transformer. Beats CNNs at large scale; underperforms on small data without heavy augmentation.
+
+      In 2026 production: most projects start from a pretrained backbone — CLIP for image-text, DINOv2 for self-supervised features, ImageNet-pretrained ConvNeXt or EfficientNet for direct fine-tuning. From-scratch training on small data is rare and rarely competitive.
+    pitfalls:
+      - "ViT needs ~100M+ images to outperform ResNet. On ImageNet alone, modern CNNs (ConvNeXt) match or beat ViT."
+  - question: "What's the standard CNN training recipe in 2026?"
+    shortAnswer: |
+      Pretrained backbone → replace head → fine-tune. Augmentation: random crop + flip + colour jitter + Mixup + CutMix + RandAugment. Optimizer: AdamW (or SGD+momentum for some recipes). Schedule: cosine with warmup.
+    detailed: |
+      A 2026 vision training recipe looks like:
+
+      - **Backbone**: pretrained (CLIP, DINOv2, ImageNet ConvNeXt, etc.).
+      - **Head**: small linear + (sometimes) MLP on the backbone features.
+      - **Augmentation**: stack of random crop, horizontal flip, colour jitter, Mixup, CutMix, RandAugment, RandomErasing. Modern recipes use 5+ augmentations simultaneously.
+      - **Optimizer**: AdamW with weight decay 0.05–0.1 (more than vision used to use).
+      - **Schedule**: cosine with warmup (5–10 epochs).
+      - **Regularisation**: dropout 0.0–0.1 (often unused), stochastic depth (DropPath) 0.1–0.5.
+      - **Mixed precision**: BF16 (or FP16 on older hardware).
+      - **Resolution**: 224 default; 384/448 for higher accuracy.
+
+      Training from scratch is rare in 2026. Even a research paper presenting a new architecture usually evaluates by fine-tuning from a strong pretrained checkpoint.
+    pitfalls:
+      - "Don't bake test-time augmentation into the training augmentation list — they serve different purposes."
+  - question: "Where do CNNs still win in 2026?"
+    shortAnswer: |
+      Edge / mobile deployment (compute and memory efficiency), small-data regimes (CNN inductive bias helps), and applications where translation invariance is essential (medical imaging, satellite, microscopy).
+    detailed: |
+      CNNs retain advantages over transformers in:
+
+      - **Edge inference**: EfficientNet, MobileNet variants run faster on CPUs and mobile GPUs.
+      - **Small data**: the convolution inductive bias means CNNs need less data to reach a given accuracy. Transformers need scale.
+      - **Translation-invariant tasks**: medical scans, satellite imagery, microscopy. The spatial homogeneity matches CNN's bias.
+      - **Real-time video**: convolutional structure parallelises well; transformers' quadratic attention cost on patches is heavier per frame.
+      - **Object detection at high resolution**: YOLO-family models remain CNN-based and dominate real-time detection.
+
+      Transformers win on:
+      - **Large-scale image classification** with 100M+ training images.
+      - **Image-text models** (CLIP) — naturally handles cross-modal attention.
+      - **Long-range dependencies** in images (e.g., scene-level reasoning).
+
+      In 2026 the field accepts both as valid; choose by data scale, deployment target, and downstream task.
+    pitfalls:
+      - "Hybrid architectures (Swin Transformer, ConvNeXt v2, CoAtNet) blend conv and attention. They often win benchmarks but add complexity."
+---
+
+<TldrCallout>
+  CNNs slide learnable filters across an image, exploiting translation equivariance and local
+  connectivity. Stacked deeply, they go from edges to semantic concepts. In 2026 they remain the
+  workhorse for production vision — edge inference, small data, real-time detection — even as Vision
+  Transformers eat market share at large scale.
+</TldrCallout>
+
+## The convolution operation
+
+For input X ∈ ℝ^(C_in × H × W) and a learnable kernel K ∈ ℝ^(C_out × C_in × k × k):
+
+Y[c_out, h, w] = Σ\_{c_in, i, j} K[c_out, c_in, i, j] · X[c_in, h+i, w+j] + b[c_out]
+
+That's a dot product between the kernel and a small patch of the input, summed over input channels. Slide the kernel across all positions; do that for each of C_out filters.
+
+The whole convolution layer has C_out · C_in · k² + C_out parameters. For a 3×3 conv from 64 channels to 128 channels: 73,856 parameters. Compare to a fully connected layer between 64×224×224 activations and 128×224×224 activations: ~1.6 billion parameters. The parameter saving is one of the things that made deep vision tractable.
+
+## See it in action
+
+The widget below shows a small input patch, a 3×3 kernel, and the output of one convolution position. Slide the kernel position; the output value updates as the dot product changes.
+
+<ConvolutionDemo />
+
+Things to notice:
+
+- One convolution position = one dot product.
+- The output spatial dimension is `(H + 2p − k) / s + 1` — derive it from the geometry.
+- A 3×3 kernel learns edges, blobs, simple textures. Stack many and the receptive field grows.
+
+## Architecture anatomy
+
+A typical CNN block:
+
+```
+Input → Conv → BatchNorm → ReLU → Conv → BatchNorm → ReLU → ... → Downsample → ...
+```
+
+Repeated with widening channels and shrinking spatial dimensions:
+
+| Layer   | Spatial | Channels | Receptive field |
+| ------- | ------- | -------- | --------------- |
+| Input   | 224×224 | 3        | 1               |
+| Block 1 | 56×56   | 64       | 7               |
+| Block 2 | 28×28   | 128      | ~20             |
+| Block 3 | 14×14   | 256      | ~70             |
+| Block 4 | 7×7     | 512      | ~200            |
+| Pool    | 1×1     | 512      | full image      |
+| FC      | 1×1     | 1000     | classification  |
+
+Spatial dim halves at each downsampling; channels double. By the end, the feature map is small but rich, and the receptive field covers the input. Global average pooling collapses spatial info into a feature vector, fed to a linear classifier.
+
+## Key architectures, briefly
+
+| Architecture             | Year      | Innovation                     | Used today?                      |
+| ------------------------ | --------- | ------------------------------ | -------------------------------- |
+| LeNet-5                  | 1989      | First CNN                      | No (too small)                   |
+| AlexNet                  | 2012      | Deep + ReLU + dropout + GPU    | No (replaced)                    |
+| VGG                      | 2014      | Repeated 3×3 convs             | Sometimes for feature extraction |
+| GoogLeNet / Inception    | 2014      | Multi-branch inception modules | No                               |
+| ResNet                   | 2015      | Residual connections           | Yes (everywhere)                 |
+| Inception-ResNet         | 2016      | Hybrid                         | Rare                             |
+| MobileNet                | 2017      | Depthwise separable convs      | Mobile / edge                    |
+| EfficientNet             | 2019      | Compound scaling               | Yes                              |
+| ConvNeXt                 | 2022      | Modernised CNN                 | Yes (strong baseline)            |
+| YOLO family              | 2016–2026 | Real-time detection            | Yes (dominant in detection)      |
+| Vision Transformer (ViT) | 2020      | Attention on patches           | Yes (large scale)                |
+
+In 2026 production for image classification:
+
+- Start with pretrained ConvNeXt or EfficientNet (or CLIP image encoder).
+- Fine-tune the head; optionally LoRA-tune the backbone.
+- Use standard augmentation + AdamW.
+
+<AnalogyCallout>
+  A CNN is like an analyst reading a long document with a small reading glass. Early passes catch
+  local features (a phrase, a name). Later passes combine them (a paragraph's theme). The deepest
+  pass reads the whole thing summarised. The "reading glass" is a kernel; "reading the whole thing"
+  is the receptive field.
+</AnalogyCallout>
+
+## Output shape arithmetic
+
+For a Conv2d with input H × W, kernel size k, stride s, padding p:
+
+Output spatial: H_out = ⌊(H + 2p − k) / s⌋ + 1
+
+For 'same' padding (output size = input size with stride 1): p = (k − 1) / 2. So 3×3 → p=1; 5×5 → p=2; 7×7 → p=3.
+
+For 'valid' (no padding): output shrinks by k − 1 per dimension.
+
+For stride 2 (downsampling): output halves (with appropriate padding).
+
+This arithmetic is the single most common source of shape bugs in vision code. Memorise it.
+
+<InlineQuiz
+  question="A 3×3 conv with stride 2 and padding 1 is applied to a 64×128 input. What's the output spatial size?"
+  options={[
+    { text: "32 × 64", correct: true },
+    { text: "31 × 63" },
+    { text: "33 × 65" },
+    { text: "64 × 128" },
+  ]}
+  explanation="Apply (H + 2p − k) / s + 1 = (64 + 2 − 3) / 2 + 1 = 32. Same for width: (128 + 2 − 3) / 2 + 1 = 64. So output is 32 × 64. This is the standard 'halve spatial' pattern with stride 2 and padding 1 on a 3×3 kernel — the building block of ResNet downsampling."
+/>
+
+## What makes a CNN work
+
+Three properties give CNNs their inductive bias for images:
+
+1. **Local connectivity**: each output unit depends on a small patch of the input. Matches natural image statistics (nearby pixels are correlated).
+2. **Weight sharing**: the same kernel is applied at every position. A cat detector trained on cats in the top-left works on cats in the bottom-right.
+3. **Translation equivariance**: shifting the input shifts the output by the same amount. Matters for object recognition (the object location should not matter, only its presence).
+
+These are _biases_ — assumptions about the task. They help when the task respects them (images), hurt when it doesn't (graphs, sequences, tabular). This is why CNNs dominate vision but not other modalities.
+
+## CNNs vs Vision Transformers in 2026
+
+The competition has settled into roughly:
+
+| Regime                           | Winner                               |
+| -------------------------------- | ------------------------------------ |
+| Small data (<100k images)        | CNN — inductive bias helps           |
+| Medium data (100k–10M)           | Roughly tied; ConvNeXt vs ViT        |
+| Large data (100M+)               | ViT — scales further                 |
+| Edge / mobile deployment         | CNN — faster on small devices        |
+| Image-text (CLIP, etc.)          | ViT — attention handles cross-modal  |
+| Real-time detection (>30 fps)    | CNN (YOLO family)                    |
+| Foundation model embeddings      | ViT-based (CLIP, DINOv2, SAM)        |
+| Medical / satellite / scientific | CNN — translation invariance is real |
+
+For a 2026 vision project, the default is now "pretrained foundation backbone + small task-specific head," and the foundation backbone is increasingly ViT-based. Pure-from-scratch CNN training is research, not production.
+
+<InlineQuiz
+  question="You're building an image classifier with 5,000 training images and need to ship to mobile. What's your starting point?"
+  options={[
+    { text: "Train a ViT from scratch on the 5k images." },
+    {
+      text: "Fine-tune a pretrained MobileNetV3 or EfficientNet-B0 on your data; minimal head replacement.",
+      correct: true,
+    },
+    { text: "Train a 100-layer custom CNN." },
+    { text: "Use a large CLIP model with the full image encoder on-device." },
+  ]}
+  explanation="5k images is far too few to train ViT or a custom CNN from scratch. Fine-tuning a pretrained mobile-targeted CNN (MobileNet, EfficientNet) gives you both transfer learning benefits and runtime efficiency for mobile. CLIP's image encoder is too heavy for most mobile deployments without distillation. This is the canonical small-data + edge-deployment recipe in 2026."
+/>
+
+## Common modern tricks
+
+A few specific techniques worth knowing:
+
+- **Depthwise separable convolutions** (MobileNet): factor conv into per-channel + 1×1 pointwise. 8–10× cheaper.
+- **Residual connections** (next lesson, A5.3): direct paths between layers; required for depth > 30.
+- **Squeeze-and-Excitation (SE) blocks**: channel-wise attention; small accuracy boost.
+- **Global average pooling**: collapse spatial dim to 1×1 at the end; replaces flatten + FC head.
+- **EMA of weights**: maintain an exponential moving average of model weights during training; use EMA for eval and inference. Standard now.
+- **Stochastic depth (DropPath)**: randomly skip residual blocks during training. Strong regulariser for deep networks.
+
+Each is a 0.3–1% accuracy gain. The cumulative effect is large; the per-trick gain is small.
+
+## Closing for CNNs
+
+In 2026, CNNs are mature, production-grade, and increasingly outshone at the frontier by transformers. They're still the right tool for:
+
+- Mobile and edge deployment.
+- Small-data regimes.
+- Real-time detection / segmentation.
+- Domains where translation invariance is structural (medical, satellite).
+
+The next lesson (A5.2) covers recurrent networks — historically important, mostly replaced by transformers in 2026 — and A5.3 covers residual connections, which made depth itself tractable across both CNNs and transformers.

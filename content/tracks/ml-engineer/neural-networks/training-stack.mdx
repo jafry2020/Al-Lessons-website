@@ -1,0 +1,365 @@
+---
+title: "The training stack: schedules, mixed precision, distributed"
+description: "What runs around the training loop in 2026. Learning rate schedules, automatic mixed precision, gradient accumulation, distributed data parallel — the engineering that turns a hand-coded loop into a production-quality training job."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: training-stack
+lessonCode: "A4.7"
+estMinutes: 14
+prereqs:
+  - "A4.5 Optimizers"
+  - "A4.6 Initialization, normalization, and regularization"
+objectives:
+  - "Pick a learning rate schedule (warmup + cosine / linear) for transformer training."
+  - "Enable mixed precision (BF16 / FP16) safely and explain when it helps and when it hurts."
+  - "Decide between data parallel, distributed data parallel, and gradient accumulation for scaling."
+pitfalls:
+  - "Skipping warmup. Without it, large initial steps destroy a transformer's careful initialisation."
+  - "Using FP16 without loss scaling. Gradients underflow silently; training diverges."
+  - "Confusing DataParallel (DP) with DistributedDataParallel (DDP). DP is single-process, deprecated."
+  - "Treating effective batch size as raw batch size. Gradient accumulation, DDP, and TPU pods all change the effective batch."
+importantQuestions:
+  - question: "Why does learning rate warmup matter?"
+    shortAnswer: |
+      At step 0, weights are at their initial values and the optimiser's running statistics are uninitialised. Taking large steps immediately can move parameters far enough to destroy the careful initial state. Warmup ramps the learning rate from 0 (or near 0) to the target over the first few hundred to few thousand steps.
+    detailed: |
+      Adam-family optimisers accumulate first and second moment estimates of gradients. At step 1, m and v are empty; the bias correction (dividing by 1 − β^t) produces large effective learning rates. Without warmup, the network can blow up or settle into a poor basin from which it never recovers.
+
+      Standard pattern: linear warmup from 0 to lr_max over W steps, then a decay phase (cosine, linear, or step) until the end of training.
+
+      Typical W:
+      - LLM pretraining: 1k–10k steps.
+      - Vision (ViT, etc.): 5–10 epochs (a few thousand steps).
+      - Fine-tuning small models: 100–500 steps.
+
+      The warmup → decay pattern (often "trapezoidal" with constant lr in the middle) is essentially universal in modern deep learning training.
+    pitfalls:
+      - "On extremely large batches (>4096), warmup needs to be longer. The intuition: more samples per step → more impact per step → bigger risk of bad early moves."
+  - question: "What does cosine annealing do, and why is it the dominant schedule?"
+    shortAnswer: |
+      Cosine decays the learning rate from lr_max to lr_min following a half-cosine curve over training. Smoother than step decay, gentler at the end (allowing fine refinement), and matches empirically good training dynamics.
+    detailed: |
+      Cosine schedule: lr(t) = lr_min + 0.5 (lr_max − lr_min)(1 + cos(π t / T)) for step t in [0, T].
+
+      Why it dominates:
+      - The smooth curve doesn't have abrupt changes that destabilise training.
+      - The slowed-down final phase lets the optimiser settle into a sharp minimum.
+      - Empirically matches or beats step decay on most benchmarks.
+
+      Variants:
+      - **Cosine with restarts** (SGDR, Loshchilov & Hutter, 2016): periodically reset lr to lr_max and re-decay. Sometimes useful for escaping local minima.
+      - **WSD** (Warmup-Stable-Decay): constant after warmup, then short decay at the end. Recent finding: matches cosine and lets you extend training without re-tuning.
+
+      For 2026 LLM training: warmup + cosine (or WSD) is the universal choice.
+    pitfalls:
+      - "Cosine with lr_min = 0 wastes the final steps. Set lr_min to 10% of lr_max."
+  - question: "How does mixed precision speed up training?"
+    shortAnswer: |
+      Use lower-precision floats (FP16 or BF16) for forward and backward computation; keep parameters in FP32 for stable updates. 2-3× speedup on modern GPUs, half the memory for activations.
+    detailed: |
+      Modern GPUs (NVIDIA A100, H100; Google TPU) have specialized hardware for low-precision matmul (Tensor Cores). FP16 matmul runs ~2× faster than FP32; activations take half the memory.
+
+      Two precisions in use:
+
+      **FP16** (half precision, 5-bit exponent): faster on consumer GPUs, but narrow dynamic range. Gradients can underflow to zero. Requires **loss scaling**: multiply loss by a large constant before backward, divide gradients back before the update. PyTorch's `GradScaler` does this automatically.
+
+      **BF16** (bfloat16, 8-bit exponent like FP32): same dynamic range as FP32, slightly less precision in the mantissa. Doesn't need loss scaling. Default on A100/H100/TPU. Strongly preferred when available.
+
+      Implementation: `torch.cuda.amp.autocast` (PyTorch) or `tf.keras.mixed_precision` (TensorFlow). Wraps the forward pass; you don't otherwise change code.
+
+      Caveat: some ops (batch norm statistics, normalisation, softmax) are still done in FP32 even within autocast for stability. The frameworks handle this.
+    pitfalls:
+      - "BF16 has worse precision than FP16 in the mantissa. Some small-gradient regimes (very late in training) might prefer FP16 + loss scaling. Rare in practice."
+  - question: "What is gradient accumulation and when do you use it?"
+    shortAnswer: |
+      Compute gradients over N small batches, sum them, then take one optimiser step. Equivalent to training with N times the batch size but using only the memory of one batch.
+    detailed: |
+      Setup: instead of `optimizer.step()` after every forward/backward, you `loss.backward()` on N successive small batches, then `optimizer.step()` once and `optimizer.zero_grad()`.
+
+      Effects:
+      - Effective batch size = (per_device_batch × N × num_gpus).
+      - Memory cost stays at one small batch's activations.
+      - Compute cost is the same as just doing the small batches (no saving).
+
+      When useful:
+      - You want to train with a large effective batch but don't have memory.
+      - You're matching a published training recipe that requires a specific large batch size.
+      - Multi-GPU training where each GPU's per-device batch is small.
+
+      Note: BatchNorm statistics are computed per micro-batch, so its behaviour differs from a real large batch. Use SyncBatchNorm or LayerNorm to avoid issues.
+    pitfalls:
+      - "Divide loss by accumulation steps before backward, or your gradients are scaled wrong. PyTorch's GradScaler handles this; manual implementations often miss it."
+  - question: "DataParallel vs. DistributedDataParallel vs. fully sharded — what's the difference?"
+    shortAnswer: |
+      DP: deprecated single-process multi-GPU; uses Python's GIL, slow. DDP: one process per GPU, fast, the standard for medium models. FSDP / ZeRO: shard parameters/gradients/optimizer state across devices for very large models that don't fit on one GPU.
+    detailed: |
+      **DataParallel (DP).** Single Python process, replicates model on each GPU, sends batches around manually. Limited by GIL. Deprecated; never use in new code.
+
+      **DistributedDataParallel (DDP).** One process per GPU, NCCL all-reduce for gradient synchronisation. Standard for multi-GPU training of models that fit on one GPU. PyTorch's `torch.distributed` launchers handle setup.
+
+      **Fully Sharded Data Parallel (FSDP) / ZeRO** (Rajbhandari et al., 2020): shard parameters, gradients, and optimiser state across GPUs. Required for models larger than one GPU's memory. ZeRO-3 / FSDP-3 shards everything; ZeRO-1/2 shards less. DeepSpeed and PyTorch FSDP are the standard implementations.
+
+      **Model parallelism (pipeline, tensor)**. Split layers across GPUs. Used for the largest models (>100B params). Megatron-LM and similar libraries.
+
+      **Sequence parallelism**. Split activations across devices in the sequence dimension. Adds engineering complexity for diminishing returns at small scale; standard at LLM-pretraining scale.
+
+      Choose: <1B params → DDP. 1B–10B params → FSDP or ZeRO. >10B → FSDP + pipeline/tensor parallel. The library landscape (DeepSpeed, PyTorch FSDP, Megatron-LM, Llama-Factory) keeps evolving; pick by docs and community.
+    pitfalls:
+      - "DDP requires every process to call backward on the same operations. Conditional logic that diverges across processes will hang training."
+  - question: "What's a typical 2026 training loop, top to bottom?"
+    shortAnswer: |
+      Initialise model + optimiser (AdamW) + scheduler (cosine with warmup) + amp scaler. Loop: zero grad, forward in autocast, backward with scaler, optimizer step (scaled), scheduler step, log every N steps. Save checkpoint periodically.
+    detailed: |
+      Pseudocode for a standard training loop:
+
+      ```python
+      model = Model().to(device)
+      optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
+      scheduler = get_cosine_schedule_with_warmup(optimizer, warmup, total)
+      scaler = GradScaler()  # if FP16
+
+      for step, batch in enumerate(dataloader):
+          optimizer.zero_grad(set_to_none=True)
+          with autocast(dtype=torch.bfloat16):
+              loss = model(batch).loss
+          scaler.scale(loss).backward()  # or just loss.backward() for BF16
+          scaler.unscale_(optimizer)
+          clip_grad_norm_(model.parameters(), 1.0)
+          scaler.step(optimizer)
+          scaler.update()
+          scheduler.step()
+
+          if step % log_every == 0:
+              log({"loss": loss.item(), "lr": scheduler.get_last_lr()[0]})
+          if step % save_every == 0:
+              save_checkpoint(model, optimizer, scheduler, scaler, step)
+      ```
+
+      Add DDP wrapping, gradient accumulation, evaluation, EMA, and W&B/MLflow logging and you have the full production loop. Frameworks like HuggingFace Trainer, PyTorch Lightning, and Composer abstract this, but understanding the bare loop is essential for debugging.
+    pitfalls:
+      - "`zero_grad(set_to_none=True)` is faster than the default. Always use it."
+---
+
+<TldrCallout>
+  A production training loop in 2026 is more than forward-backward-step. Warmup + cosine schedules
+  stabilise the early and late phases. Automatic mixed precision (BF16 preferred) halves memory and
+  doubles throughput on modern GPUs. DistributedDataParallel scales to multi-GPU; FSDP / ZeRO scales
+  to multi-node when models don't fit on one device. The training loop pseudocode hasn't changed
+  much since 2020; the engineering around it determines whether training finishes in hours or days.
+</TldrCallout>
+
+## What's in a 2026 training loop
+
+The skeleton is unchanged from any textbook:
+
+1. Zero gradients.
+2. Forward pass.
+3. Compute loss.
+4. Backward pass.
+5. Optimizer step.
+6. Scheduler step.
+7. Log + maybe save.
+
+The interesting part is everything wrapped around each line:
+
+- The forward pass is in **autocast** (mixed precision).
+- The backward pass uses a **GradScaler** (loss scaling, if FP16).
+- The optimizer is **AdamW** with weight decay decoupled.
+- The scheduler implements **warmup + cosine** decay.
+- The loop may use **gradient accumulation** for large effective batch.
+- The model is wrapped in **DDP** or **FSDP** for multi-device.
+- Gradients are **clipped** to prevent occasional spikes.
+
+Each of these is a 2-5% gain. Together they're the difference between training in 1 day and 1 week, or between training successfully and not.
+
+## Learning rate schedules
+
+The standard pattern: **warmup + cosine decay**.
+
+```
+       /\
+      /  \____
+     /        \____
+    /              \____
+   /                    \
+warmup     cosine decay
+```
+
+For T total steps and W warmup steps:
+
+- Phase 1 (steps 0 to W): linear ramp from 0 to lr_max.
+- Phase 2 (steps W to T): cosine decay from lr_max to lr_min ≈ 0.1 · lr_max.
+
+Why warmup? At step 0, AdamW's running averages are empty. The bias correction (1 − β₁^t in the denominator) makes early effective learning rates huge. Without warmup, transformers and other carefully initialised networks blow up in the first 100 steps.
+
+Why cosine? Smooth, no abrupt drops, slow ending lets the optimiser settle. Empirically matches or beats step decay on every modern benchmark.
+
+| Schedule                                 | When                                               |
+| ---------------------------------------- | -------------------------------------------------- |
+| Warmup + cosine                          | LLM, vision transformer, default modern            |
+| Warmup + linear decay                    | Fine-tuning, BERT-era training                     |
+| Warmup + WSD (constant then short decay) | When you want to extend training without re-tuning |
+| Step decay                               | Older CNN recipes; rarely chosen for new projects  |
+| ReduceLROnPlateau                        | Old; mostly replaced by cosine                     |
+
+## Mixed precision: BF16 vs FP16
+
+Tensor Cores on modern GPUs do FP16 / BF16 matmul ~2× faster than FP32. Switching to mixed precision is one of the cheapest wins in deep learning.
+
+**BF16** (bfloat16) has the same dynamic range as FP32 (8-bit exponent) but less precision (7-bit mantissa). Available on A100, H100, TPU. No loss scaling needed; basically a drop-in replacement for FP32. **Default in 2026**.
+
+**FP16** (half precision) has narrow dynamic range (5-bit exponent). Gradients can underflow silently. Requires **loss scaling**: multiply loss before backward, divide gradients after. PyTorch's `GradScaler` handles this. Used mainly when BF16 isn't available (older GPUs).
+
+| GPU                        | BF16 support | Best choice                    |
+| -------------------------- | ------------ | ------------------------------ |
+| H100 / A100 / L40          | Yes          | BF16                           |
+| RTX 3090 / 4090 (consumer) | Yes, recent  | BF16 if your stack supports it |
+| V100 / older               | No           | FP16 + GradScaler              |
+| TPU v3/v4                  | Yes (native) | BF16                           |
+
+Implementation in PyTorch:
+
+```python
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()  # if FP16; not needed for BF16
+for batch in loader:
+    optimizer.zero_grad()
+    with autocast(dtype=torch.bfloat16):  # or torch.float16
+        loss = model(batch)
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+```
+
+For BF16, you can drop `scaler` and use `loss.backward()` directly.
+
+<AnalogyCallout>
+  Mixed precision is like a chef who measures sugar with a precise scale but flour with a measuring
+  cup. Some quantities (parameters) need precision; others (activations) don't. Using the right tool
+  for each saves time without losing the dish.
+</AnalogyCallout>
+
+## Gradient accumulation: large effective batch on small memory
+
+If your per-device batch is 8 but you want effective batch 64, do 8 forward/backward passes (each on micro-batch of 8), summing gradients, and step the optimizer once:
+
+```python
+accum = 8
+for step, batch in enumerate(loader):
+    with autocast():
+        loss = model(batch) / accum  # scale loss
+    loss.backward()
+    if (step + 1) % accum == 0:
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+```
+
+Effective batch = per_device_batch × accumulation × num_gpus. The model behaves as if trained with effective batch (with caveats for BatchNorm — use SyncBatchNorm or switch to LayerNorm).
+
+Trade-off: more steps per actual update, slower per-step but same compute per "real" step. Useful when memory limits matter.
+
+## Distributed training: DDP, FSDP, beyond
+
+For multi-GPU and multi-node training:
+
+| Method                                 | When                                             | Cost                                          |
+| -------------------------------------- | ------------------------------------------------ | --------------------------------------------- |
+| **DistributedDataParallel (DDP)**      | Model fits on one GPU; want to scale data        | All-reduce gradients per step                 |
+| **Fully Sharded Data Parallel (FSDP)** | Model doesn't fit on one GPU                     | Shards parameters, gradients, optimizer state |
+| **Pipeline parallel**                  | Very large models; layers split across GPUs      | Per-layer activations sent between devices    |
+| **Tensor parallel**                    | Even larger models; matrices split within layers | Custom communication patterns; complex        |
+| **Sequence parallel**                  | Long-context training                            | Splits activations along the sequence         |
+
+For most teams:
+
+- **1 GPU → 8 GPU**: DDP with PyTorch launcher (`torchrun`).
+- **8 GPU → 64 GPU, 1B–10B model**: FSDP (built into PyTorch since 2.0) or DeepSpeed ZeRO.
+- **Pretraining LLMs from scratch (10B+)**: Megatron-LM, Llama-Factory, or DeepSpeed with custom configs.
+
+In 2026, **FSDP + BF16 + AdamW + cosine schedule** is the canonical training stack for transformer training up to ~70B params on a few-hundred-GPU cluster. Beyond that, things get bespoke.
+
+<InlineQuiz
+  question="You're training a 7B-parameter transformer on 8× A100 (80GB). The model alone needs 28 GB (FP32 params), and activations push memory above 80 GB at batch size 1. What's the most useful change?"
+  options={[
+    { text: "Switch to FP16; cuts parameter memory in half." },
+    {
+      text: "Use FSDP (sharding parameters, gradients, and optimizer state across GPUs) with BF16 — this is exactly the regime FSDP was designed for.",
+      correct: true,
+    },
+    { text: "Use a larger batch size — that distributes the load." },
+    { text: "Switch from AdamW to plain SGD." },
+  ]}
+  explanation="FSDP shards parameters (and gradients and optimizer state) across the 8 GPUs, so each GPU only holds ~3.5 GB of parameters instead of 28 GB. Combined with BF16, this lets a 7B model train on 8× 80GB GPUs at reasonable batch sizes. FP16 alone halves memory but doesn't address the optimizer state (AdamW keeps two moments per parameter in FP32 — that's another ~56 GB). Larger batches use more memory, not less. SGD would save optimizer memory but train much worse than AdamW."
+/>
+
+## Gradient clipping
+
+Occasional outlier gradients can spike during training, especially in transformers with attention. Gradient clipping bounds the global gradient norm:
+
+```python
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+```
+
+If the global L2 norm of gradients exceeds 1.0, scale them all down. Standard in transformer training; rarely hurts, sometimes saves training from a bad batch.
+
+For very large models or unstable settings, use lower clip values (0.5 or 0.1). For supervised vision training, clipping is often unnecessary.
+
+## Checkpointing
+
+Save model + optimizer + scheduler + scaler state regularly. Resuming from a checkpoint should give bit-exact continuation (assuming same data ordering).
+
+For multi-day training jobs:
+
+- Save every N steps (e.g., every 10k).
+- Keep last K checkpoints (deduplication / cost).
+- Save the _best_ validation checkpoint separately.
+- Track the random state if reproducibility matters.
+
+Modern frameworks (HuggingFace Trainer, PyTorch Lightning, Composer) handle checkpoint logistics. For custom loops, this is one of the most common bugs — verify resume works on a small test before relying on it.
+
+<InlineQuiz
+  question="You enable BF16 autocast in PyTorch but forget to wrap the validation forward pass in autocast as well. What's the consequence?"
+  options={[
+    { text: "Validation will silently use FP32 — slower but no correctness issue.", correct: true },
+    { text: "Validation will produce wrong predictions." },
+    { text: "Training will hang." },
+    { text: "Gradients won't flow during validation (which is fine since no backward)." },
+  ]}
+  explanation="autocast is only active inside the `with autocast(...)` block. Outside it, computation falls back to FP32. Validation will work correctly but ~2× slower than necessary. Easy fix: wrap eval in autocast too. This is a 'silently slow' bug — common, not catastrophic, worth knowing."
+/>
+
+## Production logging
+
+For any non-trivial training job, log to a tracking platform:
+
+- **Weights & Biases** — dominant choice in 2026; great UI, good API.
+- **MLflow** — open source; common in regulated industries.
+- **Comet** — competitor to W&B.
+- **TensorBoard** — built-in to PyTorch; minimal but free.
+
+What to log:
+
+- Train loss, validation loss, per-task losses (multi-task).
+- Learning rate (verify the schedule is doing what you think).
+- Gradient norms (spikes indicate trouble).
+- Activations / weight histograms (less common, sometimes useful).
+- Throughput (tokens/sec or samples/sec for scaling decisions).
+- System metrics (GPU utilisation, memory).
+
+Log enough to diagnose post-hoc; don't log so much that it slows training. Every 50-100 steps is typical.
+
+## What gets you from "loop runs" to "training succeeds"
+
+The training stack in this lesson is essentially settled. The interesting variation is in:
+
+- **Data quality and pipelines** (next module: A6 NLP, A7 vision).
+- **Architecture choices** (Module 5).
+- **Scaling decisions** (compute budget, optimal model + data size — A5.7).
+- **Debugging when things go wrong** (the next lesson).
+
+A modern training script that uses AdamW + cosine schedule + BF16 + DDP/FSDP + gradient clipping + W&B logging is the production-quality baseline. From there, performance gains come from data, architecture, and scale — not from training-loop optimisations.
+
+The next lesson (A4.8) covers what to do when this carefully-built training loop produces a bad model: Karpathy's recipe for debugging neural networks.

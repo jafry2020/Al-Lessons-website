@@ -1,0 +1,230 @@
+---
+title: "The perceptron and what neural nets actually compute"
+description: "Where neural networks came from, what the simplest one can and can't do, and why stacking them with non-linearities unlocked everything that followed."
+track: ml-engineer
+trackLabel: "ML Engineer Path"
+module: neural-networks
+moduleLabel: "Module 4 · Neural Networks"
+lesson: perceptron
+lessonCode: "A4.1"
+estMinutes: 11
+prereqs:
+  - "A2.2 Logistic regression and the sigmoid"
+  - "A1.5 Matrix calculus, just enough"
+objectives:
+  - "Describe a perceptron as a thresholded linear classifier and state its single fatal limitation."
+  - "Explain how stacking perceptrons with non-linearities yields a universal function approximator."
+  - "Connect modern neural networks back to the 1950s perceptron in one sentence."
+pitfalls:
+  - "Treating universal approximation as 'neural nets can solve anything.' They're representational power statements, not learnability or generalisation guarantees."
+  - "Reading 'neuron' biologically. The brain analogy is loose at best; the math doesn't depend on it."
+  - "Believing 'AI winter' came from technical impossibility. The XOR critique was real but resolved 15 years before deep learning took off."
+  - "Confusing depth with width. Adding layers and adding neurons-per-layer are different scaling axes."
+importantQuestions:
+  - question: "What is a perceptron, in 2026 terms?"
+    shortAnswer: |
+      A single-layer linear classifier with a step (or sign) activation: ŷ = step(wᵀx + b). Trained by Rosenblatt (1958) with a simple update rule. The minimal neural network — exactly one neuron.
+    detailed: |
+      Rosenblatt's perceptron is logistic regression with a step function instead of a sigmoid. Given input x ∈ ℝᵈ, weights w ∈ ℝᵈ, bias b: compute z = wᵀx + b, output 1 if z ≥ 0 else 0 (or +1 / −1 with sign activation).
+
+      Training: for each misclassified example, update w ← w + η(y − ŷ)x. Provably converges in finite steps when the data is linearly separable (Novikoff's theorem). Stalls or oscillates otherwise.
+
+      The perceptron is interesting historically but as a model in 2026 it's strictly worse than logistic regression — same linear boundary, no calibrated probabilities, no smooth gradient. Its importance is conceptual: the first neural network, the spark, and the failure that motivated everything since.
+    pitfalls:
+      - "The perceptron training rule is a special case of stochastic gradient descent on a non-differentiable loss. It only converges on linearly separable data."
+  - question: "What was the XOR problem and why did it matter?"
+    shortAnswer: |
+      The XOR function — outputs 1 if exactly one of two inputs is 1 — is not linearly separable. A single perceptron literally cannot learn it. Minsky and Papert (1969) made this point sharply, slowing neural network research for ~15 years.
+    detailed: |
+      XOR's truth table: (0,0)→0, (0,1)→1, (1,0)→1, (1,1)→0. No single line in 2D can separate the 1s from the 0s. A perceptron fails by construction.
+
+      Minsky and Papert's book *Perceptrons* (1969) catalogued this and other limitations rigorously. The implied verdict — that single-layer networks were fundamentally limited — was correct but overgeneralised. Multi-layer networks (MLPs) can solve XOR easily, but they need a learning algorithm: backpropagation, popularised by Rumelhart, Hinton, Williams (1986). Between 1969 and 1986 was the "first AI winter" for neural networks, and a lot of researchers moved to other approaches.
+
+      The lesson for ML engineers: representational limits of a model class can be real, but they can also be sidestepped by composition. Most modern deep learning advances are clever compositions, not novel primitive operations.
+    pitfalls:
+      - "XOR's lesson is sometimes stated as 'always need non-linearity' — but the issue is composition + non-linearity. A single non-linear neuron still can't do XOR."
+  - question: "What does universal approximation actually guarantee?"
+    shortAnswer: |
+      A feedforward network with one hidden layer and enough neurons can approximate any continuous function on a compact domain to any desired accuracy. It's a representational statement — not a guarantee about training or generalisation.
+    detailed: |
+      The universal approximation theorem (Cybenko 1989, Hornik 1991) states: for any continuous function f on a bounded domain, and any ε > 0, there exists an MLP with one hidden layer that approximates f everywhere within ε.
+
+      Caveats:
+      - "Enough neurons" can mean astronomically many for complex f.
+      - The theorem is non-constructive: it says such a network exists, not how to find it.
+      - Approximation power ≠ trainability. You still need an optimiser that finds the right weights.
+      - Approximation on training data ≠ generalisation. The network might fit training perfectly and fail on test.
+
+      Why depth matters: a deep network can approximate certain functions exponentially more efficiently than a shallow-and-wide one. The theoretical universal approximation result was about width; the empirical revolution was about depth.
+    pitfalls:
+      - "Universal approximation theorems exist for ReLU networks too (Sonoda & Murata, 2017). They're not specific to sigmoids."
+  - question: "Why did deep learning take off after 2012?"
+    shortAnswer: |
+      Three things converged: enough labeled data (ImageNet), enough compute (GPUs), and architectural tricks (ReLU, dropout, better initialisation, eventually residual connections). The math wasn't new; the engineering was.
+    detailed: |
+      Backpropagation existed since 1986. CNNs since LeCun 1989. The mathematical machinery to train deep networks was decades old by 2012.
+
+      What changed:
+      - **Data scale**. ImageNet (2009) gave the field a benchmark with millions of labeled images.
+      - **Hardware**. GPUs designed for graphics turned out to be massively parallel matrix multipliers — perfect for neural nets. NVIDIA's CUDA (2006) made them programmable.
+      - **Tricks that made deep nets trainable**. ReLU instead of sigmoid (vanishing gradients). Better weight initialisation (Glorot/He). Batch normalisation. Dropout. Residual connections. Each removed a previous training obstacle.
+      - **Krizhevsky, Sutskever, Hinton (2012)** — AlexNet won ImageNet by a huge margin with a deep CNN trained on GPUs. The proof of concept that lit the fuse.
+
+      In 2026 this is canonical history: the ideas were old; the conditions for them to work weren't. Foundation models in the 2020s repeated the pattern at greater scale.
+    pitfalls:
+      - "Saying 'ImageNet caused deep learning' undersells the role of GPUs and architectural tricks. All three were necessary."
+  - question: "Is the 'neuron' analogy actually useful?"
+    shortAnswer: |
+      Mostly historical. A real neuron has rich biochemistry, temporal dynamics, and computation a single weighted sum doesn't capture. The math of neural networks works for reasons unrelated to biology.
+    detailed: |
+      McCulloch & Pitts (1943) modeled neurons as threshold gates, and the math stuck. But biological neurons:
+      - Are not binary; they have continuous firing rates and complex temporal patterns.
+      - Have thousands of synaptic inputs with non-uniform timing.
+      - Use neurotransmitter chemistry, not just sums.
+      - Learn via mechanisms (synaptic plasticity) that don't resemble backpropagation.
+
+      The artificial neuron is a mathematical abstraction that turned out to be useful — primarily because composing many linear-then-non-linear transformations gives rich function classes that we can train with gradient descent. The biological inspiration was the spark; the math is doing the work.
+
+      When people talk about "neurons" in modern deep learning (a 7B-parameter LLM has billions of "neurons"), they almost always mean "scalar activations in a hidden layer." Don't import biological intuition.
+    pitfalls:
+      - "Spiking neural networks and neuromorphic chips try to model real neurons more closely. They're a research backwater compared to deep learning."
+---
+
+<TldrCallout>
+  Neural networks descend from Rosenblatt's 1958 perceptron — a thresholded linear classifier with a
+  simple update rule. A single perceptron is logistic regression with a step function and can't even
+  solve XOR. Multi-layer networks with non-linearities (MLPs) are universal function approximators.
+  The math has been around since the 1980s; the conditions for it to work at scale — data, GPUs,
+  training tricks — arrived in the 2010s.
+</TldrCallout>
+
+## The simplest "neural network"
+
+Rosenblatt's 1958 perceptron is one neuron:
+
+ŷ = step(wᵀx + b)
+
+Given input x ∈ ℝᵈ, weights w ∈ ℝᵈ, bias b ∈ ℝ. Compute the weighted sum, apply a step function, output 0 or 1.
+
+Training rule: for every misclassified example, w ← w + η(y − ŷ)x. Repeat until everything is classified correctly (or run out of patience).
+
+It works when the data is linearly separable. Novikoff (1962) proved this converges in finite steps in that case. When the data is not linearly separable, the perceptron oscillates forever.
+
+For 2026 deployment, a single perceptron is strictly worse than logistic regression — same linear boundary, no probabilities, harsher training rule. Its value is historical: the spark.
+
+## The XOR moment
+
+Minsky and Papert's _Perceptrons_ (1969) showed that a single perceptron cannot learn the XOR function. The two classes (0,0)/(1,1) and (0,1)/(1,0) form an X-pattern in 2D — no line separates them.
+
+| x₁  | x₂  | XOR |
+| --- | --- | --- |
+| 0   | 0   | 0   |
+| 0   | 1   | 1   |
+| 1   | 0   | 1   |
+| 1   | 1   | 0   |
+
+This was a real result and a real limitation. Combined with overpromising in the early AI hype cycle, it triggered the "first AI winter" for neural networks. Researchers moved to symbolic AI; neural networks went dormant for about 15 years.
+
+The resolution turned out to be composition. Stack two perceptrons:
+
+- Hidden layer: h₁ = step(x₁ + x₂ − 0.5), h₂ = step(x₁ + x₂ − 1.5)
+- Output: y = step(h₁ − h₂)
+
+This computes XOR. The first layer carves the space; the second combines. But this required two things the field didn't have in 1969:
+
+1. **An algorithm to train multi-layer networks.** Backpropagation arrived in 1986.
+2. **A reason to believe non-trivial multi-layer networks could be trained at scale.** That arrived around 2012.
+
+## The Multi-Layer Perceptron (MLP)
+
+The model that came out of the XOR resolution is the MLP — alternating layers of linear maps and element-wise non-linearities:
+
+```
+x →  W₁ x + b₁ → σ → W₂ · + b₂ → σ → ... → output
+```
+
+where σ is some non-linear activation (sigmoid then, ReLU now). Crucially: without the non-linearity, stacking linear maps just gives another linear map. The non-linearity is what makes depth meaningful.
+
+<AnalogyCallout>
+  Each layer of an MLP is a coordinate transform plus a "fold" (the non-linearity). One fold lets
+  the next linear map carve regions a single line couldn't. Stack enough folds and you can carve any
+  region you want — at least in principle.
+</AnalogyCallout>
+
+## Universal approximation: what it does and doesn't say
+
+Cybenko (1989), Hornik (1991): an MLP with one hidden layer and enough neurons can approximate any continuous function on a bounded domain to any accuracy.
+
+This sounds powerful — and it is, theoretically. But the caveats matter:
+
+- "Enough neurons" can be astronomically many for complex functions.
+- The theorem doesn't tell you how to find the weights.
+- It says nothing about generalisation from training to test data.
+
+Depth turns out to matter for _efficient_ approximation. A function representable by a deep network with N total neurons might require exponentially more neurons in a shallow network. Empirically, the revolution after 2012 was about depth (not just width) made trainable.
+
+## What unlocked deep learning in 2012
+
+The math was decades old. Three things changed by 2012:
+
+| Ingredient      | What arrived                                                              |
+| --------------- | ------------------------------------------------------------------------- |
+| Data            | ImageNet (2009) — millions of labeled images                              |
+| Hardware        | NVIDIA CUDA (2006); GPUs as general matrix multipliers                    |
+| Training tricks | ReLU, dropout, better init, eventually batchnorm and residual connections |
+
+**Krizhevsky, Sutskever, Hinton (2012)** trained AlexNet, a deep CNN, on ImageNet using two GPUs and won by an enormous margin. Top-5 error dropped from ~26% (best previous) to ~16%. The field pivoted within a year.
+
+This is the pattern that repeats. Foundation models in the 2020s (GPT-3, GPT-4, Claude, Llama) followed the same recipe at greater scale: more data, more compute, more architectural tricks. The mathematics often predates the practice by years.
+
+<InlineQuiz
+  question="A single perceptron with sigmoid activation (i.e., logistic regression) cannot learn the XOR function. What's the minimum change needed?"
+  options={[
+    { text: "Use a step function instead of sigmoid." },
+    {
+      text: "Add a hidden layer with at least 2 neurons and a non-linear activation between layers.",
+      correct: true,
+    },
+    { text: "Standardise the inputs more aggressively." },
+    { text: "Use a different learning rate." },
+  ]}
+  explanation="XOR is non-linearly separable. The hyperplane learned by any single linear-then-activation neuron cannot separate the four points correctly. A hidden layer with at least 2 neurons + a non-linearity (so depth, not just width) gives the network enough expressiveness to carve out the XOR pattern. This single change is the whole point of the 1986 backpropagation moment."
+/>
+
+## What's in this module
+
+| Lesson | Topic                                  |
+| ------ | -------------------------------------- |
+| A4.2   | Feedforward networks and activations   |
+| A4.3   | Backpropagation in detail              |
+| A4.4   | Loss functions for neural networks     |
+| A4.5   | Optimizers (already authored)          |
+| A4.6   | Initialization, normalization, dropout |
+| A4.7   | The practical training stack           |
+| A4.8   | Debugging neural networks              |
+
+This module builds the foundation. Module 5 (Deep Learning Architectures) takes the basic MLP and adds the structural pieces — convolutions, attention, residual connections — that turned 2012 ideas into 2026 systems.
+
+<InlineQuiz
+  question="The universal approximation theorem says a one-hidden-layer MLP can approximate any continuous function. What's a fair takeaway?"
+  options={[
+    { text: "Neural networks can solve any problem if you give them enough neurons." },
+    { text: "Wide shallow networks are sufficient in practice; depth doesn't matter." },
+    {
+      text: "MLPs have representational power; whether they can be trained efficiently to the right function and generalise is a separate question.",
+      correct: true,
+    },
+    {
+      text: "The theorem implies deep learning was an inevitable success once enough compute was available.",
+    },
+  ]}
+  explanation="Universal approximation is a representational statement: 'there exists' a network that fits any function. It doesn't say you can find it with gradient descent, that you can train it with reasonable data, or that it will generalise. Practical deep learning needs all three. The 'enough neurons' clause can also be enormous — depth-based representation is often exponentially more efficient than width."
+/>
+
+## A note on the "neuron" analogy
+
+Modern deep learning models have billions of "neurons." Biological neurons have rich temporal dynamics, neurotransmitter chemistry, and learning rules that don't resemble backpropagation. The brain analogy was inspirational; the math doesn't depend on it.
+
+In 2026, "neuron" in a neural network means "a scalar activation in a hidden layer." Don't import biology unless you're doing computational neuroscience.
+
+The next lesson digs into what an MLP layer actually computes, and which activation function to use when — a question with cleaner answers in 2026 than it had in 2014.
