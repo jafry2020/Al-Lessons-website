@@ -153,7 +153,7 @@ importantQuestions:
       U-Net architecture: encoder (CNN downsampling) → bottleneck → decoder (upsampling) with skip connections at each scale.
 
       Why it survives in 2026:
-      - **Small data**: medical, satellite, microscopy often have <1000 labelled images. U-Net trains; large transformers overfit.
+      - **Small data**: medical, satellite, microscopy often have &lt;1000 labelled images. U-Net trains; large transformers overfit.
       - **Domain-specific**: medical U-Nets are pretrained on medical data; transfer is excellent within the domain.
       - **Mature ecosystem**: nnU-Net (Isensee et al., 2021) is a self-configuring U-Net that handles dataset specifics automatically. Gold standard for medical segmentation.
       - **Compute-efficient**: ~10-40M parameters; runs on modest hardware.
@@ -367,7 +367,7 @@ For real-time: SegFormer or Mask2Former with smaller backbone + TensorRT. For in
     { text: "GPT-4V on every click." },
     { text: "Hardcode masks via traditional CV (edge detection)." },
   ]}
-  explanation="This is exactly SAM's killer use case. Click → mask in <1s, works on arbitrary satellite imagery, no training needed up front. Labels come from a tiny separate classifier. The accumulated annotations later become training data for a domain-specific Mask2Former. This is the 2026 annotation paradigm. Training from scratch is what you do AFTER you have labelled data; SAM gets you that data fast."
+  explanation="This is exactly SAM's killer use case. Click → mask in &lt;1s, works on arbitrary satellite imagery, no training needed up front. Labels come from a tiny separate classifier. The accumulated annotations later become training data for a domain-specific Mask2Former. This is the 2026 annotation paradigm. Training from scratch is what you do AFTER you have labelled data; SAM gets you that data fast."
 />
 
 ## Domain-specific: medical and satellite
@@ -378,7 +378,7 @@ For specialised domains:
 - **Satellite / aerial**: U-Net or DeepLab variants; pretraining on aerial datasets (xView, SpaceNet) matters.
 - **Microscopy**: U-Net dominates; Cellpose for cell segmentation specifically.
 
-These domains have smaller data (often <1000 images), specialised input characteristics (multi-channel, non-RGB), and require domain expertise in preprocessing.
+These domains have smaller data (often &lt;1000 images), specialised input characteristics (multi-channel, non-RGB), and require domain expertise in preprocessing.
 
 <InlineQuiz
   question="You have 500 medical CT scans for kidney tumor segmentation. Which model should you start with?"

@@ -122,14 +122,14 @@ importantQuestions:
       - "DINOv2 was trained on 142M curated images including web scrapes. Not safe for all licensing contexts; check before commercial use."
   - question: "When should you use SSL features vs. fine-tune end-to-end?"
     shortAnswer: |
-      Use SSL features (frozen) when: small data (<5k examples), prototyping speed, multi-task. Fine-tune when: > 5k examples, quality matters, can afford the compute.
+      Use SSL features (frozen) when: small data (&lt;5k examples), prototyping speed, multi-task. Fine-tune when: > 5k examples, quality matters, can afford the compute.
     detailed: |
       Strategies for using SSL features:
 
       **Linear probe** (frozen features + linear classifier):
       - Cheap (seconds to train classifier).
       - Strong with DINOv2 — often 95% of fine-tune quality.
-      - Best for: <5k examples per class, prototyping.
+      - Best for: &lt;5k examples per class, prototyping.
 
       **Frozen + small MLP head**:
       - Slightly more capacity than linear; still cheap.

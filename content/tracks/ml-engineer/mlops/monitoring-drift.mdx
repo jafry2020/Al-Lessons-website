@@ -362,7 +362,7 @@ Avoid alert fatigue:
     { text: "PSI of 0.18 is harmless; ignore it." },
     { text: "Roll back to the previous model version." },
   ]}
-  explanation="PSI 0.18 is moderate drift (typically: <0.1 stable, 0.1-0.25 moderate, >0.25 significant). Stable error rate and predicted-positive rate suggest the model is still functioning. The right response: investigate. Check accuracy on sampled labelled data; review which features are drifting; check if it's real-world shift vs pipeline bug. Retrain if accuracy regressed; update monitoring baseline if not. Don't act in panic; drift is data, not yet a verdict."
+  explanation="PSI 0.18 is moderate drift (typically: &lt;0.1 stable, 0.1-0.25 moderate, >0.25 significant). Stable error rate and predicted-positive rate suggest the model is still functioning. The right response: investigate. Check accuracy on sampled labelled data; review which features are drifting; check if it's real-world shift vs pipeline bug. Retrain if accuracy regressed; update monitoring baseline if not. Don't act in panic; drift is data, not yet a verdict."
 />
 
 ## When does drift mean retrain?

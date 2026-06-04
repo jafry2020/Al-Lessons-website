@@ -101,7 +101,7 @@ p̂ = σ(xᵀw) = 1 / (1 + exp(−xᵀw))
 
 ## The widget
 
-The left panel shows σ(z) and where your current input z = xᵀw lands. The right panel shows a 2D dataset with the decision boundary {x : xᵀw = 0} — a line in 2D, a hyperplane in d-D. Move the weights w and the bias b; the boundary rotates and shifts.
+The left panel shows σ(z) and where your current input z = xᵀw lands. The right panel shows a 2D dataset with the decision boundary `{x : xᵀw = 0}` — a line in 2D, a hyperplane in d-D. Move the weights w and the bias b; the boundary rotates and shifts.
 
 <LogisticBoundary />
 
@@ -135,7 +135,7 @@ The loss is convex in w. Unlike linear regression there's no closed-form solutio
 
 ## Why the boundary is still a line
 
-The probability surface is curved (it's a sigmoid), but the set of points where p = 0.5 is exactly {x : xᵀw + b = 0} — a hyperplane. Logistic regression is a **linear classifier** in this sense, even though it produces non-linear probability outputs.
+The probability surface is curved (it's a sigmoid), but the set of points where p = 0.5 is exactly `{x : xᵀw + b = 0}` — a hyperplane. Logistic regression is a **linear classifier** in this sense, even though it produces non-linear probability outputs.
 
 Implication: if the true boundary between classes is curved, logistic regression won't find it without engineered features (polynomial expansions, interaction terms) or a non-linear model (kernel methods, trees, neural nets).
 

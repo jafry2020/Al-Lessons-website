@@ -24,7 +24,7 @@ pitfalls:
 importantQuestions:
   - question: "What's the problem framing for a credit-card fraud detector?"
     shortAnswer: |
-      Auto-decide approve/flag/review on transactions in real-time, given a fraud probability score. Reduce manual review burden while maintaining catch rate. Constraints: <50ms latency, 1M+ transactions/day, asymmetric costs (FN ~$300, FP ~$5).
+      Auto-decide approve/flag/review on transactions in real-time, given a fraud probability score. Reduce manual review burden while maintaining catch rate. Constraints: &lt;50ms latency, 1M+ transactions/day, asymmetric costs (FN ~$300, FP ~$5).
     detailed: |
       Detailed framing:
 
@@ -38,7 +38,7 @@ importantQuestions:
       **Why ML**: rule-based systems catch some fraud but miss novel patterns; manual review doesn't scale. ML can learn patterns automatically.
 
       **Constraints**:
-      - Latency: <50 ms (part of payment authorisation flow).
+      - Latency: &lt;50 ms (part of payment authorisation flow).
       - Throughput: 1M+/day with peaks at 5x daily avg.
       - Calibrated probabilities (downstream cost-weighted thresholding).
       - Data privacy: PCI-compliant; no raw card numbers in features.
@@ -190,7 +190,11 @@ importantQuestions:
 ---
 
 <TldrCallout>
-  Credit-card fraud detection illustrates classic tabular ML: XGBoost / LightGBM on structured features, calibrated probabilities, real-time serving (<50ms), cost-weighted thresholds, time-based evaluation, per-segment monitoring. The interesting work isn't the model — it's feature engineering, calibration, threshold tuning, and adversarial drift handling. The 7-step framework applied to this problem demonstrates how each step's choices flow through.
+  Credit-card fraud detection illustrates classic tabular ML: XGBoost / LightGBM on structured
+  features, calibrated probabilities, real-time serving (&lt;50ms), cost-weighted thresholds,
+  time-based evaluation, per-segment monitoring. The interesting work isn't the model — it's feature
+  engineering, calibration, threshold tuning, and adversarial drift handling. The 7-step framework
+  applied to this problem demonstrates how each step's choices flow through.
 </TldrCallout>
 
 ## The framing
@@ -200,8 +204,8 @@ Let's apply the 7-step framework to credit-card fraud detection.
 **1. Problem framing**:
 
 - 1M+ transactions/day, 0.5% fraud rate.
-- Each transaction: output a fraud probability in <50ms.
-- Downstream code thresholds: p<0.05 auto-approve, p>0.5 auto-block, else queue for review (50k/day capacity).
+- Each transaction: output a fraud probability in &lt;50ms.
+- Downstream code thresholds: p&lt;0.05 auto-approve, p>0.5 auto-block, else queue for review (50k/day capacity).
 - FP cost ~$5 (customer friction); FN cost ~$300 (chargeback).
 - Regulators may demand explainability for any auto-blocked transaction.
 

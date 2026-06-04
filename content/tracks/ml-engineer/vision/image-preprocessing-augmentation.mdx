@@ -131,7 +131,7 @@ importantQuestions:
     detailed: |
       Cases where heavy augmentation backfires:
 
-      - **Tiny data (<500 images per class).** Aggressive augmentation means the model never sees a clean version; useful signal swamped by noise.
+      - **Tiny data (&lt;500 images per class).** Aggressive augmentation means the model never sees a clean version; useful signal swamped by noise.
       - **OCR or text recognition.** Rotation, perspective transforms change semantic meaning ("6" rotated 180° becomes "9").
       - **Medical imaging.** Random colour jitter on radiology images may push out of meaningful distribution.
       - **Domain-specific recognition.** Random horizontal flip is wrong for tasks where left/right matters (handedness, mirror text).

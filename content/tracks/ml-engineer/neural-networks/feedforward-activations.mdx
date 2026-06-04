@@ -128,7 +128,7 @@ h = σ(z) ∈ ℝᵐ (element-wise non-linearity)
 
 W is m × n weights; b is m biases; σ is one of a handful of standard functions applied independently to each component.
 
-Stack L such layers and you get an MLP: a function with m₁·n + m₂·m₁ + ... + m*L·m*{L−1} learnable parameters that can in principle approximate any continuous function.
+Stack L such layers and you get an MLP: a function with `m₁·n + m₂·m₁ + ... + m_L·m_{L−1}` learnable parameters that can in principle approximate any continuous function.
 
 **Why the non-linearity matters.** Without σ, layer 2 applied to layer 1 gives:
 

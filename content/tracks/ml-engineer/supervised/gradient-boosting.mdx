@@ -112,13 +112,13 @@ Notice:
 
 F₀(x) = constant (the mean of y, for squared error).
 
-At step m, compute pseudo-residuals: rᵢ = −∂L/∂F(xᵢ) evaluated at F\_{m−1}(xᵢ).
+At step m, compute pseudo-residuals: `rᵢ = −∂L/∂F(xᵢ)` evaluated at `F_{m−1}(xᵢ)`.
 
 Fit a small tree h_m to (xᵢ, rᵢ).
 
-Update: F*m(x) = F*{m−1}(x) + η · h_m(x), where η is the **learning rate**.
+Update: `F_m(x) = F_{m−1}(x) + η · h_m(x)`, where η is the **learning rate**.
 
-For squared error, the pseudo-residual is just (yᵢ − F\_{m−1}(xᵢ)), which is why people say "boosting fits the residuals." For cross-entropy, the residual is (yᵢ − p̂ᵢ) — the prediction error in probability space.
+For squared error, the pseudo-residual is just `(yᵢ − F_{m−1}(xᵢ))`, which is why people say "boosting fits the residuals." For cross-entropy, the residual is (yᵢ − p̂ᵢ) — the prediction error in probability space.
 
 This is Friedman's 2001 _Greedy Function Approximation_, the paper that named the algorithm gradient boosting.
 

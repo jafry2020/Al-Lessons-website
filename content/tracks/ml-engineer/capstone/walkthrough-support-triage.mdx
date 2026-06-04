@@ -37,9 +37,9 @@ importantQuestions:
       - **Routing**: assigns to the right team queue.
 
       **Constraints**:
-      - Latency: <30 seconds (acceptable since user already submitted).
+      - Latency: &lt;30 seconds (acceptable since user already submitted).
       - Throughput: 10k/day = ~7/min average; peaks at 50/min.
-      - Cost budget: <$0.05 per ticket.
+      - Cost budget: &lt;$0.05 per ticket.
       - Quality: agent review remains; ML is decision support, not autonomous.
       - Privacy: customer data on-premises preferred; no sending PII to public APIs without redaction.
 
@@ -61,7 +61,7 @@ importantQuestions:
       - **Image understanding** (when image present): per-task F1 (e.g., "is this a screenshot of an error message?").
 
       **Operational**:
-      - Time-to-triage (target: <30 sec).
+      - Time-to-triage (target: &lt;30 sec).
       - Cost per ticket.
       - Throughput (tickets / agent / day).
       - Agent satisfaction (quarterly survey).
@@ -211,9 +211,9 @@ importantQuestions:
       Acceptable within 30-second budget.
 
       **Cost** (per ticket):
-      - Category + Priority encoders: <$0.001.
+      - Category + Priority encoders: &lt;$0.001.
       - SigLIP + VLM (when image): ~$0.01.
-      - RAG retrieval: <$0.0005.
+      - RAG retrieval: &lt;$0.0005.
       - GPT-4o-mini draft: ~$0.005.
       - **Total: ~$0.01-0.02 per ticket** (within budget).
 
@@ -257,8 +257,8 @@ A SaaS company processes 10k support tickets per day. Currently triaged by human
 
 Constraints:
 
-- <30 seconds latency per ticket (already submitted; not real-time UX).
-- <$0.05 per ticket cost.
+- &lt;30 seconds latency per ticket (already submitted; not real-time UX).
+- &lt;$0.05 per ticket cost.
 - Agent reviews all outputs — ML is decision support, not autonomous.
 - Privacy: PII redaction before sending text to external APIs.
 

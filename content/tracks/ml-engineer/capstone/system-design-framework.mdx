@@ -168,7 +168,7 @@ importantQuestions:
     detailed: |
       Decisions per scale tier:
 
-      **Prototype / low volume (<1k req/day)**:
+      **Prototype / low volume (&lt;1k req/day)**:
       - Serving: Modal / Replicate (managed, pay-per-use).
       - Monitoring: basic logging + manual review.
       - Cost: tens of dollars per month.
@@ -238,7 +238,7 @@ What to articulate:
 
 A weak framing: "Build a fraud detection model."
 
-A strong framing: "We process 100k transactions per hour. Currently we manually review 5%. We want to auto-approve the 95% lowest-risk transactions to free up review capacity. The model outputs fraud probability; downstream code thresholds it. Latency <50ms. FP cost $5 (customer friction); FN cost $300 (chargeback)."
+A strong framing: "We process 100k transactions per hour. Currently we manually review 5%. We want to auto-approve the 95% lowest-risk transactions to free up review capacity. The model outputs fraud probability; downstream code thresholds it. Latency &lt;50ms. FP cost $5 (customer friction); FN cost $300 (chargeback)."
 
 The strong framing tells you: what metric matters (precision at high recall on the positive class), what model is acceptable (anything fast and calibrated), and how to evaluate (cost-weighted error).
 
@@ -317,7 +317,7 @@ Is it generation / open-ended?
 
 Constraints flip choices:
 
-- Real-time UX (<100ms) → no frontier API.
+- Real-time UX (&lt;100ms) → no frontier API.
 - Edge / mobile → MobileNet / quantised small.
 - High volume → fine-tune small (cost economics).
 - Tiny data → few-shot prompt or linear probe.

@@ -42,6 +42,12 @@ async function walkMdx(dir: string): Promise<string[]> {
 }
 
 async function main() {
+  // @mdx-js/mdx is pure ESM. Dynamic import from inside main() avoids tsx's
+  // top-level-ESM resolution issues from a .ts entry point.
+  const { compile: compileMdx } = (await import("@mdx-js/mdx")) as {
+    compile: (input: string) => Promise<unknown>;
+  };
+
   const files = await walkMdx(path.join(CONTENT_ROOT, "tracks"));
   if (files.length === 0) {
     console.log("[check-content] no .mdx files under content/tracks");
@@ -55,7 +61,30 @@ async function main() {
   for (const file of files) {
     const rel = path.relative(process.cwd(), file);
     const raw = await fs.readFile(file, "utf8");
-    const { data } = matter(raw);
+    const { data, content: body } = matter(raw);
+
+    // Compile MDX body. Catches `<5`, unescaped `{x: y}` in prose, malformed
+    // JSX nesting — all of which compile cleanly via `next build` (which uses
+    // SSR / `force-dynamic`) but explode at runtime when MDXRemote runs in
+    // production. We compile here so CI fails before merge instead of letting
+    // these reach Vercel.
+    try {
+      await compileMdx(body);
+    } catch (e: unknown) {
+      const err = e as {
+        message?: string;
+        place?: { line?: number; column?: number; start?: { line?: number; column?: number } };
+      };
+      const place = err.place;
+      const line = place?.start?.line ?? place?.line;
+      const col = place?.start?.column ?? place?.column;
+      const where =
+        line !== undefined ? ` (~line ${line}${col !== undefined ? `:${col}` : ""})` : "";
+      problems.push({
+        file: rel,
+        message: `MDX compile error${where}: ${err.message?.slice(0, 240) ?? String(e)}`,
+      });
+    }
 
     const parsed = lessonFrontmatterSchema.safeParse(data);
     if (!parsed.success) {

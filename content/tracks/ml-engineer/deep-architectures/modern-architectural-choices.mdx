@@ -189,7 +189,7 @@ Used in Llama, Mistral, Gemma, PaLM. Effectively the new default.
 
 ## RoPE: rotational position encoding
 
-For each pair (q*{2k}, q*{2k+1}) in Q, rotate by angle p · θ_k where p is the position and θ_k is a frequency that decreases with k.
+For each pair `(q_{2k}, q_{2k+1})` in Q, rotate by angle p · θ_k where p is the position and θ_k is a frequency that decreases with k.
 
 ```
 Q_rotated[2k]   = Q[2k] cos(p·θ_k) − Q[2k+1] sin(p·θ_k)

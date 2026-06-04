@@ -254,7 +254,7 @@ ResNet-50, ResNet-101: now teaching baselines only. Don't pick for new projects;
 
 These defaults handle 90% of cases. Tune from here.
 
-For very small data (<500 per class), reduce lr (3e-5), reduce epochs (3-5), reduce augmentation magnitude, use linear probe instead of full fine-tune.
+For very small data (&lt;500 per class), reduce lr (3e-5), reduce epochs (3-5), reduce augmentation magnitude, use linear probe instead of full fine-tune.
 
 <AnalogyCallout>
   Fine-tuning a pretrained backbone is like sharpening a Swiss Army knife for one specific use. The
@@ -297,7 +297,7 @@ Cons:
 - Slightly lower accuracy than full fine-tune (3-5 points on most benchmarks).
 - Limited by pretrained features.
 
-In 2026, **linear probing of DINOv2 backbones is a remarkably strong baseline** — often within 2-3 points of full fine-tuning, at a fraction of the training cost. Default for any "I have <1000 labelled examples per class" task.
+In 2026, **linear probing of DINOv2 backbones is a remarkably strong baseline** — often within 2-3 points of full fine-tuning, at a fraction of the training cost. Default for any "I have &lt;1000 labelled examples per class" task.
 
 ## CLIP zero-shot: no training at all
 
@@ -327,7 +327,7 @@ Use cases:
 Limitations:
 
 - Worse on fine-grained classes (bird species, medical findings).
-- Sensitive to prompt templates ("a photo of a {class}" vs "{class}" matters).
+- Sensitive to prompt templates (`"a photo of a {class}"` vs `"{class}"` matters).
 - Slower than fine-tuned small models for high-volume.
 
 ## Evaluation: what to report

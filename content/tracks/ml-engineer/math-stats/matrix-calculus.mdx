@@ -217,11 +217,11 @@ This is the backward pass through a linear layer: the gradient flowing back to x
 
 For a composition z = g(f(x)) with x ∈ ℝⁿ, f: ℝⁿ → ℝᵐ, g: ℝᵐ → ℝᵏ:
 
-J*{z→x} = J*{g→f} · J\_{f→x} ∈ ℝᵏˣⁿ
+`J_{z→x} = J_{g→f} · J_{f→x} ∈ ℝᵏˣⁿ`
 
 For backpropagation (k=1, scalar loss L):
 
-∂L/∂x = (∂L/∂f) · J*{f→x} = uᵀ · J*{f→x}
+`∂L/∂x = (∂L/∂f) · J_{f→x} = uᵀ · J_{f→x}`
 
 In practice: given u = ∂L/∂f (upstream gradient), compute uᵀJ without forming J — this is the VJP.
 

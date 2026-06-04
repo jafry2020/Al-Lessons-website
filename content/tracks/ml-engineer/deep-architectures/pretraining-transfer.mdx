@@ -63,7 +63,7 @@ importantQuestions:
       **QLoRA** (Dettmers et al., 2023). LoRA + quantise the frozen backbone to 4-bit. Fine-tune 70B models on a single 48GB GPU. Game-changer for community fine-tuning.
 
       Decision rule for 2026:
-      - Tiny data (<1k): linear probe.
+      - Tiny data (&lt;1k): linear probe.
       - Moderate data (1k-100k): LoRA or full fine-tune; LoRA when memory-constrained.
       - Large data + sufficient compute: full fine-tune.
       - Massive model on consumer hardware: QLoRA.
@@ -119,7 +119,7 @@ importantQuestions:
       1. **Pick a base model**. HuggingFace Hub has thousands. For LLM fine-tuning, start from instruction-tuned variants (Llama-3-Instruct, Mistral-Instruct, etc.).
       2. **Format data**. (instruction, response) pairs, or (prompt, completion). Use the model's prompt template.
       3. **Choose adaptation strategy**:
-         - Small data (<1k): linear probe or few-shot prompting (no training).
+         - Small data (&lt;1k): linear probe or few-shot prompting (no training).
          - Medium data: LoRA (rank 16-64, lr 1e-4 to 3e-4).
          - Large data: QLoRA for 30B+ models on single GPU; full fine-tune for 7B models with multi-GPU.
       4. **Train**. Typically 1-3 epochs. Use HuggingFace SFTTrainer, TRL, axolotl, or Unsloth.
@@ -166,7 +166,7 @@ The remarkable empirical fact: these objectives, designed to be efficient to tra
 
 Freeze pretrained model. Pass inputs through it. Train a linear classifier on the final features (or [CLS] token for BERT-style).
 
-When: small data (<1k labelled examples), fast prototyping, low overfitting risk.
+When: small data (&lt;1k labelled examples), fast prototyping, low overfitting risk.
 
 Cost: minimal — single forward pass over data, then logistic regression. Often a few minutes.
 
@@ -292,7 +292,7 @@ Modern frontier models (GPT-4, Claude, Gemini) are so capable via prompting that
 | Standard task, big model is too expensive                    | Distill to smaller fine-tuned model      |
 | Specialised domain / format the model isn't natively good at | Fine-tune (LoRA / QLoRA)                 |
 | Need consistent output format                                | Fine-tune + structured outputs           |
-| Limited labelled data (<100)                                 | Few-shot prompting; consider RAG         |
+| Limited labelled data (&lt;100)                              | Few-shot prompting; consider RAG         |
 | Lots of labelled data (>10k)                                 | Fine-tune for quality and inference cost |
 | On-device deployment                                         | Fine-tune a small model                  |
 

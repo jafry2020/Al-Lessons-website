@@ -121,7 +121,7 @@ importantQuestions:
 
       Strategies:
       - **Random search**: surprisingly strong baseline. Use 50-100 trials.
-      - **Grid search**: only for small discrete spaces (<5 dimensions).
+      - **Grid search**: only for small discrete spaces (&lt;5 dimensions).
       - **Bayesian / TPE**: efficient on continuous spaces, ~50% fewer trials for similar result.
       - **Hyperband / ASHA**: early-stops bad trials; useful for expensive training.
 
@@ -342,7 +342,7 @@ Search strategies:
 | Strategy             | When                                                 |
 | -------------------- | ---------------------------------------------------- |
 | **Random**           | Surprisingly strong baseline; use 50-100 trials      |
-| **Grid**             | Only small discrete spaces (<5 dims)                 |
+| **Grid**             | Only small discrete spaces (&lt;5 dims)              |
 | **Bayesian / TPE**   | Continuous spaces; ~50% fewer trials for same result |
 | **Hyperband / ASHA** | Expensive training; early-stops bad trials           |
 

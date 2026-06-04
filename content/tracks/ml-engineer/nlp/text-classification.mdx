@@ -154,7 +154,7 @@ importantQuestions:
       - "When labels are mutually exclusive AND exhaustive, use multi-class. When labels are independent, use multi-label."
   - question: "When does linear probing beat fine-tuning?"
     shortAnswer: |
-      For tiny labelled data (<500 examples), or when you need a deterministic, fast baseline. Embed all your data once with a frozen encoder; train a logistic regression on top.
+      For tiny labelled data (&lt;500 examples), or when you need a deterministic, fast baseline. Embed all your data once with a frozen encoder; train a logistic regression on top.
     detailed: |
       Linear probing = freeze the encoder; train only a linear classifier on the [CLS] or pooled features.
 

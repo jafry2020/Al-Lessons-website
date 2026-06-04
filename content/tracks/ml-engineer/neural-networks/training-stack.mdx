@@ -105,7 +105,7 @@ importantQuestions:
 
       **Sequence parallelism**. Split activations across devices in the sequence dimension. Adds engineering complexity for diminishing returns at small scale; standard at LLM-pretraining scale.
 
-      Choose: <1B params → DDP. 1B–10B params → FSDP or ZeRO. >10B → FSDP + pipeline/tensor parallel. The library landscape (DeepSpeed, PyTorch FSDP, Megatron-LM, Llama-Factory) keeps evolving; pick by docs and community.
+      Choose: &lt;1B params → DDP. 1B–10B params → FSDP or ZeRO. >10B → FSDP + pipeline/tensor parallel. The library landscape (DeepSpeed, PyTorch FSDP, Megatron-LM, Llama-Factory) keeps evolving; pick by docs and community.
     pitfalls:
       - "DDP requires every process to call backward on the same operations. Conditional logic that diverges across processes will hang training."
   - question: "What's a typical 2026 training loop, top to bottom?"

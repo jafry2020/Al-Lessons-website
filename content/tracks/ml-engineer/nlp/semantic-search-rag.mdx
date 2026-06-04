@@ -49,7 +49,7 @@ importantQuestions:
     detailed: |
       Chunking trade-offs:
 
-      - **Too small** (<100 tokens): chunks lack context; embeddings unstable; you retrieve many fragments.
+      - **Too small** (&lt;100 tokens): chunks lack context; embeddings unstable; you retrieve many fragments.
       - **Too large** (>1000 tokens): embeddings dilute (the chunk covers many topics); retrieved chunks contain irrelevant content alongside the answer.
       - **Just right**: depends on content. For dense Q&A content, 200-500 tokens. For long-form analytical content, 500-1000.
 
@@ -365,7 +365,7 @@ Diagnose per stage. If retrieval is missing the right chunks, no LLM upgrade fix
 For a production RAG system serving 100k queries/day:
 
 - **Embedding** at query time: 1 forward pass × 100k = ~$1-10/day depending on model.
-- **Vector search** in pgvector: <10ms per query; well within Postgres capacity.
+- **Vector search** in pgvector: &lt;10ms per query; well within Postgres capacity.
 - **Reranking**: 100 candidates × cross-encoder × 100k queries = ~$50-200/day if self-hosted on a single GPU.
 - **LLM generation**: 5 chunks × 500 tokens + prompt + answer × 100k = ~50M tokens/day. GPT-4o: ~$500/day. Llama-3-70B self-hosted: $200/day in GPU compute.
 
