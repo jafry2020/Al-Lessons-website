@@ -1,0 +1,188 @@
+---
+title: "Case study: Avro and the LinkedIn data pipeline"
+description: "How one company moved every event through Kafka with Avro + a schema registry — and made schema evolution boring."
+track: system-design
+trackLabel: "System Design Foundations"
+module: encoding
+moduleLabel: "Module 4 · Encoding & Evolution"
+lesson: avro-at-linkedin-case-study
+lessonCode: "S4.2"
+estMinutes: 30
+prereqs:
+  - "S4.1 Encoding and schema evolution"
+objectives:
+  - "Explain why Avro fits streaming pipelines better than Protobuf or JSON."
+  - "Describe what a schema registry does and why it's load-bearing."
+  - "Trace a schema change through the registry → producer → consumer cycle."
+  - "Identify the compatibility rules the registry enforces and what happens when they're violated."
+pitfalls:
+  - "Running Avro without a schema registry. The wire format depends on the schema; without one, decoding is guesswork."
+  - "Treating compatibility checks as advisory. Production registries reject incompatible schemas at registration time."
+  - "Letting producers and consumers reference 'the latest schema'. Pin versions; let the registry handle resolution."
+importantQuestions:
+  - question: "Why Avro and not Protobuf for streaming?"
+    shortAnswer: "Avro's wire format has no field tags at all — just values in schema order. Combined with a schema registry, that gives you maximum forward+backward compatibility with tiny per-message overhead. Protobuf is similar but the tag-number contract is more rigid."
+    detailed: |
+      Protobuf identifies fields by numeric tag on the wire. That's compact, but the tag is permanent — once you assign tag 5 to a field, you must never reuse it for another field type even after deletion.
+
+      Avro's wire format is just the values, in the order defined by the writer's schema. The reader uses the writer's schema (looked up by ID from the registry) plus its own to decode. Field identity is by name, not tag. Renaming with aliases is supported. The schema does all the heavy lifting; the bytes are minimal.
+
+      The result: Avro pipelines feel like text-format JSON (rename fields, add fields freely) with binary-format efficiency — as long as the registry is there to provide the matching schema at decode time.
+    pitfalls:
+      - "Without the schema registry, Avro is unreadable bytes. The format depends on it."
+  - question: "What does the schema registry actually do?"
+    shortAnswer: "Stores all schema versions, assigns each a global ID, and enforces compatibility rules when a producer wants to register a new schema. Every Kafka message references the schema ID; consumers fetch the matching schema on demand and cache it."
+    detailed: |
+      The registry is an HTTP service backing onto Kafka itself (the source of truth for schemas is a Kafka topic). Producers register their schema; the registry returns an ID. Each Kafka record header carries that ID — typically a 4- or 5-byte prefix.
+
+      Consumers, on seeing a new ID, fetch the schema once and cache it. Decoding is the consumer's schema plus the writer's schema, applied per record.
+
+      The registry's other job is policy enforcement. Before accepting a new schema version, it checks: is this backward compatible? Forward? If not, the registration is rejected. Producers can't ship breaking changes.
+    pitfalls:
+      - "If the registry goes down, producers can't register new schemas — but consumers still work as long as the IDs they need are cached."
+  - question: "What compatibility modes does the registry support?"
+    shortAnswer: "Backward (new consumer reads old data), Forward (old consumer reads new data), Full (both), None (anything goes), and Transitive variants that check against all prior versions, not just the latest. Picking the right mode is a deploy-pipeline question."
+    detailed: |
+      Backward compatibility is the default — adding optional fields, removing optional fields, renaming with aliases. Consumers can be deployed before producers.
+
+      Forward compatibility is what allows old consumers to keep running after producers upgrade. Required for rolling deploys where you can't coordinate consumer redeploys.
+
+      Full compatibility is both. The strictest level you can ship while still evolving. LinkedIn defaults to full.
+
+      Transitive modes check the proposed schema against every prior version, not just the latest. Slower to register but catches drift where a chain of individually-compatible changes ends up incompatible end-to-end.
+    pitfalls:
+      - "Defaulting to backward-only is tempting but breaks forward compatibility silently. Use Full unless you have a specific reason."
+  - question: "What happens when a producer tries to ship an incompatible schema?"
+    shortAnswer: "The registry rejects the registration call. The producer's deploy fails. The bad schema never reaches Kafka. That's the policy enforcement point — and the reason the registry has to be in the deployment path."
+    detailed: |
+      Concretely: the CI pipeline calls the registry with the new schema before the service deploys. The registry runs compatibility checks against the current and (optionally) all previous versions. If anything fails, the response is an error and the deploy aborts.
+
+      Some teams check compatibility in PR review via a CI check — same registry call, same outcome, earlier signal. The runtime registry call is a final guardrail.
+
+      This is why the registry's compatibility rules need to match your actual rollout strategy. If you do canary deploys with both versions running, you need Full compatibility. If you redeploy producers and consumers atomically (rare in practice), you can get away with Backward only.
+    pitfalls:
+      - "Disabling registry compatibility checks for 'just this one urgent fix' is the start of a bad story."
+  - question: "How does this end up in your warehouse?"
+    shortAnswer: "Kafka topics → an ingest job → an analytics warehouse. The schema registry tells the warehouse how to parse each record. Most modern warehouses (Snowflake, BigQuery, Redshift) ingest Avro/Parquet natively; some shops use a Kafka Connect sink that handles registry lookups."
+    detailed: |
+      LinkedIn's pattern: every operational event lands on a Kafka topic with an Avro schema. A pipeline reads the topic, infers the warehouse schema from the Avro schema, and lands the rows in the warehouse. When the schema evolves, the warehouse schema follows automatically.
+
+      That's why Avro became the dominant streaming format — it makes the producer → Kafka → warehouse path feel like one schema-managed pipe, not three loosely-coupled systems.
+
+      The same record can also feed downstream services that consume the topic. Each consumer fetches the schema by ID, decodes, processes. No coordination required between producer changes and consumer redeploys, as long as compatibility holds.
+    pitfalls:
+      - "Trying to maintain a parallel JSON pipeline alongside Avro 'for compatibility'. The drift between the two becomes a worse problem than picking one."
+---
+
+<TldrCallout>
+  At LinkedIn, every event flows through Kafka encoded with Avro and validated against a central
+  schema registry. The combination is the production answer to "how do we evolve schemas across
+  hundreds of services without coordinating deploys?". Avro gives compact bytes; the registry gives
+  compatibility enforcement; together they make schema change a normal weekly activity, not a
+  coordination disaster.
+</TldrCallout>
+
+## The setup
+
+LinkedIn runs Kafka as the central nervous system. Profile updates, search clicks, page views, messages — everything eventually lands on some Kafka topic. Hundreds of services produce; hundreds consume.
+
+The challenge: every service evolves on its own schedule. A producer ships a new event shape; some consumers won't be redeployed for weeks. An old consumer can't crash on the new bytes. A new consumer can't crash on the old bytes.
+
+That's the textbook forward + backward compatibility problem from the concept lesson, at industrial scale.
+
+## Avro on the wire
+
+Avro records are just values, in schema order. There are no field tags, no field names, no metadata — just bytes. A 32-bit integer is 4 bytes. A string is a length-prefix plus UTF-8.
+
+Compared to JSON, this is dramatically more compact. Compared to Protobuf, it's slightly more compact (no per-field tags) but more sensitive to the schema — you must have the writer's schema to decode.
+
+That sensitivity is solved by the registry.
+
+## The schema registry
+
+<GlossaryTerm
+  term="Schema registry"
+  definition="A centralized service that stores schema versions, assigns each a globally unique ID, and enforces compatibility rules at registration time. Producers register schemas before publishing; consumers fetch them by ID to decode. The Confluent Schema Registry is the common implementation for Kafka pipelines."
+>
+  The schema registry
+</GlossaryTerm>
+holds every schema version that's ever been registered. Each gets a numeric ID. Records on Kafka
+start with the ID (typically 4-5 bytes), followed by Avro-encoded bytes.
+
+The producer registers its schema once at startup, caches the ID, prepends it to every record. The consumer, on seeing a new ID, fetches the schema from the registry once, caches it, decodes every subsequent record with the same ID for free.
+
+The killer feature is **enforcement at registration time**. Before accepting a new schema version, the registry checks: is this compatible with the prior version (or all prior versions, depending on mode)? If not, registration fails. The bad schema never ships. The producer's deploy aborts.
+
+## A schema change, end-to-end
+
+<WorkedExample title="Adding a 'campaign_id' field to the click event">
+
+**Day 1.** All producers and consumers are on schema v3, which has `(user_id, page_id, timestamp)`. Records on Kafka carry ID 17.
+
+**The change.** The marketing team wants to attribute clicks to campaigns. We need a new optional `campaign_id` field.
+
+**Step 1 — Register.** A producer's CI pipeline submits schema v4: `(user_id, page_id, timestamp, campaign_id?)` to the registry. The registry compares against v3, sees an added optional field with a default, marks it as fully compatible, returns ID 18.
+
+**Step 2 — Roll the producer.** The producer service deploys with schema v4. New records carry ID 18, including `campaign_id` when known. Old records on the topic still carry ID 17.
+
+**Step 3 — Consumers, asynchronously.** Existing consumers on v3 keep working. When they read a new record with ID 18, they fetch v4 from the registry. They decode using v4 as the writer's schema and v3 as the reader's schema — Avro drops the unknown `campaign_id` field. The consumer's code never sees the new field; it doesn't need to.
+
+**Step 4 — Upgrade a consumer to v4.** That consumer is now reading both v3 and v4 records. For v3, Avro applies the v4 default for `campaign_id` (which is `null`). For v4, the field is decoded directly. The consumer's code can use the field.
+
+**The result.** No coordination required. No downtime. The producer and consumer evolve on their own schedules. That's what schema evolution is supposed to feel like.
+
+</WorkedExample>
+
+## Compatibility modes
+
+The registry can enforce different rules:
+
+| Mode                | What's allowed                   | When you'd use it                               |
+| ------------------- | -------------------------------- | ----------------------------------------------- |
+| Backward            | New consumer reads old data      | Consumers upgrade first, then producers         |
+| Forward             | Old consumer reads new data      | Producers upgrade first, then consumers         |
+| Full                | Both                             | Mixed-version rolling deploys (the common case) |
+| None                | Anything                         | Greenfield experiments only                     |
+| Transitive variants | Check against all prior versions | Long-lived topics with many versions            |
+
+LinkedIn defaults to Full Transitive. The cost is some schema changes are rejected; the payoff is no cross-version surprises in production.
+
+## When the registry goes down
+
+Producers can't register new schemas. Existing schemas keep working — IDs are cached locally. Consumers keep decoding messages whose schemas they've already fetched. New consumers booting cold may not be able to fetch a schema they need.
+
+The registry is a control-plane dependency, not a data-plane one. Going down delays deploys, not running services. That's a deliberate design choice — the registry isn't in the hot path.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea              | How it shows up here                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Backward / forward compatibility | What the registry enforces at registration time                                                        |
+| Binary formats need schemas      | Avro's wire format makes the schema indispensable; the registry provides it                            |
+| Data outlives code               | Kafka topics retain old-version records; consumers must decode them as long as retention allows        |
+| Schema as deploy contract        | The registry rejection is what stops a bad schema from shipping                                        |
+| Three data-flow shapes           | Pipeline serves all three: databases (warehouse landing), services (consumers), async messages (Kafka) |
+
+<InlineQuiz
+  question="A team runs Avro on Kafka without a schema registry — each producer ships the schema embedded alongside each record. What's the biggest issue compared to using a registry?"
+  options={[
+    { text: "Records can't be decoded without coordination." },
+    {
+      text: "Compatibility breakage isn't caught at registration time; bad schemas reach production and consumers fail at runtime instead of at deploy.",
+      correct: true,
+    },
+    { text: "Avro can't run without a registry." },
+    { text: "The records are larger." },
+  ]}
+  explanation="Embedding the schema per record works — Avro supports it — but you lose the registry's enforcement role. Without a check at registration time, an incompatible schema just lands in Kafka, and consumers crash when they try to decode it. The bytes-per-message overhead is a minor concern (the schema is large compared to the record). The real loss is the policy enforcement point that catches bad changes before they ship. Combined with version drift across producers, no-registry Avro becomes operationally worse than JSON in practice."
+/>
+
+<PitfallsCallout
+  items={[
+    "Skipping the registry to 'simplify the deployment'. The compatibility enforcement is the point.",
+    "Configuring 'compatibility = none' to unblock an urgent change. The unblock is followed by a bigger break later.",
+    "Letting consumers reference schemas by name instead of ID. The ID is the durable contract; names drift.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 4 (Avro and schema evolution; pp. 122–128). The LinkedIn pipeline is described across Chapters 4 and 11.

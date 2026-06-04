@@ -1,0 +1,269 @@
+---
+title: "Distributed systems: the hard problems"
+description: "Partial failures, untrusted clocks, network silence, consensus, CAP. The problems that don't exist on a single machine — and the techniques that survive them."
+track: system-design
+trackLabel: "System Design Foundations"
+module: distributed
+moduleLabel: "Module 8 · Distributed Systems"
+lesson: distributed-systems-hard-problems
+lessonCode: "S8.1"
+estMinutes: 60
+prereqs:
+  - "S7.1 Transactions and isolation levels"
+objectives:
+  - "Name the fallacies of distributed computing and explain why each one is a fallacy."
+  - "Explain why timeouts are the only signal you can rely on, and why you still can't tell what they mean."
+  - "State CAP correctly — what it claims and what it doesn't."
+  - "Distinguish linearizability from eventual consistency and pick the right one for a workload."
+  - "Describe what consensus algorithms (Raft, Paxos) buy you, and where you'd actually use one."
+pitfalls:
+  - "Treating CAP as 'pick two of three'. It's really 'when partitioned, choose C or A; the rest of the time you can have both'."
+  - "Trusting system clocks for ordering events across machines. Clock skew is real and unbounded."
+  - "Hand-rolling consensus. The papers are deceptively short; the production implementations have eaten years of engineering."
+importantQuestions:
+  - question: "Why are distributed systems fundamentally harder than single-machine systems?"
+    shortAnswer: "Partial failures. On one machine, things either work or fail together. Across machines, anything can fail independently — and the network can't reliably tell you what's happening on the other end."
+    detailed: |
+      On a single machine, the failure model is binary: either it's up and reasonable, or it's down. If a function call hangs, you can debug it. If the process crashes, you know.
+
+      Across machines: when you send a request and don't get a reply, you cannot tell which of these happened: (1) the request never arrived, (2) it arrived and was processed but the reply was lost, (3) it arrived, was processed, and the other node is still working on it slowly, (4) the other node crashed. All four feel identical to you.
+
+      This uncertainty is the root of every distributed-systems hardship. You can't tell up from down. You can't tell fast from frozen. You have to make decisions anyway.
+    pitfalls:
+      - "Single-machine intuition betrays you constantly. 'It should just work' is not a design philosophy."
+  - question: "What are the fallacies of distributed computing?"
+    shortAnswer: "Peter Deutsch's classic list of wrong assumptions: the network is reliable, latency is zero, bandwidth is infinite, the network is secure, topology doesn't change, there's one administrator, transport cost is zero, the network is homogeneous. Every distributed-systems bug starts with believing one of these."
+    detailed: |
+      Each of these is something developers from a single-machine background tend to assume — and each one bites under distributed conditions.
+
+      The network is not reliable: packets drop, links flap, switches misbehave. Latency is not zero: a cross-region round trip is hundreds of milliseconds. Bandwidth is finite: a noisy neighbor can saturate the pipe. Security is opt-in. Topology changes as nodes are added, removed, or partitioned. Administration is decentralized.
+
+      A good design starts by assuming all of these are wrong, and asks: what happens?
+    pitfalls:
+      - "Most retries-without-idempotency bugs are 'I assumed the network was reliable' bugs."
+  - question: "Why can't you trust clocks across machines?"
+    shortAnswer: "Clocks drift, get synced sporadically by NTP, and can jump forward or backward without warning. Two machines' clocks can disagree by hundreds of milliseconds even with NTP. Using timestamps for ordering events across machines is a recipe for silent corruption."
+    detailed: |
+      Each machine has a clock. They tick slightly different rates (quartz drift). NTP corrects them periodically, sometimes by jumping the clock forward or backward — which means time on one machine isn't monotonically increasing. Leap seconds add another wrinkle.
+
+      The result: machine A might think an event happened 'before' machine B's event, when really they happened in the opposite order on a wall clock. Last-write-wins conflict resolution that relies on timestamps will lose writes.
+
+      Lamport timestamps, vector clocks, and TrueTime (Google Spanner) are responses. Lamport gives logical ordering without physical time. Spanner uses atomic clocks + GPS to bound clock uncertainty to a few milliseconds, then makes transactions wait out the uncertainty window.
+    pitfalls:
+      - "If your correctness depends on comparing timestamps from different machines, you have a bug waiting to happen."
+  - question: "What does CAP actually say?"
+    shortAnswer: "In the presence of a network partition, a system must choose between consistency (linearizability) and availability — it can't have both. When there's no partition, you can have both. CAP is not 'pick 2 of 3'; it's 'under partition, pick C or A'."
+    detailed: |
+      The original formulation gets misquoted constantly. The theorem says: in an asynchronous network where partitions can occur, you cannot have linearizable consistency, total availability, and partition tolerance simultaneously. Since partition tolerance is not optional (networks do partition), the real choice is between C and A *during* partitions.
+
+      A 'CP' system (HBase, Spanner, ZooKeeper) refuses operations when it can't reach a quorum — sacrificing availability to keep consistency. An 'AP' system (Cassandra, DynamoDB by default, Riak) accepts operations on whatever node is reachable — sacrificing consistency for availability.
+
+      Most production systems are tunable: Cassandra lets you pick the consistency level per query. The right answer depends on what 'wrong' means for your data. A bank balance probably wants CP. A shopping cart can tolerate AP.
+    pitfalls:
+      - "'CAP-compliant' on a vendor's marketing page is meaningless. Ask what happens under partition specifically."
+  - question: "What is linearizability and when do you actually need it?"
+    shortAnswer: "Linearizability: the system behaves as if there were a single copy of the data and every operation took effect atomically at some point between its start and end. It's the strongest single-object consistency. You need it for leader election, distributed locks, and uniqueness constraints — but rarely for the bulk of application data."
+    detailed: |
+      Linearizability is the gold standard: reads return the most recent write, no matter which replica answered. From the outside, the system is indistinguishable from one running on a single machine.
+
+      It's expensive. Quorum reads and writes (in leaderless systems) or full leader read paths (in leader-follower) are required. It conflicts with availability under partition (CAP).
+
+      Where you actually need it: any uniqueness constraint (unique email, unique username), any time you elect a leader, any distributed lock. Get these wrong and you get split-brain, double-charged payments, two instances thinking they own the same resource.
+
+      Where eventual consistency is fine: caching, feeds, recommendations, analytics, anything where 'this might be slightly stale' is acceptable to the user.
+    pitfalls:
+      - "Demanding linearizability for everything is expensive and usually unnecessary. Pick where you need it; let the rest be eventual."
+  - question: "What problem do consensus algorithms (Raft, Paxos) solve?"
+    shortAnswer: "Getting multiple nodes to agree on a single value (or sequence of values) even though the network is unreliable and nodes can crash. Used for leader election, atomic commits across nodes, and replicated state machines. ZooKeeper, etcd, and Raft-based databases are the production tools."
+    detailed: |
+      Consensus is deceptively simple to state: N nodes need to agree on one value. Each can propose; eventually, all surviving nodes agree on the same value. The catch: network can drop messages, nodes can crash, and you still need a definite answer.
+
+      Paxos (Lamport, 1989) was the first practical algorithm. Famously hard to understand. Raft (Ongaro, 2014) is functionally equivalent but designed to be teachable. Both rely on a majority quorum — over half of nodes must agree before any value is committed.
+
+      You rarely implement consensus directly. You run ZooKeeper, etcd, Consul, or a database that has it baked in (Spanner, CockroachDB). They become the coordination layer for everything that needs strong agreement — leader election, distributed locks, configuration propagation, atomic broadcasts.
+    pitfalls:
+      - "Hand-rolling consensus is the textbook example of a bad idea — even seasoned distributed-systems engineers reach for off-the-shelf implementations."
+---
+
+<TldrCallout>
+  On one machine, things either work or fail together. Across machines, anything can fail
+  independently — and the network can't tell you what's actually happening on the other end. From
+  that one fact spring all the hard problems: untrustworthy clocks, ambiguous timeouts, the CAP
+  tradeoff, consensus, linearizability. The techniques in this module — quorum writes, logical
+  clocks, consensus algorithms, careful consistency choices — aren't elegance for its own sake.
+  They're survival.
+</TldrCallout>
+
+## The root of all distributed-systems pain
+
+Single-machine programs have a clean failure model: the process is up and reasonable, or it's down. Cross-machine programs have _partial failure_ — anything can fail independently, and you can't always tell.
+
+When you send a request and don't get a reply, four things are equally consistent with the silence:
+
+1. The request never arrived.
+2. It arrived, was processed, but the reply was lost.
+3. It arrived, is being processed slowly, and a reply might come.
+4. The other node crashed.
+
+From your side, all four look the same. You have to make a decision anyway. That uncertainty is the source of every distributed-systems hardship that follows.
+
+<GlossaryTerm
+  term="Partial failure"
+  definition="In a distributed system, individual nodes or links can fail independently while others continue. Unlike single-machine systems where everything is up or down together, partial failure leaves the system in ambiguous intermediate states that must be handled explicitly."
+>
+  Partial failures
+</GlossaryTerm>
+are what make distributed systems hard. The techniques in this module — timeouts, retries,
+idempotency, quorums, consensus — are responses to this one fact.
+
+## The fallacies of distributed computing
+
+Peter Deutsch's classic list of wrong assumptions:
+
+1. The network is reliable.
+2. Latency is zero.
+3. Bandwidth is infinite.
+4. The network is secure.
+5. Topology doesn't change.
+6. There's one administrator.
+7. Transport cost is zero.
+8. The network is homogeneous.
+
+Each one feels obvious when listed, but every distributed-systems bug starts with quietly believing one of them. "If the network were reliable, this would work" is the shape of the thought; "the network is not reliable, so we need to handle the case where it isn't" is the shape of the design.
+
+## You can't trust clocks
+
+<GlossaryTerm
+  term="Clock skew"
+  definition="The difference between two machines' clocks at the same wall-clock moment. Caused by quartz drift, intermittent NTP sync, and leap-second adjustments. Skew is bounded by good ops but can spike to hundreds of milliseconds or more."
+>
+  Clock skew
+</GlossaryTerm>
+is the gap between what one machine thinks the time is and what another does. NTP keeps it small
+most of the time, but it can spike — and NTP can jump the clock forward or backward, breaking any
+code that assumes time moves monotonically.
+
+The consequence: timestamps from different machines cannot reliably order events. A common pattern that breaks: "last write wins" in multi-leader replication. Whoever has the latest timestamp wins — but if their clock is fast by 200ms, they win even if their write was actually earlier.
+
+Google Spanner attacks this with atomic clocks and GPS via _TrueTime_. It returns not a timestamp but an interval `[earliest, latest]` reflecting clock uncertainty, and makes transactions wait out the uncertainty window before committing. That's the kind of engineering required to make timestamps trustworthy across continents.
+
+For everyone else: use logical timestamps (Lamport, vector clocks) when you need ordering, and never compare physical clocks across machines for correctness decisions.
+
+## CAP, correctly stated
+
+<GlossaryTerm
+  term="CAP theorem"
+  definition="In the presence of a network partition, a distributed system must choose between consistency (linearizability) and availability. It cannot have both. When the network is healthy, both are achievable. CAP is not 'pick two of three' — partition tolerance is mandatory."
+>
+  CAP
+</GlossaryTerm>
+is the most misquoted theorem in the field. It does not say "pick two of three". It says: when a
+network partition happens, you must choose between consistency and availability. The rest of the
+time, you can have both.
+
+- **CP under partition:** refuse operations that can't reach a quorum. ZooKeeper, HBase, Spanner. Consistency preserved; availability suffers (some clients get errors).
+- **AP under partition:** accept operations on whatever node is reachable. Cassandra (by default), DynamoDB, Riak. Availability preserved; consistency suffers (reads can return stale data; concurrent writes can conflict).
+
+The right answer depends on what "wrong" means for your data. A bank balance probably wants CP. A shopping cart can tolerate AP (with conflict resolution when partitions heal).
+
+<SDNetworkFault />
+
+## Linearizability vs eventual consistency
+
+<GlossaryTerm
+  term="Linearizability"
+  definition="The strongest single-object consistency. The system behaves as if every operation took effect atomically at some point between when it started and ended, against a single copy of the data. Equivalent to 'strong consistency' or 'atomic consistency'."
+>
+  Linearizability
+</GlossaryTerm>
+is the gold standard. From the outside, the distributed system behaves as if there were one copy. A
+read returns the most recent committed write, period.
+
+It's expensive. In a leader-follower system, reads have to go to the leader (or wait for follower catch-up). In a leaderless system, you need quorum reads and writes. It conflicts with availability under partition.
+
+You need linearizability for:
+
+- **Leader election.** Two leaders is a disaster.
+- **Distributed locks.** Two holders defeat the lock.
+- **Uniqueness constraints.** Two users with the same email is corruption.
+
+You don't need linearizability for most application data. Feeds can be a little stale. Recommendations can be a little out of date. Analytics rarely need to be current to the second.
+
+<GlossaryTerm
+  term="Eventual consistency"
+  definition="If no new writes occur, all replicas will eventually converge to the same value. A weak guarantee — it says nothing about how long 'eventually' is, what reads see in the meantime, or how conflicts are resolved. The default for AP systems."
+>
+  Eventual consistency
+</GlossaryTerm>
+is the everyday default for AP systems. The contract: if writes stop, replicas converge. Until then,
+reads may see stale or conflicting values, and the application has to be okay with that.
+
+<AnalogyCallout>
+  Linearizability is a single line at the bank — one teller, one queue, perfect ordering. Eventual
+  consistency is many tellers at many branches; eventually they all reconcile their books, but at
+  any moment two branches might disagree about your balance. Most apps don't need the single line;
+  some absolutely do.
+</AnalogyCallout>
+
+## Consensus
+
+<GlossaryTerm
+  term="Consensus"
+  definition="The problem of getting multiple nodes to agree on a single value (or sequence of values) despite unreliable networks and crashing nodes. Solved by algorithms like Paxos and Raft. Used internally by ZooKeeper, etcd, and strongly-consistent databases."
+>
+  Consensus
+</GlossaryTerm>
+sounds simple: get N nodes to agree on one value. The catch is unreliable networks and crashing
+nodes. Algorithms (Paxos, Raft) achieve consensus when a majority is alive and reachable; they
+refuse to make progress otherwise (preserving safety over liveness — better to wait than to
+disagree).
+
+You rarely implement consensus directly. You run ZooKeeper, etcd, or Consul; they become the coordination layer for leader election, distributed locks, and configuration propagation. Strongly-consistent databases (Spanner, CockroachDB, FoundationDB) embed consensus internally.
+
+<WorkedExample title="The bank transfer that almost worked">
+
+**The problem.** Transfer $100 from account A (on database A) to account B (on database B).
+
+**The naive approach.** Subtract $100 from A. Add $100 to B. Each is a local transaction.
+
+**Why it breaks.** Between the two transactions, anything can happen. Database B crashes — A is down $100, B never got it. Database A's reply to "B done" is lost — the application retries the deposit; now B has $200 extra. The network partitions during the second step — you can't tell which side committed.
+
+**The real solution(s).** Two-phase commit (2PC): a coordinator asks both databases to _prepare_ (lock the funds), and if both say yes, asks them to _commit_. If anyone says no or times out, both abort. This works — but the coordinator is itself a single point of failure, and crashes during the second phase leave participants holding locks forever.
+
+Stronger: event-driven sagas with idempotent compensations. Or Spanner-style distributed transactions backed by consensus on every commit. None are free.
+
+**The tradeoff.** Multi-database transactions are expensive and brittle. Many systems sidestep them: put both accounts in the same database, or use eventual consistency with reconciliation (the bank-transfer pattern). The book's broader point: distributed transactions are a tool of last resort, not first.
+
+</WorkedExample>
+
+## What this means in practice
+
+You will not solve consensus from scratch. You will pick libraries (etcd, Raft implementations) and databases (Spanner, CockroachDB, FoundationDB) that have solved it for you. Your job is understanding _where_ you need linearizability and _where_ eventual consistency is fine — because demanding strong guarantees everywhere is expensive, and the price is paid in latency, availability, and operational complexity.
+
+The reflex you want: when reading a distributed system's docs, find the section on partition behavior. Whatever it says about "what happens during a network partition" is the part you'll be paged about.
+
+<InlineQuiz
+  question="Your key-value store advertises 'eventual consistency'. A user writes a value to Node A. 200ms later, they read from Node B, which hasn't received the update yet, and see the old value. Is this a bug?"
+  options={[
+    { text: "Yes — the read returned a stale value." },
+    { text: "Yes — eventual consistency means immediate replication." },
+    {
+      text: "No — eventual consistency explicitly allows stale reads. Whether it's acceptable depends on what the data represents.",
+      correct: true,
+    },
+    { text: "No — 200ms is faster than CAP allows." },
+  ]}
+  explanation="Eventual consistency makes a weak promise: if writes stop, replicas converge. It says nothing about how fresh reads are in the meantime. So 'stale by 200ms' is within the contract, not a bug. Whether that's acceptable depends on the data. A profile picture being briefly stale? Fine. A bank balance being stale? Disaster. The mistake is assuming the consistency level when picking the system — match the consistency to the data, not the other way around."
+/>
+
+<PitfallsCallout
+  items={[
+    "Treating CAP as 'pick two of three'. The real choice is which property to give up under partition.",
+    "Using wall-clock timestamps for ordering events across machines. Clock skew will bite.",
+    "Demanding linearizability everywhere. It's expensive — pick where you need it.",
+    "Hand-rolling consensus algorithms. ZooKeeper, etcd, and embedded Raft exist for a reason.",
+    "Treating two-phase commit as a default for distributed transactions. It works but at considerable cost; consider alternatives first.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapters 8 and 9.

@@ -1,0 +1,193 @@
+---
+title: "Case study: Google Spanner and TrueTime"
+description: "The book's example of a distributed database that solves the impossible — globally consistent transactions, at planet scale, by making time itself trustworthy."
+track: system-design
+trackLabel: "System Design Foundations"
+module: distributed
+moduleLabel: "Module 8 · Distributed Systems"
+lesson: google-spanner-case-study
+lessonCode: "S8.2"
+estMinutes: 35
+prereqs:
+  - "S8.1 Distributed systems: the hard problems"
+objectives:
+  - "Explain what TrueTime is and how atomic clocks + GPS bound clock uncertainty."
+  - "Trace how Spanner achieves external consistency via the 'commit-wait' technique."
+  - "Describe how Spanner combines Paxos replication, two-phase commit, and TrueTime into linearizable distributed transactions."
+  - "Identify why Spanner's approach is feasible for Google and rarely viable elsewhere — and what CockroachDB does instead."
+pitfalls:
+  - "Believing Spanner 'beat CAP'. It picks CP under partition like everyone else; what's special is how rare the partitions are inside Google's network."
+  - "Assuming any database can do TrueTime. The hardware investment (atomic clocks in every datacenter) is significant."
+  - "Treating commit-wait as free. Spanner deliberately slows commits to bound clock uncertainty."
+importantQuestions:
+  - question: "What is TrueTime and why does it matter?"
+    shortAnswer: "TrueTime is Google's clock API. Instead of returning 'now', it returns an interval `[earliest, latest]` reflecting the actual uncertainty. Atomic clocks and GPS receivers in every datacenter keep the interval narrow — typically <10ms. With bounded uncertainty, you can order events across machines confidently."
+    detailed: |
+      Ordinary NTP gives you a timestamp with unknown error. Two machines might both think the time is `12:00:00`, but really one is at 11:59:59.97 and the other at 12:00:00.04. Without knowing the gap, you can't compare timestamps for correctness.
+
+      TrueTime measures the uncertainty directly. The API call `TT.now()` returns `(earliest, latest)`. The system guarantees the true time is somewhere in that interval. Atomic clocks and GPS keep the interval small; if they drift apart, the interval widens until they re-sync.
+
+      With bounded uncertainty, you can build correct algorithms: 'wait until latest from one event is before earliest of the next, and you know the order'. That's what Spanner does to serialize transactions globally.
+    pitfalls:
+      - "TrueTime doesn't make clocks 'correct' — it makes their inaccuracy *measurable* and *bounded*."
+  - question: "What is commit-wait?"
+    shortAnswer: "After picking a commit timestamp, Spanner waits until TrueTime guarantees that no other system could pick the same or earlier timestamp before releasing the commit. The wait is typically a few milliseconds and ensures external consistency."
+    detailed: |
+      When a transaction commits, Spanner assigns it a commit timestamp. The timestamp is chosen at `TT.now().latest` — guaranteed to be in the future relative to the transaction's actual moment.
+
+      Then Spanner waits. Specifically, it waits until `TT.now().earliest > commit_timestamp`. Now any new transaction that starts after this commit will see a clock interval whose earliest is later — so its commit timestamp will be later. Causality is preserved.
+
+      The wait is the price for external consistency. Smaller TrueTime uncertainty = shorter wait. Google has invested heavily in keeping the interval narrow.
+    pitfalls:
+      - "Commit-wait is a bounded slowdown — usually <10ms. If clocks drift apart, the wait grows; if drift is unbounded, writes stall."
+  - question: "How does Spanner combine Paxos, 2PC, and TrueTime?"
+    shortAnswer: "Each shard is a Paxos group (replicated state machine). Single-shard transactions are local to one Paxos group. Multi-shard transactions use 2PC across Paxos groups, with TrueTime providing the global ordering. The result is linearizable transactions across the global cluster."
+    detailed: |
+      Data is partitioned into shards; each shard's replicas form a Paxos group that agrees on the order of writes within that shard. Single-shard transactions just go through Paxos — fast.
+
+      For multi-shard transactions, Spanner runs two-phase commit. The participating Paxos groups vote prepare/commit; one of them acts as 2PC coordinator. Because each participant is itself a Paxos group, the coordinator's failure doesn't deadlock the protocol — the group elects a new leader and continues.
+
+      TrueTime provides the timestamp every transaction commits at. Commit-wait ensures the timestamps are causally ordered across the whole system. The result: external consistency — to clients, Spanner behaves as if it were a single linearizable database.
+    pitfalls:
+      - "2PC over Paxos is more robust than vanilla 2PC because the coordinator is itself fault-tolerant. But it's not free — every distributed transaction has a coordination round-trip."
+  - question: "Why is Spanner's approach rare in the wider industry?"
+    shortAnswer: "The TrueTime infrastructure is expensive. Atomic clocks and GPS receivers in every datacenter, careful clock-distribution hardware, narrow uncertainty bounds. Most companies can't justify it. CockroachDB and YugabyteDB approximate Spanner using NTP + larger uncertainty bounds — correct but slower under contention."
+    detailed: |
+      Google invested in atomic clocks (one per cluster, with GPS backup) because it operates at planet scale with thousands of services that needed strong global consistency. The clock investment paid for itself.
+
+      For most companies, this is overkill. Spanner-derived open-source databases (CockroachDB, YugabyteDB) use NTP-bounded clocks instead. The uncertainty is wider — tens of milliseconds rather than single-digit. Commit-wait is correspondingly longer.
+
+      The result is correct linearizability without atomic clocks, at the cost of slower commits under contention. For most workloads, that's a perfectly fine trade.
+    pitfalls:
+      - "Don't expect CockroachDB's performance to match Spanner's. The clock infrastructure matters."
+  - question: "Does Spanner refute CAP?"
+    shortAnswer: "No. Spanner picks CP under partition like any consistent database — when a Paxos group loses quorum, writes to that shard pause. What's special is that Google's internal network has partitions so rare that the availability cost is barely noticeable."
+    detailed: |
+      Spanner is a textbook CP system. When a Paxos group can't form a quorum (more than half its replicas unreachable), writes to that shard halt. The system preserves consistency by refusing to make progress.
+
+      The reason Spanner *feels* AP-like is operational: Google's networking is so engineered (private fiber, multiple paths, fast failure detection) that partitions are vanishingly rare. The CAP tradeoff is real but the bad case rarely occurs.
+
+      This is the broader lesson: CAP doesn't say 'AP is more available than CP in practice'. It says 'under partition, you must choose'. How often partitions happen, and how bad they are, is an operational question — and Google has engineered them down.
+    pitfalls:
+      - "Marketing that says 'Spanner is CA' or 'beat CAP' is wrong. It's CP, with very rare partitions in practice."
+---
+
+<TldrCallout>
+  Google Spanner is the book's example of a database that gives you globally linearizable
+  transactions — the strongest consistency model — across continents. The trick is *TrueTime*:
+  atomic clocks and GPS in every datacenter bound clock uncertainty to milliseconds. Combined with
+  Paxos for per-shard replication and two-phase commit for multi-shard transactions, Spanner
+  achieves what Kleppmann's Chapter 8 says is impossible without the right tools. It doesn't refute
+  CAP; it picks CP under partition and engineers partitions to be very rare.
+</TldrCallout>
+
+## The problem Spanner solves
+
+Inside Google, hundreds of services need globally consistent transactional data — ad attribution, billing, inventory, AdWords campaigns. A row in one datacenter and a row in another need to agree, transactions across them need to be atomic, and ordering needs to make sense globally.
+
+Eventual consistency (Dynamo, Cassandra) doesn't cut it — you can't bill someone twice and reconcile later at AdWords scale. Single-region linearizable databases work but Google needed planet scale.
+
+Spanner was the answer: linearizable distributed transactions across the world.
+
+## TrueTime
+
+<GlossaryTerm
+  term="TrueTime"
+  definition="Google's clock API that returns an interval [earliest, latest] reflecting actual uncertainty about the current time, rather than a single timestamp. Backed by atomic clocks and GPS receivers in every datacenter, keeping the uncertainty bounded to single-digit milliseconds in normal operation."
+>
+  TrueTime
+</GlossaryTerm>
+is the load-bearing innovation. Ordinary clocks return a timestamp; TrueTime returns an interval.
+`TT.now()` gives `(earliest, latest)` such that the true time is somewhere inside.
+
+In normal operation the interval is narrow — typically under 10ms. Atomic clocks (cesium) keep frequency drift tiny; GPS receivers correct for absolute time. The clocks are widely distributed within a datacenter so a single failure doesn't take them all out.
+
+When clocks disagree, the interval widens. Spanner refuses to commit while the interval is wider than a threshold — write availability degrades before correctness does. Operators can watch the uncertainty metric and intervene.
+
+## Commit-wait
+
+Knowing the uncertainty isn't enough — you have to use it. Spanner's trick is **commit-wait**.
+
+When a transaction commits:
+
+1. Choose commit timestamp `s = TT.now().latest` — guaranteed to be at or after the real current time.
+2. Apply the commit.
+3. Wait until `TT.now().earliest > s` — i.e., until you're sure the real time has passed `s`.
+4. Release the commit to readers.
+
+Why? Because any transaction that starts _after_ the wait completes will see `TT.now().earliest > s` from the start. Its commit timestamp will be later than `s`. So causally-ordered transactions get correctly-ordered timestamps. That's external consistency: from outside, Spanner looks like a single linearizable database.
+
+The wait is typically a few milliseconds — the cost of the uncertainty interval. It's the price of correctness.
+
+<WorkedExample title="A globally-ordered transfer">
+
+**The setup.** Account A's data is on Paxos group P1 (replicated across US datacenters). Account B's data is on Paxos group P2 (replicated across European datacenters). A user transfers €100 from A to B.
+
+**Step 1 — Begin.** The client opens a transaction. Spanner picks a read timestamp from TrueTime; all reads in the transaction see a snapshot at that timestamp.
+
+**Step 2 — Read and lock.** The transaction reads A's balance from P1 and B's balance from P2. Locks are acquired.
+
+**Step 3 — Prepare.** Each Paxos group prepares the changes locally — each replicated within the group via Paxos. Both groups confirm prepared status to the 2PC coordinator (one of the Paxos groups, designated for this transaction).
+
+**Step 4 — Choose commit timestamp.** The coordinator picks `s = TT.now().latest`, larger than any prepare timestamp it has seen, and larger than any committed transaction it knows about. The coordinator sends `s` to the participants.
+
+**Step 5 — Commit.** Each Paxos group commits the change with timestamp `s`. The coordinator waits until `TT.now().earliest > s` (commit-wait), then notifies the participants to release locks.
+
+**Step 6 — Visibility.** Any future transaction that starts after this point sees the committed transfer. Its own commit timestamp will be greater than `s`. Global ordering is preserved.
+
+**The total latency.** Per-transaction overhead is dominated by the cross-region Paxos round-trips and the commit-wait. Spanner's median commit latency for multi-region transactions is in the tens to low hundreds of milliseconds — not cheap, but rendered fast enough to be the building block for everything Google.
+
+</WorkedExample>
+
+## The architecture, in layers
+
+Bottom layer: Colossus (Google's distributed file system). Storage for the SSTables that hold Spanner's data.
+
+Next: tablets — sorted ranges of rows. Each tablet's replicas form a Paxos group; the leader serves reads and writes; followers replicate the writes.
+
+Above: directories, the unit of data movement and access control. A directory's replicas live in a configurable set of zones.
+
+Above: tables and the transaction layer — single-shard transactions go directly through Paxos; multi-shard transactions use 2PC over Paxos groups, with TrueTime supplying timestamps.
+
+Above: SQL. Spanner exposes a SQL interface (since 2017's Spanner SQL paper) — joins, indexes, the usual.
+
+## Why open-source descendants exist
+
+Most companies can't justify atomic clocks. Spanner's design has been imitated by CockroachDB, YugabyteDB, FoundationDB (in spirit), and others that use NTP-bounded clocks with wider uncertainty intervals.
+
+These systems are correct — linearizable, transactional — but slower under contention because their commit-waits are longer. Trading hardware investment for software latency is the cost-benefit they pick on behalf of typical customers.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea                    | How it shows up here                                                |
+| -------------------------------------- | ------------------------------------------------------------------- |
+| Clock skew is unbounded                | TrueTime bounds it via atomic clocks + GPS                          |
+| Linearizability is expensive           | Spanner pays per-transaction Paxos rounds + commit-wait             |
+| Consensus algorithms                   | Paxos under every shard                                             |
+| Two-phase commit's coordinator failure | Mitigated because the coordinator is itself a Paxos group           |
+| CAP under partition                    | Spanner picks CP; partitions are rare by engineering, not by theory |
+
+<InlineQuiz
+  question="A blog post claims Spanner 'beats CAP' because it offers strong consistency and global availability. Which is the most accurate critique?"
+  options={[
+    { text: "Spanner is actually eventually consistent." },
+    {
+      text: "Spanner is CP — when a Paxos group loses quorum, writes to that shard pause. Google engineers partitions to be very rare, so the availability cost is barely noticeable in practice.",
+      correct: true,
+    },
+    { text: "CAP doesn't apply to relational databases." },
+    { text: "Spanner gives up durability instead." },
+  ]}
+  explanation="CAP is a theorem, not a marketing claim — it can't be 'beaten'. Spanner is a CP system: when a Paxos group can't form quorum, writes to that shard halt. What's special isn't that it escapes CAP; it's that Google's network engineering makes partitions so rare that the CP behavior is rarely observed by users. The lesson generalizes: CAP describes the tradeoff *under* partition. How often partitions occur is an operational question, and a well-engineered network can make CP feel like CA most of the time — but the tradeoff is still there."
+/>
+
+<PitfallsCallout
+  items={[
+    "Believing Spanner solved CAP. It didn't — it engineered partitions to be rare.",
+    "Expecting CockroachDB to match Spanner's commit latency. Atomic clocks aren't an implementation detail.",
+    "Assuming TrueTime is freely composable into any system. The clock infrastructure is non-trivial; the API depends on it.",
+    "Reaching for Spanner-style linearizability for data that could tolerate eventual consistency. It's expensive — match the consistency to the actual invariants.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 8 (clocks and TrueTime, pp. 287–293) and Chapter 9 (consensus, pp. 366–374).

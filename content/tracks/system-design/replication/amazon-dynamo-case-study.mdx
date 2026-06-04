@@ -1,0 +1,213 @@
+---
+title: "Case study: Amazon's Dynamo and leaderless replication"
+description: "The paper that launched a thousand databases. Quorums, sloppy quorums, hinted handoff — and the tradeoffs Cassandra and Riak inherited."
+track: system-design
+trackLabel: "System Design Foundations"
+module: replication
+moduleLabel: "Module 5 · Replication"
+lesson: amazon-dynamo-case-study
+lessonCode: "S5.2"
+estMinutes: 30
+prereqs:
+  - "S5.1 Replication: keeping copies in sync"
+objectives:
+  - "Explain the N/W/R quorum model and the W + R > N invariant."
+  - "Distinguish a strict quorum from a sloppy quorum and explain when each is acceptable."
+  - "Describe hinted handoff and read repair as eventual-consistency repair mechanisms."
+  - "Identify the workload shapes Dynamo-style replication suits — and where it's the wrong answer."
+pitfalls:
+  - "Reading W + R > N as a guarantee of linearizability. It isn't — concurrent writes still need conflict resolution."
+  - "Using sloppy quorums without understanding that some writes will land outside the home nodes for a while."
+  - "Defaulting to last-write-wins for conflict resolution. It silently discards concurrent updates."
+importantQuestions:
+  - question: "What's the N/W/R quorum model?"
+    shortAnswer: "N: total replicas per key. W: replicas that must acknowledge a write. R: replicas that must respond to a read. If W + R > N, every read overlaps with at least one replica that has the latest write — quorum freshness."
+    detailed: |
+      The classic Dynamo setup: N=3, W=2, R=2. Every write goes to 3 replicas in parallel, success after 2 acknowledge. Every read queries 3 replicas in parallel, success after 2 respond.
+
+      W + R > N means the read set and the write set overlap by at least one replica. That replica saw the write and will return the fresh value on the read. The application picks the freshest by version vector or timestamp.
+
+      Tuning the knobs trades latency for freshness. W=1 is fastest writes but reads need R=N to see them. R=1 is fastest reads but writes need W=N to be visible. W=R=ceil((N+1)/2) is the balanced quorum point.
+    pitfalls:
+      - "Even strict quorum isn't linearizable in the strict sense — concurrent writes can still create divergence that needs conflict resolution."
+  - question: "What's a sloppy quorum and why use one?"
+    shortAnswer: "If the W designated replicas for a key are unreachable, write to any W reachable nodes — they hold the writes temporarily and hand them off to the real replicas when those come back. Trades strict freshness for write availability under partition."
+    detailed: |
+      Strict quorum: W replicas of the designated nodes for that key must acknowledge. If a partition isolates too many, the write fails.
+
+      Sloppy quorum: if the designated nodes aren't reachable, write to other reachable nodes instead. They store the write with a hint about where it actually belongs. Later, when the designated nodes come back, the substitute nodes hand the data off ('hinted handoff') and forget it.
+
+      Sloppy quorum keeps writes available under partition. The cost: a read from the designated nodes might miss the recent write until the handoff completes. So sloppy quorum gives availability but not freshness during the window.
+    pitfalls:
+      - "Sloppy quorum is on by default in Cassandra. If you need strict freshness, you have to opt out — and most apps don't."
+  - question: "How does Dynamo recover from missed updates?"
+    shortAnswer: "Three mechanisms: read repair (during a read, replicas with stale data are updated in the background), hinted handoff (writes meant for down nodes are held by substitutes and delivered when nodes return), and anti-entropy (periodic Merkle-tree comparisons between replicas)."
+    detailed: |
+      Read repair: when a client reads from R replicas and they disagree, the coordinator returns the freshest value and asynchronously writes it back to the stale replicas. Common updates self-heal.
+
+      Hinted handoff: if W replicas can't be reached, writes land on substitute nodes with a hint about where they belong. When the original nodes come back, the substitutes deliver the hints. Bounded retry — eventually the hint is dropped.
+
+      Anti-entropy: periodically, replicas compute Merkle trees of their data and exchange root hashes. Mismatches drill down to find the diverged keys, which are then reconciled. Catches the values that read repair and hinted handoff missed.
+
+      Together they implement 'eventually all replicas converge' — the AP guarantee.
+    pitfalls:
+      - "Anti-entropy is expensive — it scans the whole dataset. Tune the frequency or you'll burn cluster capacity."
+  - question: "How do version vectors handle concurrent writes?"
+    shortAnswer: "Each replica tracks a vector of write counts per node. A write's vector encodes everything it 'saw'. Two writes whose vectors are causally unrelated are concurrent — both are preserved and surfaced to the application or merged by application-defined logic."
+    detailed: |
+      A version vector is a list of (node, counter) pairs. When a write happens, the originating node increments its counter. The vector is attached to the value.
+
+      Comparing two vectors: if A's vector ≤ B's vector at every position, A happened before B (B is causally later). If neither is ≤ the other, they're concurrent.
+
+      For concurrent writes, the system has options: keep both as 'siblings' and ask the application to merge (Riak), pick one by last-write-wins timestamps (Cassandra default), or use CRDTs that merge deterministically. Each has consequences.
+    pitfalls:
+      - "Vector size grows with cluster size. Long-lived vectors need pruning, which can lose causal information."
+  - question: "When is Dynamo-style replication the wrong answer?"
+    shortAnswer: "Anywhere you need linearizable reads, transactional multi-key updates, or strict uniqueness constraints. Dynamo trades those for write availability under partition. If your data requires invariants that don't survive concurrent writes, use a CP system."
+    detailed: |
+      Dynamo's design choices are aimed at availability over consistency, scale-out write throughput, and no single point of failure. They make excellent caches, shopping carts, session stores, and high-volume event sinks.
+
+      They make bad bank ledgers. A balance that two clients can concurrently debit can go negative; reconciliation after the fact is technically possible but operationally painful. A unique-username constraint can't be enforced — two clients claiming the same name on different nodes will both succeed.
+
+      Match the consistency model to the data's invariants. Where you need strong guarantees, use a CP system like Spanner, CockroachDB, or vanilla single-leader Postgres.
+    pitfalls:
+      - "Choosing Dynamo-style for 'scale' without checking whether the data's invariants can tolerate concurrent writes."
+---
+
+<TldrCallout>
+Amazon's 2007 Dynamo paper is the source for leaderless replication as it appears in Cassandra, Riak, DynamoDB, and others. The model: N replicas per key, configurable W (writes) and R (reads), W + R > N for read-after-write freshness on the happy path, sloppy quorums + hinted handoff for availability under partition. Trade strict consistency for availability and write throughput; rely on read repair, hinted handoff, and anti-entropy to converge. It's the right tool for a specific class of workloads and the wrong tool for invariants that need atomic enforcement.
+</TldrCallout>
+
+## The shopping cart that started it all
+
+Amazon's motivating problem: a shopping-cart service that absolutely cannot lose adds. If a user adds an item and the system loses the write, that's worse than serving slightly stale data. Available reads and writes are non-negotiable; consistency is negotiable.
+
+The traditional leader-follower model fails this: if the leader is on the other side of a partition, you can't write. Even with failover, the failover window is a write-availability gap.
+
+Dynamo's response: no leader. Writes go to multiple replicas in parallel; reads query multiple replicas in parallel; conflicts get resolved at read time. Always writeable, eventually consistent.
+
+## Quorums, formally
+
+<GlossaryTerm
+  term="Quorum"
+  definition="The minimum number of replicas that must respond for an operation to succeed. With N total replicas, write quorum W and read quorum R, the invariant that W plus R exceeds N guarantees that every read overlaps with the most recent write — read-your-writes on the happy path."
+>
+  Quorum reads and writes
+</GlossaryTerm>
+work like this. Pick N, W, R. Every write goes to N replicas; success means W acknowledged. Every
+read queries N replicas; success means R responded. The client uses the freshest result.
+
+If W + R > N, the write set and read set overlap by at least one replica — that replica saw the write and will report it. So in the absence of failures, reads see writes.
+
+Common settings:
+
+- **N=3, W=2, R=2.** Balanced. Tolerate one node failure. Default in Cassandra.
+- **N=3, W=3, R=1.** Optimize reads. Writes wait for everyone; reads are local.
+- **N=3, W=1, R=3.** Optimize writes. Reads check everyone; writes are local.
+
+## Sloppy quorums
+
+What if the W designated replicas for a key are partitioned away? Strict quorum: the write fails. Dynamo's answer is the
+
+<GlossaryTerm
+  term="Sloppy quorum"
+  definition="A relaxed quorum where, if the designated replicas are unreachable, writes are accepted by other reachable nodes that hold them temporarily. Combined with hinted handoff to deliver the writes when the designated nodes return. Preserves availability under partition at the cost of strict freshness."
+>
+  sloppy quorum
+</GlossaryTerm>
+— write to any W reachable nodes anyway, tagged with a hint about where the data should live.
+
+The substitute nodes hold the write. When the original nodes come back, the substitutes deliver the held writes via
+
+<GlossaryTerm
+  term="Hinted handoff"
+  definition="A repair mechanism in Dynamo-style systems where a node that accepted a write on behalf of another (during a partition) hands off the buffered write when the intended replica becomes reachable."
+>
+  hinted handoff
+</GlossaryTerm>
+and forget them.
+
+The cost: during the window, reads from the designated nodes might miss the recent write — the data is sitting on a substitute that wasn't queried. Sloppy quorum trades freshness for availability.
+
+## Three repair mechanisms
+
+Dynamo systems have three ways to converge:
+
+1. **Read repair.** On read, if replicas disagree, the coordinator returns the freshest and writes it back to the stale ones in the background. Self-heals frequently-read data.
+2. **Hinted handoff.** As above — substitute nodes deliver held writes when the originals return.
+3. **Anti-entropy.** Periodic Merkle-tree comparison between replicas finds divergences and reconciles them. Catches data that read repair and handoff missed (cold data, expired hints).
+
+Together they implement eventual consistency: keep writing, and replicas converge.
+
+## Version vectors and conflicts
+
+What if two clients write to the same key concurrently on different nodes?
+
+<GlossaryTerm
+  term="Version vector"
+  definition="A list of (node, counter) pairs attached to a value, recording the causal history of writes that contributed to it. Comparing two version vectors reveals whether one happened before the other or whether they're concurrent. Used by Dynamo, Riak, Voldemort to detect write conflicts."
+>
+  Version vectors
+</GlossaryTerm>
+encode causality. Each write knows what it 'saw' (the version vector of the previous value). If two
+writes' vectors are incomparable, they're concurrent. The system surfaces both:
+
+- **Riak:** keep both as 'siblings' and ask the application what to do on next read.
+- **Cassandra (default):** last-write-wins by timestamp. Loses concurrent writes silently.
+- **CRDTs:** structures (sets, counters, registers) that merge deterministically without losing data.
+
+Choosing how concurrent writes are merged is the application-level question. Last-write-wins is the easy default and the dangerous one.
+
+<WorkedExample title="The shopping cart that never loses an add">
+
+**The setup.** N=3, W=1, R=1. Aggressive availability — any one node can serve.
+
+**The action.** User adds item X on Node A. Node A writes locally, returns success. Asynchronously, the write replicates to nodes B and C.
+
+**The partition.** Before replication finishes, Node A is partitioned from B and C. The user, served by a different request to Node B, adds item Y. Node B writes locally, returns success.
+
+**The reunion.** Partition heals. Read of the cart goes to N=3, R=1 — but the coordinator may pull from any of them, and they disagree:
+
+- Node A: cart = `{X}`
+- Node B: cart = `{Y}`
+- Node C: cart = {}
+
+**The merge.** With last-write-wins, one of `{X}` or `{Y}` wins; one item is lost. With sibling-resolution, the application sees both and merges → cart = `{X, Y}`. With a CRDT (an OR-Set), the merge is automatic and deterministic → cart = `{X, Y}`.
+
+**The lesson.** The shopping-cart use case can't tolerate lost adds. So last-write-wins is the wrong default; you want sibling-resolution or a CRDT-shaped data model. Amazon's actual cart used an OR-Set-like structure for exactly this reason.
+
+</WorkedExample>
+
+## Mapping to the concept lesson
+
+| Concept lesson idea     | How it shows up here                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| Leaderless replication  | Dynamo's defining feature; no single point of failure for writes                                        |
+| Async replication risks | Sloppy quorum + handoff is the productionized async story                                               |
+| Reading your own writes | W + R > N gives it on the happy path; sloppy quorum windows can break it                                |
+| Conflict resolution     | Surfaces here as version vectors, sibling resolution, or CRDTs                                          |
+| Multi-leader's hardness | Leaderless inherits the same write-conflict problem — Dynamo solves it explicitly rather than hiding it |
+
+<InlineQuiz
+  question="A Dynamo-style cluster runs with N=3, W=2, R=2. A network partition isolates one of the three replicas for a key. A client writes and reads in the same partition. Which statement is most accurate?"
+  options={[
+    { text: "All writes fail because quorum can't be reached." },
+    {
+      text: "Writes succeed (the other two replicas form quorum), reads succeed, and the isolated replica catches up via hinted handoff and read repair when the partition heals.",
+      correct: true,
+    },
+    { text: "Reads return inconsistent data because the partition violates quorum." },
+    { text: "Sloppy quorum is required for any operation to succeed." },
+  ]}
+  explanation="W=2 and R=2 are both satisfied by the two reachable replicas — quorum holds. The isolated replica misses writes during the partition but converges via repair mechanisms once reachable. Sloppy quorum is only needed when *more* than (N - W) replicas are unreachable. The configuration is doing its job; the partition is tolerated. This is the design Dynamo is famous for: most failure scenarios degrade gracefully without operator intervention."
+/>
+
+<PitfallsCallout
+  items={[
+    "Treating W + R > N as 'linearizable'. It guarantees overlap, not strict ordering.",
+    "Leaving sloppy quorum on for data with hard invariants. The handoff window can leak stale reads.",
+    "Defaulting to last-write-wins. It silently drops concurrent updates — exactly the data your application is trying to preserve.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 5 (Dynamo-style replication; pp. 177–190).

@@ -1,0 +1,222 @@
+---
+title: "Partitioning: splitting data across machines"
+description: "Sharding by range vs. by hash. Hot spots, the celebrity problem, and the always-uncomfortable cost of rebalancing."
+track: system-design
+trackLabel: "System Design Foundations"
+module: partitioning
+moduleLabel: "Module 6 · Partitioning"
+lesson: partitioning-strategies
+lessonCode: "S6.1"
+estMinutes: 50
+prereqs:
+  - "S5.1 Replication: keeping copies in sync"
+objectives:
+  - "Distinguish range-based and hash-based partitioning by access pattern and skew."
+  - "Identify the 'hot spot' / celebrity problem and the standard mitigations."
+  - "Explain why secondary indexes are hard in partitioned systems (scatter/gather)."
+  - "Describe rebalancing strategies and the routing options for clients."
+pitfalls:
+  - "Partitioning by an autoincrement timestamp. Today's writes all land on one shard."
+  - "Hashing the wrong key. A celebrity user is still a celebrity after hashing."
+  - "Forgetting secondary indexes. Once data is partitioned, a non-key query touches every shard."
+importantQuestions:
+  - question: "Why do we partition data at all if we already replicate?"
+    shortAnswer: "Replication scales reads and survives node failures, but every write still hits every replica. Partitioning splits the data so each shard handles its own subset of writes — that's how write throughput scales."
+    detailed: |
+      Replicas all hold the same data, so write capacity doesn't grow with replica count — the slowest replica gates the rest.
+
+      Partitioning splits the data into disjoint subsets. With 10 shards, each one handles roughly 1/10 of the write load. Combined with replication (each shard has multiple replicas), you get write scalability *and* fault tolerance.
+
+      Almost every distributed database does both — Cassandra, MongoDB, Elasticsearch, CockroachDB, DynamoDB, and so on.
+    pitfalls:
+      - "Partitioning without replication is dangerous — a single-shard failure loses 1/N of your data."
+  - question: "Range vs hash partitioning — what's the practical difference?"
+    shortAnswer: "Range partitioning sorts keys and assigns ranges to shards — supports range queries but causes hot spots when load is correlated with key order. Hash partitioning distributes keys evenly but loses range query support."
+    detailed: |
+      Range partitioning is intuitive: shard 1 handles keys A–F, shard 2 handles G–M, etc. Range queries are cheap (`WHERE key BETWEEN 'C' AND 'E'` hits one shard). But if your key is a timestamp, today's writes all crowd onto one shard while the others sit idle.
+
+      Hash partitioning applies a hash function to the key, then takes modulo N. Keys are spread evenly regardless of natural order. The downside: range queries are useless — adjacent keys hash to random shards, so `WHERE timestamp BETWEEN today AND tomorrow` has to scatter across every shard.
+
+      Many systems hash a prefix and range within it — Cassandra's compound primary keys do this. You get both.
+    pitfalls:
+      - "Picking range when writes are time-correlated is a classic mistake."
+      - "Picking hash when range queries are the dominant workload is the inverse mistake."
+  - question: "What is the 'hot spot' or 'celebrity' problem?"
+    shortAnswer: "Some keys get vastly more traffic than others. Hashing distributes keys evenly but doesn't distribute traffic — one celebrity's hash maps to one shard, and that shard gets crushed. The shape of the access distribution matters more than the shape of the key distribution."
+    detailed: |
+      Imagine partitioning a social media app by `user_id` hash. Most users get a fair share of traffic; the system is balanced. Then a celebrity tweets. Suddenly one user generates 30 million events. Their hash still maps to one partition. That partition is now hot, regardless of how well you balanced the rest.
+
+      Mitigations: add a random suffix to the celebrity's key (split their writes across N sub-keys), at the cost of having to fan out reads. Cache aggressively in front of the partition. Or accept that hot keys exist and over-provision the offending shards.
+
+      Twitter's actual answer was hybrid: precomputed feeds for normal users (fan-out on write), live feeds for celebrities (fan-out on read), merged at read time.
+    pitfalls:
+      - "There's no partitioning scheme that distributes a single hot key. The problem has to be addressed at a different layer."
+  - question: "Why are secondary indexes hard in a partitioned database?"
+    shortAnswer: "The data is partitioned by primary key, so a query on any other field has to ask every shard — 'scatter/gather'. Two common workarounds: local indexes (each shard maintains its own, queries scatter) or global indexes (a separate index partitioned by the indexed field, with extra write cost)."
+    detailed: |
+      With a single database, `SELECT * FROM users WHERE city = 'Paris'` uses a city index — one lookup. With 10 shards partitioned by user_id, the city of any user could be on any shard. So the query asks all 10 shards in parallel and merges. That's scatter/gather: simple but expensive at high cardinality.
+
+      Local indexes (document-partitioned): each shard indexes its own data. Reads scatter. Writes are fast.
+
+      Global indexes (term-partitioned): one global index, partitioned by the indexed field. Reads hit one shard. Writes have to update both the data shard and the index shard, often via two-phase commit — slow and brittle.
+
+      Most systems pick local indexes by default. Elasticsearch is local. Some Cassandra users build global indexes via materialized views.
+    pitfalls:
+      - "Don't paper over scatter/gather with caching unless the access pattern is read-heavy and the cache hit rate is high."
+  - question: "What is rebalancing and what makes it dangerous?"
+    shortAnswer: "When you add or remove nodes, data has to move so partitions are evenly distributed again. Done poorly, rebalancing moves more data than necessary, saturates the network, or temporarily reduces availability. Consistent hashing and fixed-partition-count strategies minimize the damage."
+    detailed: |
+      Naive rebalancing — `shard = hash(key) mod N` — moves almost every key when N changes. That's catastrophic at scale.
+
+      Consistent hashing minimizes movement: only keys near the changed boundary move.
+
+      Fixed partition count (the default in Riak, Elasticsearch, Couchbase) goes further: you create many more partitions than nodes upfront (e.g., 1024 partitions on 10 nodes). When you add a node, some partitions move to it as whole units. The mapping from key to partition never changes; only the mapping from partition to node does.
+
+      Either approach lets you add capacity without coordinated downtime.
+    pitfalls:
+      - "Automatic rebalancing can be triggered by transient network issues — most production systems have it as an operator-confirmed action."
+---
+
+<TldrCallout>
+  Replication lets you survive failures and serve reads at scale. *Partitioning* (also called
+  *sharding*) splits the data itself so you can scale writes. The decisions are: how to assign keys
+  to partitions (range vs. hash), what to do when one key gets disproportionate traffic (the
+  celebrity problem), how to query by non-key fields (secondary indexes), and how to move data when
+  the cluster grows (rebalancing). Each has a sharp edge.
+</TldrCallout>
+
+## Why partitioning exists
+
+Replication keeps copies of the same data on multiple nodes. That helps reads scale and protects against failures. But every write still goes to every replica — so write throughput is bounded by what one node can do.
+
+<GlossaryTerm
+  term="Partitioning"
+  definition="Splitting a dataset into disjoint subsets (partitions or shards), each hosted on a different node. Different from replication, which copies the same data to multiple nodes. Partitioning scales writes; replication scales reads and survives failures. Combine them: each partition has multiple replicas."
+>
+  Partitioning
+</GlossaryTerm>
+breaks the data into disjoint subsets, each handled by a different node. With 10 shards, each one
+handles roughly 1/10 of the load. Combined with replication (each shard has its own followers), you
+get both write scalability *and* fault tolerance.
+
+The hard question: how do you decide which key goes to which shard?
+
+## Range partitioning
+
+<GlossaryTerm
+  term="Range partitioning"
+  definition="Assigning contiguous ranges of the key space to each shard (e.g., A–F → shard 1, G–M → shard 2). Range queries are efficient — they hit one or a few shards. Vulnerable to hot spots when load is concentrated in one range."
+>
+  Range partitioning
+</GlossaryTerm>
+assigns contiguous slices of the keyspace to shards. It's the easiest to reason about, and range
+queries are cheap — `WHERE date BETWEEN today AND yesterday` hits one shard.
+
+The risk is correlated load. If your key is a timestamp and you partition by date, today's shard gets pounded while yesterday's idles. The same goes for any key where access is concentrated at one end — recent IDs, alphabetical sort, latest users.
+
+## Hash partitioning
+
+<GlossaryTerm
+  term="Hash partitioning"
+  definition="Applying a hash function to the key and assigning by hash range (or modulo). Distributes keys evenly across shards regardless of natural ordering. Defeats hot spots from ordered access — but breaks range queries, since adjacent keys hash to random shards."
+>
+  Hash partitioning
+</GlossaryTerm>
+hashes the key first, distributing keys evenly regardless of natural order. That defeats the
+time-correlation problem — even consecutive timestamps land on different shards.
+
+The cost: range queries are useless. `WHERE timestamp BETWEEN today AND tomorrow` is no longer a clean range — adjacent timestamps have completely different hashes. The query becomes a scatter across all shards.
+
+Real systems often combine: hash a prefix to pick the shard, range within it. Cassandra's compound primary keys (partition key + clustering key) work exactly this way. You can hash by user_id (good distribution) and range by timestamp within a user (good for "show me my last week's activity").
+
+<SDShardDesigner />
+
+## The celebrity problem
+
+<GlossaryTerm
+  term="Hot spot"
+  definition="A partition receiving disproportionately more traffic than others, becoming a bottleneck. Usually caused by a single high-traffic key (a celebrity user, a popular product, a spam target) that hashing alone can't distribute."
+>
+  Hot spots
+</GlossaryTerm>
+appear when load is concentrated on one key (or one range), regardless of how well the rest of the
+data is distributed.
+
+<WorkedExample title="One user, one shard, 30 million followers">
+
+**The problem.** A social media app partitions by `user_id` hash. Most shards see a balanced ~1/N share of writes. Then a celebrity posts.
+
+**The naive approach.** Every event for that celebrity (likes, follows, replies) writes to the single shard that owns their user_id. That one shard is now seeing millions of events while the others are bored.
+
+**Why it breaks.** Hashing distributes the _keys_ evenly, but not the _traffic_. A celebrity is one key; their hash is one value; one shard owns it. The mathematics of hashing can't save you.
+
+**The real solution.** Add a random salt to the celebrity's key — split their writes across, say, 16 sub-keys, each on a potentially different shard. Reads have to gather from all 16. This is application-level work, and you usually only do it for the few keys you've identified as hot.
+
+**The tradeoff.** Salting fixes the hot write at the cost of fan-out on reads. Twitter's actual answer was different: keep the fan-out-on-write feed for normal users, fall back to fan-out-on-read for celebrities, merge at read time. Different problem shape, different fix.
+
+</WorkedExample>
+
+## Secondary indexes and scatter/gather
+
+<GlossaryTerm
+  term="Secondary index"
+  definition="An index on a non-primary-key column. In a partitioned database, it's hard: data is partitioned by primary key, so a query on a secondary attribute has to consult every shard (scatter/gather) or maintain a separately partitioned index."
+>
+  Secondary indexes
+</GlossaryTerm>
+are easy in a single database — one B-tree or hash index per indexed column. In a partitioned
+database, they're a design choice.
+
+_Local indexes_ (also called document-partitioned): each shard indexes its own data. A query like `WHERE city = 'Paris'` has to ask every shard in parallel and merge — scatter/gather. Writes are cheap; reads pay.
+
+_Global indexes_ (also called term-partitioned): a separate index, partitioned by the indexed field. A query for "Paris" goes to one shard. But every write now has to update both the data shard and the index shard, often across the network — slow, brittle, prone to inconsistency unless you use two-phase commit.
+
+Most systems default to local indexes. Elasticsearch is local. The expensive read cost is accepted because writes are cheap and most queries are still fast enough.
+
+## Rebalancing
+
+When the cluster grows or shrinks, data has to move so partitions stay roughly balanced. The naïve scheme — `shard = hash(key) mod N` — moves almost every key when N changes. That's a non-starter at scale.
+
+**Consistent hashing** minimizes movement: only keys near the changed boundary move.
+
+**Fixed partition count** (Riak, Elasticsearch, Couchbase) goes further. You create many more partitions than nodes upfront — say 1024 partitions on 10 nodes. When you add an 11th node, some whole partitions migrate to it. The key→partition mapping never changes; only the partition→node mapping does. Smaller and more predictable.
+
+<AnalogyCallout>
+  Think of fixed partitions as moving filing cabinets between offices, not re-filing every document.
+  The papers stay in their cabinet; the cabinet just moves to a new office.
+</AnalogyCallout>
+
+## Routing requests
+
+The client has to know which shard owns a key. Three patterns:
+
+1. **Smart clients.** The client library knows the partition map and routes directly. Cassandra's drivers do this.
+2. **Routing tier.** A proxy or coordinator knows the map and forwards requests. MongoDB's `mongos`, Vitess's `vtgate`.
+3. **Random + redirect.** The client picks any node; if that node doesn't own the key, it forwards. Riak does this.
+
+Each has tradeoffs in client complexity vs. network hops. Smart clients are fastest but couple the client to internal cluster state.
+
+<InlineQuiz
+  question="You partition a database by `user_id` hash. A new requirement: 'show all orders placed in the last 24 hours, across all users.' Why is this now expensive?"
+  options={[
+    { text: "Hashing slows down range queries because hashes are slow." },
+    {
+      text: "Orders from the same time window are spread across all shards — the query becomes scatter/gather.",
+      correct: true,
+    },
+    { text: "Hash partitioning doesn't allow indexes." },
+    { text: "The leader can't answer the query." },
+  ]}
+  explanation="Hashing user_ids evenly distributes users, but it also distributes their orders by time. A query for 'last 24 hours' has no locality — every shard might have some recent orders. The database has to ask every shard, gather results, sort. The fix is usually a separate denormalized table partitioned by timestamp range (or a stream into a column-store warehouse for analytics) — the right shape for the new access pattern."
+/>
+
+<PitfallsCallout
+  items={[
+    "Partitioning by a monotonically increasing key (timestamp, autoincrement ID). All current writes hit one shard.",
+    "Assuming hash partitioning eliminates hot spots. It only eliminates ordered hot spots — celebrity keys still concentrate.",
+    "Forgetting secondary indexes when designing the partition key. Scatter/gather costs sneak up.",
+    "Rebalancing automatically on transient network issues. Most production systems require operator confirmation.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 6.

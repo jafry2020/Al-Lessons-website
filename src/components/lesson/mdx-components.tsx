@@ -28,6 +28,14 @@ import { WeightInitDemo } from "../viz/WeightInitDemo";
 import { ConvolutionDemo } from "../viz/ConvolutionDemo";
 import { AttentionHeatmap } from "../viz/AttentionHeatmap";
 import { TokenizerDemo } from "../viz/TokenizerDemo";
+import { SDFaultFinder } from "../viz/SDFaultFinder";
+import { SDDataModelPicker } from "../viz/SDDataModelPicker";
+import { SDStorageEngineSim } from "../viz/SDStorageEngineSim";
+import { SDSchemaEvolution } from "../viz/SDSchemaEvolution";
+import { SDReplicationLag } from "../viz/SDReplicationLag";
+import { SDShardDesigner } from "../viz/SDShardDesigner";
+import { SDConcurrencyBugs } from "../viz/SDConcurrencyBugs";
+import { SDNetworkFault } from "../viz/SDNetworkFault";
 
 /**
  * Components available inside any .mdx lesson file.
@@ -70,6 +78,16 @@ export const mdxComponents: MDXComponents = {
   ConvolutionDemo,
   AttentionHeatmap,
   TokenizerDemo,
+
+  // System Design track
+  SDFaultFinder,
+  SDDataModelPicker,
+  SDStorageEngineSim,
+  SDSchemaEvolution,
+  SDReplicationLag,
+  SDShardDesigner,
+  SDConcurrencyBugs,
+  SDNetworkFault,
 
   // Markdown overrides: align native MD output with the design system.
   h2: (props) => <h2 className="mb-4 mt-12 text-h2" {...props} />,
