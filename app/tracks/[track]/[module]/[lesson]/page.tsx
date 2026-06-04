@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
+import remarkGfm from "remark-gfm";
 import { findLesson, allLessonParams } from "@/lib/content";
 import { LessonLayout } from "@/components/lesson/LessonLayout";
 import { getLessonProgress, trackLessonVisit } from "@/lib/lesson-actions";
@@ -56,7 +57,11 @@ export default async function LessonPage({ params }: { params: Promise<Params> }
         // (`hints={[...]}`, children={`...`}). Disable the block; the
         // separate blockDangerousJS=true default still blocks eval/process/
         // Function access.
-        options={{ mdxOptions: {}, blockJS: false }}
+        // `remark-gfm` is what makes pipe-tables, strikethrough, autolinks,
+        // and task lists actually render. Without it, `| col | col |` rows
+        // collapse to inline text in a single paragraph (visible bug fixed
+        // 2026-06: tables in A0.2 and many other lessons rendered raw).
+        options={{ mdxOptions: { remarkPlugins: [remarkGfm] }, blockJS: false }}
       />
     </LessonLayout>
   );

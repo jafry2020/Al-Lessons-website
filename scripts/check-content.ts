@@ -64,6 +64,10 @@ async function main() {
       rsc?: boolean
     ) => Promise<{ compiledSource: string }>;
   };
+  // Must match the plugin set in app/tracks/.../page.tsx exactly. Otherwise
+  // CI greenlights MDX that breaks at runtime (e.g. tables compile fine here
+  // but render as text in prod if remark-gfm is missing from one side).
+  const remarkGfm = ((await import("remark-gfm")) as { default: unknown }).default;
   const jsxRuntime = (await import("react/jsx-runtime")) as Record<string, unknown>;
   const React = ((await import("react")) as { default: typeof import("react") }).default;
   const { renderToStaticMarkup } = (await import("react-dom/server")) as {
@@ -133,7 +137,11 @@ async function main() {
     //  - runtime errors (`{ident}` in prose → JS reference → ReferenceError)
     // Both classes ship as a clean `next build` but explode at request time.
     try {
-      const { compiledSource } = await serialize(body, { mdxOptions: {}, blockJS: false }, true);
+      const { compiledSource } = await serialize(
+        body,
+        { mdxOptions: { remarkPlugins: [remarkGfm] }, blockJS: false },
+        true
+      );
       const fullScope = { opts: jsxRuntime, frontmatter: {} };
       const fn = Reflect.construct(Function, Object.keys(fullScope).concat(compiledSource));
       const Content = (fn.apply(fn, Object.values(fullScope)) as { default: unknown }).default as (
