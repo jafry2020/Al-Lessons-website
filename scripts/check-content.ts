@@ -213,6 +213,23 @@ async function main() {
     }
   }
 
+  // Glossary conflict check. The /glossary page calls `loadGlossary` which
+  // throws (and surfaces as a 500) when two lessons define the same
+  // <GlossaryTerm term="…"> with different `definition=` attributes. Catch
+  // those mismatches here instead of in production.
+  try {
+    const { loadGlossary } = (await import("../src/lib/glossary")) as {
+      loadGlossary: () => Promise<unknown>;
+    };
+    await loadGlossary();
+  } catch (e: unknown) {
+    const msg = (e as { message?: string }).message ?? String(e);
+    problems.push({
+      file: "(glossary)",
+      message: msg.replace(/\n/g, "\n      ").slice(0, 800),
+    });
+  }
+
   const totalLessons = files.length;
   const totalModules = TRACKS.reduce((n, t) => n + t.modules.length, 0);
 
