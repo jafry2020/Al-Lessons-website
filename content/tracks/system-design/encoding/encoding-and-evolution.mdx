@@ -1,0 +1,210 @@
+---
+title: "Encoding and schema evolution"
+description: "Your data has to cross boundaries — disks, networks, versions. The encoding you pick decides how painful evolution gets."
+track: system-design
+trackLabel: "System Design Foundations"
+module: encoding
+moduleLabel: "Module 4 · Encoding & Evolution"
+lesson: encoding-and-evolution
+lessonCode: "S4.1"
+estMinutes: 50
+prereqs:
+  - "S3.1 How databases actually store and find your data"
+objectives:
+  - "Compare JSON/XML, binary formats (Thrift, Protobuf, Avro), and language-native serialization on size, speed, and evolvability."
+  - "Distinguish backward and forward compatibility and explain why you need both."
+  - "Trace how data flows through databases, REST APIs, and message queues — and where the encoding lives in each."
+  - "Contrast REST and RPC."
+pitfalls:
+  - "Adding a required field and deploying the producer first. Old consumers break instantly."
+  - "Reusing tag numbers in Protobuf after deleting a field. Old data gets misparsed."
+  - "Trusting language-native serialization (pickle, Java serialization). Security and version coupling problems compound."
+importantQuestions:
+  - question: "Why is encoding worth thinking about at all?"
+    shortAnswer: "Your in-memory data structures aren't on disk or on the wire. Something has to translate. The choice of encoding decides how big the bytes are, how fast they parse, and how gracefully you can change the schema."
+    detailed: |
+      Inside a process, you have pointers, hash maps, and objects. None of those survive a network or a disk. You serialize to bytes, send, deserialize, reconstruct.
+
+      The choice of format has three dimensions: size on the wire, parse speed, and schema evolvability. JSON is easy and self-describing but bulky and slow. Protobuf is compact and fast but requires a schema. Avro decouples schema from data on the wire. Each has a place.
+    pitfalls:
+      - "Don't default to JSON for internal traffic. The savings from binary formats at scale are substantial."
+  - question: "What's the difference between backward and forward compatibility?"
+    shortAnswer: "Backward compatibility: new code can read old data. Forward compatibility: old code can read new data. You usually want both — that's what lets you deploy services gradually without coordinated rollouts."
+    detailed: |
+      In a rolling deploy, you have a window where v1 and v2 of a service coexist. v1 writes data; v2 reads it. v2 writes data; v1 reads it. Both directions need to work, or the rollout breaks.
+
+      Most binary formats hit this through tagged fields. Protobuf uses numeric field tags, not names — old code reading a new message sees unknown tags and skips them (forward compat); new code reading old data sees the new field is missing and applies a default (backward compat).
+
+      Required fields wreck forward compatibility. Don't add them.
+    pitfalls:
+      - "Forward compatibility is the one developers forget. They test 'new code reads old data' and ship; old code chokes on the new schema."
+  - question: "Why do binary formats need schemas at all?"
+    shortAnswer: "Without a schema, the bytes are unreadable. Compactness comes from omitting field names from the wire — the schema tells the reader what each byte means. Protobuf and Thrift bake the schema in; Avro lets the schema travel separately or be looked up."
+    detailed: |
+      A JSON document carries the schema with it: `{"name": "alice", "age": 30}` has field names inline. That's why JSON is human-readable and bulky.
+
+      Binary formats strip the field names. Protobuf wire format is essentially `[tag][type][value][tag][type][value]...`. Tag 1 might be `name`, tag 2 might be `age` — but that mapping lives in the `.proto` file, not in the bytes. The reader needs the schema to interpret.
+
+      Avro takes this further — even the field tags are omitted. The wire format is just the values, in schema order. The reader looks up the matching schema (by ID, often from a registry) and uses it to decode. That's why Avro is the format of choice for Kafka pipelines.
+    pitfalls:
+      - "Without a schema registry, Avro is a nightmare. With one, it's the most evolvable binary format."
+  - question: "REST vs RPC — what's the practical difference?"
+    shortAnswer: "REST treats interactions as operations on resources over HTTP, leaning on the protocol's verbs and statuses. RPC treats interactions as calling functions on a remote service, often over a binary protocol. REST wins for openness and tooling; RPC wins for speed and type safety inside a network."
+    detailed: |
+      REST is the lingua franca for public APIs. Stripe, GitHub, Twilio — all REST + JSON. Why? Universal client tooling (curl, browsers, every language has an HTTP client), human-debuggable, caches well, integrates with proxies and load balancers.
+
+      RPC frameworks (gRPC, Thrift, Twirp) generate client stubs from schema definitions. Calls look like local function calls; the framework handles encoding, transport, retries. The encoding is usually binary (Protobuf) — faster and smaller than JSON.
+
+      Inside a tightly-coupled microservice mesh, gRPC is increasingly the default — type safety, performance, streaming. At the public boundary, REST is still where the world lives.
+    pitfalls:
+      - "RPC's 'looks like a local call' abstraction hides network failures. Real RPC clients need explicit timeouts, retries, and idempotency."
+  - question: "What kinds of data flow matter for encoding choice?"
+    shortAnswer: "Three: through databases (data outlives code), through synchronous services (REST/RPC), and through asynchronous messages (Kafka, queues). Each has different lifetimes and compatibility windows."
+    detailed: |
+      *Through databases.* Data on disk can survive longer than any version of the code that wrote it. Schema evolution has to handle decade-old records. This is where forward compatibility matters most — old data must still be readable.
+
+      *Through services.* Producers and consumers are deployed independently. A rolling deploy guarantees mixed versions. Both directions of compatibility must hold during the rollout window.
+
+      *Through message queues.* Producers and consumers are decoupled in time. A consumer might process a message hours after it was written, possibly after a producer redeploy. Same evolution pressures as services, plus possible replay of older messages.
+
+      In all three, the encoding format and its handling of unknown fields decides how painful evolution is.
+    pitfalls:
+      - "Treating database schema as if it lives with the code is a category error. Data outlives every deploy."
+---
+
+<TldrCallout>
+  Your data has to leave the process at some point — onto disk, across the network, into a message
+  queue. Encoding is how. *JSON/XML* are human-readable but bulky. *Binary formats* (Thrift,
+  Protobuf, Avro) are smaller and faster but need a schema. The hard part isn't picking the format;
+  it's evolving the schema without breaking the consumers you can't redeploy in lockstep.
+</TldrCallout>
+
+## Why encoding even comes up
+
+Inside a process, your data is pointers, hash maps, objects. None of those survive going to disk or over a network — both are just bytes. So at every boundary, you serialize to bytes; at the other end, you deserialize back.
+
+<GlossaryTerm
+  term="Encoding"
+  definition="Translating in-memory data structures to bytes for storage or transmission. Also called serialization or marshalling. Decoding is the reverse."
+>
+  Encoding
+</GlossaryTerm>
+sounds boring until you realize every boundary in your system is one. Every database write, every
+HTTP request, every Kafka message goes through an encoder.
+
+The choices have three dimensions: how big the bytes are, how fast they parse, and how easily the schema can change without breaking consumers.
+
+## The honest tour of formats
+
+**Language-native** (Java serialization, Python pickle, Ruby Marshal). Convenient — call one method, get bytes. Awful for everything else: tightly coupled to language version, terrible cross-language story, and often vulnerable to remote code execution via crafted bytes. Avoid for anything that crosses a trust or version boundary.
+
+**JSON and XML.** Text-based, human-readable, self-describing (the field names travel with the data). Universal tooling. Bulky on the wire — every field name shipped with every record. Slow to parse compared to binary formats. Type ambiguity (JSON has no integer type, no date type, no binary).
+
+**Binary formats.** Thrift, Protocol Buffers (Protobuf), Avro. Compact (field names live in the schema, not the wire). Fast. Require a schema definition. The schema is also documentation — it forces you to think about the shape before you ship.
+
+<AnalogyCallout>
+  JSON is shipping every package with its own user manual stapled to the outside. Binary formats
+  ship the manual once to every recipient, then ship only the part numbers. Cheaper per package, but
+  everybody needs the manual to make sense of the parts.
+</AnalogyCallout>
+
+## Schema evolution
+
+<GlossaryTerm
+  term="Schema evolution"
+  definition="Changing the shape of your data over time — adding fields, removing fields, renaming, changing types — without breaking the systems that read older or newer versions. Done well, deploys don't have to be coordinated."
+>
+  Schema evolution
+</GlossaryTerm>
+is what separates encoding formats in practice. The question isn't 'what does the format look like
+today' — it's 'what happens when v2 is talking to v1?'
+
+Two directions matter:
+
+<GlossaryTerm
+  term="Backward compatibility"
+  definition="New code can read old data. Required to deploy a new version that has to consume data produced by the old version (which is always, in a rolling deploy)."
+>
+  Backward compatibility
+</GlossaryTerm>
+means new code reads old data — common case, usually easy.
+
+<GlossaryTerm
+  term="Forward compatibility"
+  definition="Old code can read new data. Required when you can't redeploy all consumers in lockstep with producers. The harder direction, and the reason binary formats use tag numbers and skip unknown fields."
+>
+  Forward compatibility
+</GlossaryTerm>
+means old code reads new data. Harder. It's why Protobuf/Thrift fields have numeric tags — unknown
+tags are silently skipped. It's why optional fields are the default.
+
+The rules in Protobuf-style formats:
+
+- **Add an optional field with a new tag.** Backward + forward safe.
+- **Remove an optional field.** Safe — but never reuse its tag, or old data gets misparsed.
+- **Rename a field.** Safe at the wire level (the tag is the identity), risky in code (callers reference the name).
+- **Change a field's type.** Almost never safe. Add a new field instead.
+- **Promote optional to required.** Breaks forward compatibility permanently. Don't.
+
+<SDSchemaEvolution />
+
+## Avro: a different shape
+
+<GlossaryTerm
+  term="Apache Avro"
+  definition="A binary encoding where the schema travels separately from the data (often via a schema registry). No field tags on the wire — readers use the writer's schema and their own to decode. The common choice for Kafka pipelines."
+>
+  Avro
+</GlossaryTerm>
+takes evolution differently. The wire format has no field tags or names — just values in schema
+order. To decode, the reader needs the *writer's schema* and applies its own *reader's schema* on
+top. The difference between the two is what handles evolution.
+
+This is a fit for streaming systems (Kafka). A schema registry holds versioned schemas, each message references a schema ID, and readers look up whatever schema produced the bytes. Adding optional fields just works; the registry enforces compatibility rules.
+
+## How data flows — and where encoding sits
+
+Three flows dominate, and each has its own evolution pressure:
+
+**Through databases.** Data on disk often outlives the code that wrote it. A row written in 2018 might be read by 2026 code. Forward compatibility matters most — old data has to remain readable by every future version. This is also why "schemaless" stores accumulate technical debt: the schema becomes implicit, undocumented, and inconsistent across rows.
+
+**Through services (REST, RPC).** Producers and consumers are usually deployed by the same team, but rolling deploys guarantee mixed versions for a window of minutes to hours. Both directions of compatibility must hold during that window.
+
+**Through async messages (Kafka, RabbitMQ).** Time decoupling. A message written hours ago might be processed by a consumer that was deployed an hour later. Replay scenarios stretch this further — a consumer might re-process months of old messages. Avro + schema registry is built exactly for this.
+
+## REST vs RPC
+
+<WorkedExample title="REST vs RPC, where each one wins">
+
+**REST.** Public APIs (Stripe, GitHub, Twilio). Universal client tooling, debuggable with curl, caches well at the HTTP layer. JSON over HTTP is verbose but inspectable. The cost is per-request overhead and schema drift — there's no enforced typed contract.
+
+**RPC (gRPC, Thrift).** Internal service-to-service traffic. Code-generated client stubs, type-safe, Protobuf on the wire (10–100× more compact than JSON, much faster to parse). Native support for streaming and bidirectional channels. The cost is opacity — debugging requires tools that speak the format, and abstractions hide the network.
+
+**The tradeoff.** Public boundary → REST. Internal mesh → increasingly gRPC. Some teams use REST internally for simplicity, especially in heterogeneous tech stacks; others use gRPC publicly via grpc-web. The decision is rarely about performance alone — it's about who owns the consumer.
+
+</WorkedExample>
+
+<InlineQuiz
+  question="Your team adds a `required` field to a Protobuf schema and ships the producer. Old consumers immediately start failing to parse messages. What was the mistake?"
+  options={[
+    { text: "Protobuf doesn't support required fields." },
+    {
+      text: "Promoting fields to required breaks forward compatibility — old consumers can't be relied on to set or expect them.",
+      correct: true,
+    },
+    { text: "The team should have deployed consumers first." },
+    { text: "Required fields require a higher Protobuf version." },
+  ]}
+  explanation="Required fields are forward-incompatible. Old consumers (v1) don't know to populate the new field; new consumers (v2) reject messages that don't have it. Deploying producers first means v2 messages immediately reach v1 consumers, and they crash. The fix is to keep new fields optional, give them sensible defaults, and let consumers evolve at their own pace. Some Protobuf style guides ban `required` entirely for exactly this reason."
+/>
+
+<PitfallsCallout
+  items={[
+    "Adding required fields. Permanent forward-compatibility breakage.",
+    "Reusing field tags after deletion. Old data gets misparsed silently.",
+    "Trusting language-native serialization across services. Version coupling and security holes.",
+    "Defaulting to JSON for internal mesh traffic. Binary formats win on every axis except human readability.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 4.

@@ -49,6 +49,23 @@ export const TRACKS: TrackEntry[] = [
     ],
   },
   {
+    slug: "system-design",
+    label: "System Design Foundations",
+    tagline: "Build apps that survive scale, faults, and time.",
+    description:
+      "A beginner-friendly tour of data-intensive applications based on Martin Kleppmann's DDIA (O'Reilly, 2017). Reliability, replication, partitioning, transactions, and the hard problems of distributed systems — made tangible through hands-on simulators.",
+    modules: [
+      { slug: "reliability", label: "Module 1 · Reliability, Scalability & Maintainability" },
+      { slug: "data-models", label: "Module 2 · Data Models & Query Languages" },
+      { slug: "storage", label: "Module 3 · Storage & Retrieval" },
+      { slug: "encoding", label: "Module 4 · Encoding & Evolution" },
+      { slug: "replication", label: "Module 5 · Replication" },
+      { slug: "partitioning", label: "Module 6 · Partitioning" },
+      { slug: "transactions", label: "Module 7 · Transactions" },
+      { slug: "distributed", label: "Module 8 · Distributed Systems" },
+    ],
+  },
+  {
     slug: "genai-builder",
     label: "GenAI Builder Path",
     tagline: "Build systems with foundation models.",

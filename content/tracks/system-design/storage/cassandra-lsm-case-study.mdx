@@ -1,0 +1,180 @@
+---
+title: "Case study: Cassandra and the LSM-tree at scale"
+description: "The book's go-to write-heavy database. Why an LSM-tree, what compaction actually costs, and where Cassandra wins or loses against Postgres."
+track: system-design
+trackLabel: "System Design Foundations"
+module: storage
+moduleLabel: "Module 3 · Storage & Retrieval"
+lesson: cassandra-lsm-case-study
+lessonCode: "S3.2"
+estMinutes: 30
+prereqs:
+  - "S3.1 How databases actually store and find your data"
+objectives:
+  - "Trace a single write through Cassandra's commit log, memtable, and SSTable lifecycle."
+  - "Explain why compaction is essential to LSM-tree systems and what it costs operationally."
+  - "Identify workloads where Cassandra beats a B-tree system and where it loses."
+  - "Map the architecture to the storage primitives from the concept lesson."
+pitfalls:
+  - "Picking Cassandra because it's 'NoSQL and scalable' without understanding the access patterns it favors."
+  - "Forgetting compaction in capacity planning. Background compaction can saturate IO during off-peak."
+  - "Trying to do ad-hoc queries on Cassandra. It excels at known-shape queries; arbitrary joins are not its job."
+importantQuestions:
+  - question: "Why does Cassandra use an LSM-tree?"
+    shortAnswer: "Cassandra targets write-heavy workloads — telemetry, time series, event ingestion, social feeds. LSM-trees turn random writes into sequential ones via the memtable+SSTable pattern, which is dramatically faster on the workloads Cassandra was built for."
+    detailed: |
+      The original use cases at Facebook (inbox search) and the influence of Dynamo + Bigtable papers steered Cassandra toward LSM. Writes hit a commit log (durability), then a memtable (sorted, in-memory). When the memtable fills, it flushes to disk as an immutable SSTable.
+
+      Sequential disk writes at 10× the throughput of random writes. Combine that with no per-write index update (the SSTable IS the index, sorted by key) and writes are essentially limited by network and serialization, not by disk seeks.
+
+      Reads pay for this: they have to consult the memtable plus possibly several SSTables. Bloom filters and row-cache mitigate. Compaction merges SSTables in the background to keep read amplification bounded.
+    pitfalls:
+      - "Read-heavy workloads on Cassandra still work, but you pay for the layered lookup. B-trees often win on pure reads."
+  - question: "What does compaction actually do and what does it cost?"
+    shortAnswer: "Compaction merges multiple SSTables into fewer, larger ones, dropping superseded values and tombstones. Required for bounded read amplification and disk space recovery. Costs CPU and IO — bad tuning can saturate the cluster during compaction storms."
+    detailed: |
+      Without compaction, an LSM-tree accumulates SSTables forever. Reads have to check more and more files; deleted data is never reclaimed; disk fills up. Compaction is non-negotiable.
+
+      Cassandra offers several strategies: SizeTiered (merges similarly-sized SSTables), Leveled (keeps SSTables in size tiers, bounding read amp), TimeWindow (for time-series — old SSTables never re-touched). Each has a different IO profile.
+
+      The risk is compaction storm: writes pile up faster than compaction can keep up, and the system either stalls writes (write back-pressure) or accumulates a backlog that takes hours to drain. Capacity planning has to account for the steady-state and the burst.
+    pitfalls:
+      - "Tuning compaction wrong — too aggressive saturates IO; too lazy explodes read amplification."
+  - question: "Where does Cassandra lose to PostgreSQL?"
+    shortAnswer: "Anywhere you need ad-hoc queries, joins, or strong transactional guarantees. Cassandra is great at known-shape queries on partitioned data; it's a poor fit for arbitrary analytics, complex joins, or multi-row transactions."
+    detailed: |
+      Cassandra forces you to design your data model around the queries you'll run. Partition key + clustering key → the queries you can answer cheaply. Anything else either scatters across the cluster or doesn't work at all.
+
+      Postgres lets you write any SQL, add indexes after the fact, and the optimizer figures it out. Transactions are full ACID with arbitrary isolation. Joins are native and well-optimized.
+
+      The trade is workload shape vs. flexibility. For ingest of 100k writes/sec into known query shapes, Cassandra is great. For a product team that wants to iterate on the data model, Postgres is great.
+    pitfalls:
+      - "Trying to bolt secondary indexes onto Cassandra to recover relational ergonomics — works poorly at scale."
+  - question: "What does Cassandra's read path look like in practice?"
+    shortAnswer: "Check the memtable. Check the row cache. For each SSTable from newest to oldest, consult the bloom filter to skip absent keys, then binary-search the SSTable index, then read the data. Merge the results to return the latest value."
+    detailed: |
+      A point read at the worst case touches the memtable + every SSTable in the partition. Bloom filters cut most of those — they cheaply (but probabilistically) tell you a key is *not* in an SSTable.
+
+      Each SSTable read is roughly: bloom check (in memory) → index probe (in memory or fast disk) → data read (disk). Cassandra also has a key cache and a row cache to short-circuit the lookup for hot data.
+
+      The read amplification — how many SSTables per read — is the metric to watch. Leveled compaction caps it around 1; SizeTiered can grow it under bursty writes. Read latency tracks read amplification closely.
+    pitfalls:
+      - "Bloom filter false positives leak through and cause unnecessary disk reads — tune the bits-per-key knob if read amp seems too high."
+  - question: "Why is Cassandra's tunable consistency a Chapter 3 + Chapter 5 story?"
+    shortAnswer: "Storage layout (LSM-tree, sorted SSTables) interacts with the replication topology (leaderless, quorum reads/writes) to determine how fresh a read is and how durable a write is. Cassandra exposes both axes to the application via consistency levels."
+    detailed: |
+      Storage and replication aren't separable. A write isn't 'done' until it's in N replicas' commit logs and memtables. A read isn't 'fresh' until it's reached enough replicas to satisfy the quorum.
+
+      Cassandra's consistency levels (ONE, QUORUM, ALL, LOCAL_*) let the application pick, per query, how many replicas to wait for. The storage engine's speed and the replication topology's reach determine the achievable latency at each level.
+
+      Picking the right consistency is rarely about correctness alone — it's about which tradeoff between latency, availability, and freshness the use case can absorb.
+    pitfalls:
+      - "Setting consistency to ONE for performance and then being surprised by stale reads is the most common Cassandra misuse."
+---
+
+<TldrCallout>
+  Cassandra is the book's worked example for LSM-tree storage at scale. Writes are stupidly fast —
+  memtable + commit log + sequential SSTable flush — but the cost is paid in compaction, read
+  amplification, and a query model that forces you to design around the questions you'll ask. It's
+  the right tool for write-heavy known-shape workloads and the wrong tool for ad-hoc analysis.
+</TldrCallout>
+
+## A single write, end-to-end
+
+A client sends a write to any coordinator node:
+
+1. Coordinator routes the write to the partition's replicas (based on partition key hash).
+2. Each replica writes to its **commit log** (append-only, sequential, on disk — durability).
+3. Each replica updates its in-memory **memtable** (sorted structure).
+4. Once enough replicas acknowledge (per the consistency level), the coordinator returns success.
+
+That's it. No B-tree page splits. No in-place updates. Three sequential operations.
+
+When the memtable hits a size threshold, it flushes to disk as an immutable **SSTable** — a sorted file of key-value pairs with an index at the tail. Once flushed, the corresponding commit log entries can be discarded.
+
+## Compaction is the price
+
+The catch with append-only-everything is that you accumulate SSTables. Every write potentially creates a new file. Reads have to consult them all. Disk space accumulates with superseded values and tombstones (deletion markers).
+
+**Compaction** merges SSTables together. Linear-time merge (the files are sorted), keep the latest value per key, drop tombstones older than gc_grace_seconds. The output is fewer, larger SSTables — reducing read amplification and reclaiming disk.
+
+Compaction strategies trade off differently:
+
+- **SizeTiered:** merges similarly-sized SSTables. Cheap on write but read amplification can spike under bursty writes.
+- **Leveled:** keeps SSTables in size-bounded levels (L0, L1, ...). Read amplification capped around log of dataset size. Write amplification higher.
+- **TimeWindow:** for time-series data. Old SSTables are never re-touched because the data doesn't change. Cheap and predictable.
+
+Choosing the wrong strategy costs you. SizeTiered on a sustained-high-write workload causes compaction storms — writes outrun compaction, SSTable count balloons, reads slow. Leveled on a TTL-heavy workload re-compacts data you're about to delete anyway.
+
+## The read path
+
+A point read at the worst case:
+
+1. Check the memtable.
+2. Check the row cache (if enabled).
+3. For each SSTable, newest to oldest:
+   - Consult the bloom filter (in memory). If "not present", skip.
+   - Probe the SSTable's key index. If absent, skip.
+   - Read the data block from disk.
+4. Merge results (later writes override earlier ones), return.
+
+Bloom filters carry the lookup cost. False positive rates around 1% are typical — meaning ~1% of skip decisions are wrong and trigger an unnecessary disk read. Tune the bits-per-key parameter higher if read amp matters more than memory.
+
+<WorkedExample title="Time-series telemetry: Cassandra vs Postgres">
+
+**The workload.** 50,000 IoT devices, each emitting one event per second. Storage retention: 90 days. Reads: dashboards pulling the last 24 hours for selected devices.
+
+**The Postgres path.** A `(device_id, timestamp)` index. Every write is an INSERT plus index maintenance — a B-tree update that walks the tree and possibly splits pages. Random-write characteristics. At 50k writes/sec sustained, the WAL and the index both become bottlenecks. Tables grow large; VACUUM has to chase deleted rows after 90 days.
+
+**The Cassandra path.** Partition key = device_id, clustering key = timestamp. Each device's events live contiguously in SSTables, sorted by timestamp. Writes are commit-log + memtable inserts — pure append, no index walk. TimeWindowCompactionStrategy buckets SSTables by time; 90-day-old SSTables age out as whole files, no row-by-row deletion needed.
+
+**The read.** "Last 24 hours for device 17" hits one partition, the most recent SSTables. Scanning a contiguous range is cheap.
+
+**The tradeoff.** Cassandra wins on ingest throughput by an order of magnitude and on retention housekeeping. Postgres wins on flexibility — ad-hoc joins, secondary indexes added later, transactional updates. The right choice is determined by which side the workload sits on.
+
+</WorkedExample>
+
+## Where Cassandra loses
+
+Cassandra is sized for known-shape queries on partitioned data. It punishes you for:
+
+- **Joins.** There aren't any. Denormalize at write time.
+- **Ad-hoc queries.** If you didn't model for it, you can't query for it efficiently.
+- **Multi-row transactions.** Lightweight transactions (LWT) exist but use Paxos and are slow.
+- **Counts.** `SELECT COUNT(*)` has to scan partitions. Maintain counters explicitly.
+
+For workloads where the queries shift constantly and the team wants SQL ergonomics, Postgres is almost always the right answer. For workloads where the queries are fixed and the writes are the bottleneck, Cassandra (or any other LSM-tree system — RocksDB, ScyllaDB, HBase) earns its keep.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea                  | How it shows up here                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Append-only log = sequential writes  | Commit log is the durability path; memtable + SSTable flush is the storage path                          |
+| SSTables sorted by key               | Native primary access pattern; range queries on clustering keys are cheap                                |
+| Compaction's CPU/IO cost             | A first-class operational concern, not a footnote                                                        |
+| OLTP vs OLAP                         | Cassandra is OLTP-leaning for known-shape queries; analytics goes to a warehouse via change-data-capture |
+| Bloom filters cut read amplification | Per-SSTable bloom filters are how Cassandra keeps point reads fast                                       |
+
+<InlineQuiz
+  question="A team is choosing between Cassandra and PostgreSQL for storing 90 days of time-series telemetry, 30k writes/sec, with dashboards reading the last 24 hours per device. Which is more aligned with what the workload wants?"
+  options={[
+    { text: "PostgreSQL — its transactional guarantees matter for telemetry." },
+    {
+      text: "Cassandra with TimeWindowCompactionStrategy and (device_id, timestamp) keys.",
+      correct: true,
+    },
+    { text: "PostgreSQL with a BRIN index on timestamp." },
+    { text: "Cassandra with SizeTieredCompactionStrategy." },
+  ]}
+  explanation="The dominant cost is write throughput, and the access pattern is range-by-time-within-device. Cassandra's LSM-tree shape fits both — sequential commit-log writes, sorted SSTables that match the read order. TimeWindowCompactionStrategy is the right compaction policy for retention-driven data (old SSTables age out as files, no row-by-row deletion). SizeTiered would risk compaction storms under sustained writes. PostgreSQL works but pays B-tree index maintenance on every insert and needs VACUUM to handle the 90-day expiry — both unnecessary friction at 30k writes/sec. BRIN helps but doesn't change the storage-engine bottleneck."
+/>
+
+<PitfallsCallout
+  items={[
+    "Picking SizeTiered for sustained high-write workloads. Compaction storms will bite.",
+    "Forgetting that Cassandra modeling is query-driven — design the partition/clustering keys around the reads.",
+    "Treating Cassandra as 'general-purpose NoSQL'. It's specifically write-optimized LSM with quorum replication; that's a narrow sweet spot.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 3 (LSM-trees and SSTables; Cassandra references pp. 76–83).

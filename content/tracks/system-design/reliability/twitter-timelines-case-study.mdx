@@ -1,0 +1,173 @@
+---
+title: "Case study: Twitter's home timeline"
+description: "The fan-out tradeoff that Kleppmann uses to open the book — and why the right answer was 'both, depending on who's tweeting'."
+track: system-design
+trackLabel: "System Design Foundations"
+module: reliability
+moduleLabel: "Module 1 · Reliability, Scalability & Maintainability"
+lesson: twitter-timelines-case-study
+lessonCode: "S1.2"
+estMinutes: 30
+prereqs:
+  - "S1.1 Reliability, scalability, and maintainability"
+objectives:
+  - "Walk through Twitter's read:write ratio and explain why it drives the timeline architecture."
+  - "Compare fan-out on read and fan-out on write on latency, write amplification, and storage cost."
+  - "Explain the hybrid model and why a pure approach failed for celebrities."
+  - "Map the case study to the load-parameter framing from the concept lesson."
+pitfalls:
+  - "Quoting 'tweets per second' as the scaling parameter. The fan-out distribution is what actually drives design."
+  - "Assuming write-amplification scales linearly with followers and ignoring tail latency."
+importantQuestions:
+  - question: "Why did Twitter eventually pick a hybrid fan-out strategy?"
+    shortAnswer: "Fan-out on write was right on average but catastrophic for celebrities — millions of writes per tweet. Fan-out on read was right for celebrities but pointless for normal users. Hybrid: precomputed feeds for normal users, live joins for celebrity tweets, merged at read time."
+    detailed: |
+      Read:write on Twitter is roughly 100:1. So you want to do work on writes (cheap, rare) to make reads (frequent, latency-sensitive) fast. That argues for fan-out on write — pre-materialize each user's feed.
+
+      For an account with 200 followers, that's fine — every tweet triggers 200 inserts. For an account with 30M followers, it triggers 30M inserts, often clustered in seconds. The 'long tail' of follower counts looks like a power law: most users are small, a few are enormous. The few enormous ones determine the worst case.
+
+      Hybrid: maintain the precomputed timeline for normal users' tweets. When loading a feed, also live-query the tweets of any celebrities you follow, and merge. Most reads are slightly more expensive; the worst-case writes (celebrity tweets) become much cheaper.
+    pitfalls:
+      - "The threshold for 'celebrity' isn't fixed — it's a tuning parameter that has to be revisited as follower distributions change."
+  - question: "What load parameters describe Twitter accurately?"
+    shortAnswer: "Not just throughput. Read:write ratio (~100:1), fan-out distribution (heavy-tailed, with celebrities having millions of followers), and feed depth (how far back users scroll). The interaction of these three is what shapes the architecture."
+    detailed: |
+      Kleppmann's point in Chapter 1 is that 'X requests per second' is rarely the right load parameter alone. For Twitter:
+
+      - Read:write ratio drives whether you pre-materialize feeds.
+      - Fan-out distribution decides whether write-amplification is acceptable.
+      - Feed depth (how many tweets back the average user reads) decides cache strategy.
+      - Posting burstiness (events, breaking news) decides peak provisioning.
+
+      Each parameter influences a different architectural choice. Naming the right ones is half the work.
+    pitfalls:
+      - "Don't use a single peak throughput number to provision. The interactions between parameters create harder-to-spot bottlenecks."
+  - question: "What property of Twitter's reliability matters most?"
+    shortAnswer: "Visibility under partial failure. A tweet not appearing in feeds is worse than a slow load — users assume the system is broken. Twitter heavily prioritizes 'feed shows something fresh' over 'feed shows everything perfectly'."
+    detailed: |
+      A degraded mode that returns partial feeds is better than an error page. Twitter's architecture leans into graceful degradation: if the celebrity merge step is slow, return the precomputed portion; if a feed shard is down, return what's available with a marker.
+
+      That's a maintainability + reliability stance — the system has explicit, designed fallback behaviors. They're harder to build than a single happy path, but they're what keep the product feeling alive during incidents.
+    pitfalls:
+      - "Graceful degradation has to be exercised. If it's never tested, it doesn't work when needed."
+  - question: "How does the timeline architecture interact with caching?"
+    shortAnswer: "Heavily. Pre-materialized feeds are themselves a cache of the join. On top of that, Redis-backed home timeline caches absorb most reads. The cache hierarchy is the actual machine doing read throughput; the database mostly serves cold and tail traffic."
+    detailed: |
+      Conceptually the feed is a big join: tweets × follows. Twitter materializes the join (fan-out on write) and caches the result. Most timeline loads never touch the storage tier — they hit Redis caches that hold recent timelines.
+
+      The implication: the database is sized for cold loads and replication, not for steady-state read throughput. That's an architectural pattern you'll see in every consumer app at scale — caching tiers do the bulk work, the database is the source of truth.
+    pitfalls:
+      - "Cache invalidation is the hard part — when a tweet is deleted, every cached timeline that contains it needs to know."
+  - question: "What would Kleppmann want you to notice about the percentiles in this system?"
+    shortAnswer: "Celebrity write fan-out is what creates Twitter's tail latency. The slow p99 on a 'post tweet' API isn't a random tail — it's predictably the high-follower-count users, every time. Knowing that lets you optimize the right code path."
+    detailed: |
+      Tail latency on Twitter's write path is not random noise. It's concentrated in a specific class of writers. Once you identify that, you can target optimizations: async fan-out, batching, sharding celebrities differently.
+
+      This is the broader lesson the book wants you to take from Chapter 1: percentiles describe what users experience, but you have to dig into *what causes* the tail to actually fix it. Tail latency without root cause analysis is a number, not a plan.
+    pitfalls:
+      - "p99 reports without a hypothesis about what's in the tail are observability theater."
+---
+
+<TldrCallout>
+  The book opens with Twitter's home timeline because every key Chapter-1 idea is alive in it: load
+  parameters that aren't throughput, percentiles that aren't averages, and a tradeoff (fan-out on
+  write vs. read) where the obvious answer turns out to be wrong because of the *shape* of the data
+  — specifically, celebrities. The production answer is a hybrid that nobody draws on a whiteboard
+  until they've felt the pain.
+</TldrCallout>
+
+## The system, at a glance
+
+Twitter has two operations that dominate load: posting a tweet and viewing the home timeline. In the book's snapshot, that's roughly 4.6k tweets/sec average (12k peak) and 300k timeline reads/sec — about a 100:1 read-to-write ratio.
+
+Every user follows some set of accounts. Their home timeline is, conceptually, "the latest tweets from everyone I follow, ordered by time". That's a join — tweets × follows — that has to feel instant.
+
+## The naive design (fan-out on read)
+
+Store tweets in one table. When a user loads their feed:
+
+```sql
+SELECT * FROM tweets
+WHERE author_id IN (SELECT followee FROM follows WHERE follower = $me)
+ORDER BY time DESC LIMIT 100
+```
+
+Posting a tweet is one insert. Loading a feed is a big join. Tweets are cheap to produce; feeds are expensive to consume.
+
+**Why it fails.** Reads happen 100× more than writes. Every feed load triggers a substantial join, and the database starts spending all its capacity on the same queries over and over.
+
+## The first optimization (fan-out on write)
+
+When a user posts a tweet, push it into a precomputed "home timeline" for each of their followers — usually a per-user list in Redis. Reads become a single key lookup. Writes are expensive — proportional to follower count.
+
+**Why it nearly works.** At average follower counts (~150), 4.6k tweets/sec × 150 followers = 690k follower-timeline writes/sec. Acceptable.
+
+**Why it still breaks.** Justin Bieber tweets. He has 30 million followers. One tweet → 30 million inserts, often clustered within seconds because the system tries to deliver in near-real-time. Every celebrity tweet pegs the fan-out pipeline; bursty traffic (events, breaking news) compounds the problem.
+
+## The production design (hybrid)
+
+Twitter's real architecture, as Kleppmann describes it:
+
+- **Normal users (fan-out on write):** every follower gets the tweet pushed into their cached home timeline. Cheap to read.
+- **Celebrity users (fan-out on read):** their tweets are _not_ fanned out at write time. They live in the celebrity's own posts table.
+- **At read time:** a user's home timeline = their precomputed timeline + a live query of any celebrities they follow, merged by timestamp.
+
+The threshold for 'celebrity' is a tuning parameter — somewhere around millions of followers, the cost of write fan-out exceeds the cost of read-time merge.
+
+<WorkedExample title="What changed when Twitter went hybrid">
+
+**The problem.** A celebrity tweets at 8pm GMT. In the pure fan-out-on-write model, this triggers 30 million inserts in the next ~30 seconds. The fan-out pipeline backs up. Normal users' tweets get delayed behind the celebrity backlog. The system feels slow for everyone, not just celebrity followers.
+
+**The fix.** Celebrity tweets skip the fan-out queue. They land in the celebrity's posts table immediately. Followers see them only when they load their feed (read-time merge).
+
+**The cost.** Read latency for users who follow many celebrities goes up — they're now doing N small queries per feed load instead of one. Twitter accepts this because it's predictable and bounded; pre-materialization for those users would be worse for everyone else.
+
+**What this means for the model.** The architecture stops being a single design and becomes a tiered one based on the _shape_ of the writer. That's the broader DDIA lesson: scaling architectures often stratify rather than scale uniformly.
+
+</WorkedExample>
+
+## Mapping to the concept lesson
+
+| Concept lesson idea                         | How it shows up here                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| Load parameters aren't throughput           | The architectural pivot is driven by fan-out distribution, not tweets/sec |
+| Percentiles over averages                   | Tail latency on the post path is concentrated in high-follower writers    |
+| Hardware vs software vs human faults        | The fan-out queue is a software-fault hotspot during traffic spikes       |
+| Graceful degradation as reliability         | Feeds return partial results when the celebrity-merge step is slow        |
+| Maintainability through clear failure modes | The hybrid is more code, but every code path has a predictable cost model |
+
+## What you'd take to an interview
+
+If asked "design Twitter's feed", the answer isn't fan-out on write or fan-out on read. It's:
+
+1. State the load parameters (read:write ratio, fan-out distribution).
+2. Argue why neither pure model is sufficient.
+3. Propose the hybrid, with a tunable threshold.
+4. Acknowledge the caching tier doing the real read throughput work.
+5. Call out graceful degradation as the reliability story.
+
+That's the level of nuance Chapter 1 is trying to install.
+
+<InlineQuiz
+  question="Twitter posts have a tail-latency spike on a 'post tweet' API. Investigation shows it correlates with high-follower-count authors. Which fix is most aligned with how Twitter actually solved this?"
+  options={[
+    { text: "Add more replicas to the write database." },
+    {
+      text: "Skip fan-out on write for high-follower accounts; serve their tweets via read-time merge.",
+      correct: true,
+    },
+    { text: "Switch the database to an LSM-tree." },
+    { text: "Increase the Redis cache size." },
+  ]}
+  explanation="The tail isn't random — it's predictably caused by celebrity write fan-out. Adding replicas or caching doesn't change the fundamental cost: one tweet triggers millions of writes. The architectural fix is to recognize that celebrity tweets shouldn't go through the fan-out pipeline at all. Their tweets land in a read-time-merged path. That's the production answer the book describes, and it's the move every 'reads dominate but a few writers are huge' system eventually makes."
+/>
+
+<PitfallsCallout
+  items={[
+    "Treating fan-out on write as universally better. It works for the average user and fails for outliers.",
+    "Forgetting the cache tier. The database isn't carrying the read load — Redis is.",
+    "Picking a static celebrity threshold. The distribution shifts; the threshold has to be revisited.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 1 (the Twitter example, pp. 11–14).

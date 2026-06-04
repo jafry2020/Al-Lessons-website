@@ -1,0 +1,213 @@
+---
+title: "Case study: Bank transfers and the ACID story"
+description: "The book's canonical transaction example. Why money is the textbook case for ACID, and what real banks do when the numbers don't fit in one database."
+track: system-design
+trackLabel: "System Design Foundations"
+module: transactions
+moduleLabel: "Module 7 · Transactions"
+lesson: bank-transfers-case-study
+lessonCode: "S7.2"
+estMinutes: 30
+prereqs:
+  - "S7.1 Transactions and isolation levels"
+objectives:
+  - "Trace a bank transfer through atomicity, isolation, and durability failures and the bugs each one prevents."
+  - "Explain why money is the textbook ACID case and where real banks diverge from textbook patterns."
+  - "Distinguish synchronous distributed transactions (2PC) from event-driven sagas and idempotent designs."
+  - "Identify when 'eventual consistency with reconciliation' is acceptable for financial data."
+pitfalls:
+  - "Believing real banks all use 2PC. Most don't — they use idempotent operations + reconciliation."
+  - "Skipping isolation level analysis because 'we use a transaction'. Read Committed under contention still corrupts."
+  - "Building a retry loop without idempotency keys. Double-charges follow."
+importantQuestions:
+  - question: "Why is the bank transfer the canonical ACID example?"
+    shortAnswer: "Every failure mode shows up clearly: atomicity (partial transfer = lost money), isolation (concurrent transfers = overdraw), durability (crash after commit = forgotten transfer), consistency (sum of balances must be invariant). A simple transfer exercises all four."
+    detailed: |
+      Move $100 from account A to account B. Two updates: `A -= 100`, `B += 100`. The system invariant: total money in the system is conserved.
+
+      Atomicity: if the database crashes after `A -= 100` but before `B += 100`, money disappeared. The transaction must either apply both updates or neither.
+
+      Isolation: two concurrent transfers from A could both check that A has enough money (it does, separately), both proceed, and overdraw A. The reads have to be coordinated with the writes — Snapshot Isolation isn't enough; Serializable is.
+
+      Durability: if the database returns 'committed' and then crashes, the write must survive — to disk, ideally also replicated.
+
+      Consistency: the application invariant (money conserved) holds at every committed state. Foreign-key constraints can enforce part; the rest is the application's job.
+
+      One operation. Four guarantees. Each one's failure mode is a recognizable real-world bug.
+    pitfalls:
+      - "ACID guarantees apply within one database. Cross-database transfers don't get any of them for free."
+  - question: "Do real banks actually use multi-database 2PC?"
+    shortAnswer: "Rarely for high-volume operational systems. They use idempotent operations, message queues, and reconciliation — accept that books temporarily disagree, and have a process to catch and fix discrepancies. 2PC's coordinator-failure modes are too risky at scale."
+    detailed: |
+      Two-phase commit gives you cross-database atomicity, but introduces a coordinator. If the coordinator crashes mid-second-phase, participants hold locks indefinitely (in-doubt transactions). Recovering requires either a reliable coordinator (which is hard) or manual intervention.
+
+      At payment-network scale (Visa, PayPal, Stripe), the standard pattern is different: the operations are designed to be idempotent (a retry can't double-charge), each step is logged, and a reconciliation job runs daily to find and fix mismatches. The bank that's $0.32 short and the bank that's $0.32 long get rebalanced.
+
+      That's eventual consistency for ledgers — heretical-sounding but operationally tractable. The invariant (every transfer is eventually applied exactly once) holds in the long run, not the millisecond.
+    pitfalls:
+      - "Calling a non-idempotent endpoint twice and relying on transactions to deduplicate. Without idempotency keys, retries cause double-charges."
+  - question: "Where do banks use serializable transactions internally?"
+    shortAnswer: "On the core ledger database for a single account or related set of accounts that fit in one database. PostgreSQL or DB2 with Serializable Snapshot Isolation handles per-account concurrency. Cross-account, cross-region transfers move to the idempotent + reconciliation model."
+    detailed: |
+      A single account's debits and credits all hit the same row. Concurrent debits need atomic balance check + decrement — exactly the lost-update scenario that needs Snapshot Isolation + first-committer-wins or Serializable.
+
+      Within one database — even a partitioned one as long as the relevant accounts live in the same partition — Serializable transactions are achievable and used.
+
+      Once a transfer crosses databases (different banks, different regions, different services in a microservice mesh), you can't keep it serializable without a distributed transaction. Distributed transactions are slow and brittle. The alternative — idempotent messaging — is what production systems use.
+    pitfalls:
+      - "Designing a microservice architecture that requires distributed transactions for normal operations. That's a design smell."
+  - question: "What is the transactional outbox pattern?"
+    shortAnswer: "Write the business state change AND an outbox event in the same local transaction. A background worker reads the outbox and publishes the event to Kafka/SQS. Guarantees the event is sent if and only if the state change committed — atomicity across database and message bus, without 2PC."
+    detailed: |
+      The naive 'dual write' bug: update the database, then publish a Kafka message. If the publish fails, the database has changed but no one downstream knows. Conversely, if the publish succeeds but the database commit fails, the message lies about state that doesn't exist.
+
+      Outbox: the database update and the outbox insert are one local transaction. After commit, a worker process polls the outbox table, publishes each event, marks it published. If the worker dies, events are re-published — consumers must be idempotent.
+
+      This is the pattern that lets you build event-driven architectures without 2PC. It's how Stripe, Shopify, and most payment systems propagate state changes today.
+    pitfalls:
+      - "Skipping the outbox and doing dual writes. Eventually a network blip will cause divergence."
+  - question: "How do idempotency keys work in practice?"
+    shortAnswer: "The client generates a unique key per operation. The server checks if it's seen the key before; if so, returns the cached result instead of re-executing. Retries become safe — the same key always gets the same outcome."
+    detailed: |
+      Stripe's API requires an idempotency key for any mutating call. The server stores (key → response) for 24 hours. If a retry arrives with the same key, the server returns the previously-computed response, even though the request body is identical.
+
+      The key has to be generated by the client per logical operation. Two charges for the same cart in the same session should use the same key — they're 'the same operation' even if the network glitches.
+
+      Combined with the outbox pattern, idempotency keys give you exactly-once semantics from the user's perspective: each operation has one effect, even though the underlying delivery is at-least-once.
+    pitfalls:
+      - "Auto-generating idempotency keys per HTTP request. Defeats the purpose — the client has to mean 'this is the same operation'."
+---
+
+<TldrCallout>
+  The bank transfer is the textbook ACID story — atomicity, isolation, durability, and the
+  application's consistency invariant all show up clearly. Within one database, a serializable
+  transaction is the correct answer. Across databases and services, real-world payments use
+  idempotent operations, the transactional outbox pattern, and daily reconciliation instead of 2PC.
+  The lesson isn't "always use transactions"; it's "match the guarantees you need to the
+  architecture, and don't pretend the boundary doesn't exist".
+</TldrCallout>
+
+## The classic transfer
+
+Move $100 from A to B. The pseudocode:
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = balance - 100 WHERE id = 'A';
+UPDATE accounts SET balance = balance + 100 WHERE id = 'B';
+COMMIT;
+```
+
+Run inside a single database with Serializable isolation, this is correct. Atomicity ensures both updates land or neither. Isolation prevents two concurrent transfers from overdrawing A. Durability ensures the commit survives a crash.
+
+Take any one of those guarantees away and a specific bug appears:
+
+- **No atomicity:** crash between the two UPDATEs → money disappears from A but never appears at B.
+- **No isolation (e.g., Read Committed under contention):** two concurrent transfers from A both check balance ≥ 100, both proceed, A goes negative.
+- **No durability:** commit returns success, server crashes, write is lost on restart.
+
+That's why the bank transfer is the canonical ACID example. It exercises every guarantee under realistic failure modes.
+
+## Within one database: Serializable
+
+When all the accounts involved live in one PostgreSQL instance, the answer is straightforward: use a real transaction with Serializable isolation (PostgreSQL's SSI). Concurrent transfers that conflict get one of them aborted with a `serialization_failure`; the application retries.
+
+The application code has to be ready for retries — a transaction body that's not idempotent breaks on retry. Most application frameworks have wrappers for this.
+
+CockroachDB and Spanner extend this model across geographically distributed nodes — Serializable transactions with consensus-backed commits. Slower per transaction, but the application code is unchanged.
+
+## Across databases: the real-world pattern
+
+A transfer from Bank X to Bank Y can't run in one transaction — they're separate companies, separate databases, separate networks. Even within one company's microservices, putting two services in a single transaction couples them and introduces coordinator failure modes.
+
+The production pattern looks more like this:
+
+<WorkedExample title="A $100 transfer across two services">
+
+**The setup.** Service A owns the source account. Service B owns the destination. They communicate via Kafka. The user sends a transfer request to a Payments service.
+
+**Step 1 — Idempotency key.** Payments generates a unique key for this transfer (or accepts one from the client). All subsequent operations carry the key.
+
+**Step 2 — Source debit.** Payments calls Service A: "debit $100 from account A, idempotency key K". Service A:
+
+- Looks up key K in its idempotency table. If found, return the cached result (this is a retry).
+- Otherwise, in one local transaction: decrement the balance, insert an outbox row "transfer K: A debited $100", store (K → success) in the idempotency table.
+- A background worker reads the outbox and publishes a `transfer.debited` event to Kafka.
+
+**Step 3 — Destination credit.** A consumer in Service B reads the `transfer.debited` event:
+
+- Look up key K. If already processed, ack and move on.
+- Otherwise, in one local transaction: increment balance for account B, insert an idempotency record for K.
+- Publish a `transfer.credited` event.
+
+**Step 4 — The unhappy path.** If anything fails (Service A debit succeeds, B is down): the outbox keeps the event. When B comes back, it processes; eventually the credit lands. The user is told 'pending' until the credit confirms.
+
+**Step 5 — Reconciliation.** Daily, a job sums all debits and credits for the day. If they don't match, an alert fires and humans investigate. In practice the mismatches are tiny edge cases — but you check, because money.
+
+**The point.** No distributed transaction. No 2PC. Every step is idempotent. State propagates via the outbox. Eventually-consistent, with reconciliation as the safety net.
+
+</WorkedExample>
+
+## The transactional outbox
+
+<GlossaryTerm
+  term="Transactional outbox"
+  definition="A pattern where business state changes and outbound events are written in the same local database transaction. A background process reads the outbox and publishes events. Avoids dual-write inconsistency without requiring two-phase commit."
+>
+  Transactional outbox
+</GlossaryTerm>
+solves the 'I wrote to the database AND published to Kafka, but only one succeeded' problem.
+
+Without it, you have a 'dual write' — two separate operations that should be atomic but aren't. Network blips will eventually cause divergence: the database has the change but Kafka doesn't, or vice versa.
+
+With the outbox, the database write and the outbox insert are one local transaction. Either both happen or neither does. The publisher worker may publish the same event twice (under retry), but consumers handle that via idempotency.
+
+The pattern shows up everywhere — Stripe, Shopify, Square, virtually every payment system uses some flavor of it.
+
+## Idempotency keys
+
+<GlossaryTerm
+  term="Idempotency key"
+  definition="A client-supplied unique identifier for a mutating operation. The server stores (key → response) and returns the cached response if the same key is seen again. Lets retries be safe — the same logical operation has the same effect no matter how many times it's delivered."
+>
+  Idempotency keys
+</GlossaryTerm>
+are how clients say 'this is the same operation'. They're not per HTTP request — they're per logical
+operation. A retry of a payment uses the same key; a different payment uses a different key.
+
+The server stores (key → response) for some window (Stripe: 24 hours). A subsequent request with the same key returns the stored response without re-executing the side effect. The user's experience is exactly-once, even though the network protocol is at-least-once.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea                    | How it shows up here                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| Atomicity                              | What protects against partial transfers within a database                          |
+| Isolation level matters                | Serializable is the right choice for ledger updates within one DB                  |
+| Lost update                            | Two concurrent debits without proper isolation cause it                            |
+| Distributed transactions are expensive | Real systems work around them with outbox + idempotency                            |
+| Application-defined consistency        | The "money conserved" invariant is enforced by application logic, not the database |
+
+<InlineQuiz
+  question="A microservice debits an account, then publishes a Kafka event so a downstream service can record the entry. The network occasionally drops the Kafka publish. Sometimes the database has a debit recorded but no corresponding event was sent. What's the right fix?"
+  options={[
+    { text: "Use two-phase commit across the database and Kafka." },
+    {
+      text: "Write the debit and the outbound event in the same local database transaction (transactional outbox); a worker publishes the events asynchronously.",
+      correct: true,
+    },
+    { text: "Publish to Kafka first, then write to the database." },
+    { text: "Catch the publish failure and roll back the database transaction." },
+  ]}
+  explanation="This is the classic dual-write problem. 2PC across a relational DB and Kafka is technically possible but operationally painful — Kafka doesn't natively participate in XA transactions, and coordinator failure leaves in-doubt state. Publishing first then writing creates the inverse problem: events for state that doesn't exist. Catching publish failure and rolling back doesn't help if the publish *appeared* to fail but actually succeeded. The transactional outbox is the production answer: both writes are atomic within the database, and publication happens later from durable state. Consumers must handle duplicate events (idempotency), which is fine."
+/>
+
+<PitfallsCallout
+  items={[
+    "Assuming production payments use 2PC. They mostly don't.",
+    "Skipping idempotency keys on retry-able operations. Double-charges are a memorable user experience.",
+    "Reaching for distributed transactions when an outbox would do.",
+    "Treating reconciliation as optional. Even with careful idempotency, edge cases happen — the reconciliation job is what catches them.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 7 (bank transfers throughout; the unreliable-clocks discussion in Chapter 8 also bears on cross-database transfers).

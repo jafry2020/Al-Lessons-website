@@ -1,0 +1,238 @@
+---
+title: "How databases actually store and find your data"
+description: "From an append-only log to B-trees and LSM-trees. The two storage families that power every database you've heard of — and why each one wins different workloads."
+track: system-design
+trackLabel: "System Design Foundations"
+module: storage
+moduleLabel: "Module 3 · Storage & Retrieval"
+lesson: storage-and-retrieval
+lessonCode: "S3.1"
+estMinutes: 55
+prereqs:
+  - "S2.1 Data models and query languages"
+objectives:
+  - "Explain why an append-only log is the simplest useful database and what it costs you."
+  - "Describe how a hash index turns O(n) scans into O(1) lookups."
+  - "Compare B-trees and LSM-trees by write amplification, read amplification, and workload fit."
+  - "Distinguish OLTP from OLAP and explain why column-oriented storage exists."
+pitfalls:
+  - "Assuming all databases use B-trees. Cassandra, RocksDB, LevelDB, and ScyllaDB are LSM-tree."
+  - "Confusing 'index' with 'sorted'. A hash index is fast but doesn't support range queries."
+  - "Picking a row-oriented database for analytics. Column stores can be 100× faster on aggregates."
+importantQuestions:
+  - question: "Why is an append-only log a real database design and not a toy?"
+    shortAnswer: "Appending to the end of a file is the fastest write a disk can do — sequential writes are 1000× faster than random ones. Real systems (Kafka, write-ahead logs, LSM-tree WALs) are built on exactly this primitive."
+    detailed: |
+      Random writes pay seek cost. Sequential writes don't. A spinning disk that can do 100 random writes/sec can do tens of thousands of sequential writes/sec. SSDs narrow the gap but don't eliminate it — and they also wear out faster under random writes.
+
+      The append-only log gives you ridiculous write throughput for free. The downsides are (1) lookups require scanning the whole log unless you build an index, and (2) the log grows unbounded unless you periodically compact it.
+
+      Both downsides have well-understood solutions. That's why every serious storage engine has a log somewhere inside it — as the write-ahead log of a B-tree, or as the foundation of an LSM-tree.
+    pitfalls:
+      - "An append-only log isn't an immutable log — you do delete eventually, via compaction."
+  - question: "Hash indexes are fast — why doesn't every database use them?"
+    shortAnswer: "Hash indexes assume the whole index fits in RAM. They give O(1) lookup of a single key but can't answer range queries — 'all users with age > 30' isn't expressible. B-trees and SSTables sort the data, which costs more on writes but enables ranges."
+    detailed: |
+      Bitcask (the storage engine in Riak) uses a hash index exactly as described. Every key maps to an offset in the log; lookups are one in-memory hash probe plus one disk seek. Writes are an append + a hash update.
+
+      The catch is RAM. Bitcask requires all keys to fit in memory. For a billion-key workload that's hundreds of GB just for the index, before you store any values. And because hash maps are unordered, you can't ask "give me all keys between X and Y".
+
+      Sorted structures (B-trees, SSTables) trade some lookup cost for range queries and unbounded key spaces. Most general-purpose databases pick that tradeoff.
+    pitfalls:
+      - "Hash indexes can be a great fit for caches and key-value stores with bounded key sets — but the assumptions matter."
+  - question: "B-tree vs LSM-tree — what's the actual difference?"
+    shortAnswer: "B-trees update data in place; LSM-trees write everything as a new file and merge periodically. B-trees win on reads, LSM-trees win on writes. The right choice depends on whether your workload is read-heavy or write-heavy."
+    detailed: |
+      B-trees keep a sorted, balanced tree of pages. Inserting a key finds its page, writes it in place, and propagates splits if the page is full. Lookups are O(log n). The write-ahead log protects against crashes mid-write.
+
+      LSM-trees buffer writes in memory (the memtable), flush them to immutable sorted files (SSTables), and merge files together in the background (compaction). Writes are sequential and fast. Lookups have to check the memtable plus several SSTables, so reads pay a tax.
+
+      Cassandra, RocksDB, LevelDB, HBase, ScyllaDB are LSM-tree. PostgreSQL, MySQL InnoDB, SQLite, Oracle, SQL Server are B-tree. Modern systems sometimes mix — InnoDB has change buffering, RocksDB has bloom filters to cut LSM read amplification.
+    pitfalls:
+      - "LSM-trees can spike CPU and IO during compaction — capacity planning needs to account for the merge cost."
+      - "B-trees can suffer from page-internal fragmentation; periodic VACUUM or rebuilds keep them healthy."
+  - question: "Why do data warehouses use column-oriented storage?"
+    shortAnswer: "Analytics queries usually touch many rows but few columns. Storing data by column lets the engine read only the columns it needs and compress them aggressively (because adjacent values are similar). The result is 10–100× speedups on aggregate queries."
+    detailed: |
+      A row store keeps each row's fields contiguous. A column store keeps each column's values contiguous. For a query like `SELECT avg(price) FROM orders WHERE region = 'US'`, the column store reads only two columns (price, region) and skips everything else. The row store reads every row in full.
+
+      Column storage also compresses better. Within a column, values are the same type and often repeat. Dictionary encoding, run-length encoding, and bit-packing can shrink a column 10× or more.
+
+      That's why Snowflake, BigQuery, Redshift, ClickHouse, and DuckDB use column stores — they're built for OLAP, not for serving transactional reads.
+    pitfalls:
+      - "Column stores are bad at point updates. Updating one row touches every column file. They're designed for batch loads."
+  - question: "OLTP and OLAP — why are they separated?"
+    shortAnswer: "OLTP serves application requests — many small reads and writes against fresh data. OLAP serves analytics — fewer queries, each touching huge data ranges. The access patterns are so different that they want opposite storage layouts, hardware, and SLAs."
+    detailed: |
+      OLTP (online transaction processing) is the database behind your app. Each query reads or writes a handful of rows; latency matters; correctness under concurrency matters; the working set fits in memory; throughput is dominated by random IO.
+
+      OLAP (online analytical processing) is the database behind your dashboards. Each query touches millions of rows; latency budget is seconds or minutes; concurrency is low; data is mostly read; throughput is dominated by sequential scans.
+
+      Trying to serve both from the same database means each query type gets in the other's way. The standard answer is to ETL transactional data into a separate analytics warehouse — and now your analyses don't slow down your checkout flow.
+    pitfalls:
+      - "Running heavy analytics directly on your production OLTP DB is the most common way to take down production."
+      - "Real-time analytics is increasingly closing the gap (HTAP systems, materialized views), but the separation is still the default."
+---
+
+<TldrCallout>
+  Every database is, underneath, one of two storage shapes. *B-trees* update data in place inside a
+  sorted tree — fast reads, slower writes. *LSM-trees* batch writes into memory, flush sorted files,
+  and merge them later — very fast writes, slower reads. On top of those primitives, *column stores*
+  flip the layout for analytics. Knowing which shape you have explains a database's performance
+  profile better than its name does.
+</TldrCallout>
+
+## The simplest possible database
+
+Open a file. Append `key,value` lines to it. To look up a key, scan the file from top to bottom and return the last matching value. To delete, append a tombstone.
+
+That's it. It's slow to read (O(n)) but stupidly fast to write — sequential disk IO is what storage hardware does best.
+
+<GlossaryTerm
+  term="Append-only log"
+  definition="A file you only ever add to, never edit in place. Writes are O(1) sequential. Reads need an index. Forms the foundation of LSM-trees, Kafka, write-ahead logs, and event sourcing."
+>
+  Append-only logs
+</GlossaryTerm>
+are the foundation of more sophisticated engines. Kafka is one. Postgres's write-ahead log is one.
+RocksDB's WAL is one. The idea is older than databases.
+
+## Adding an index
+
+To avoid scanning, build a
+
+<GlossaryTerm
+  term="Hash index"
+  definition="An in-memory map from key to byte offset in the log file. O(1) lookup, but the whole index must fit in RAM, and it can't answer range queries (the keys aren't sorted)."
+>
+  hash index
+</GlossaryTerm>
+: an in-memory map from key to byte offset. Lookups become one memory probe + one disk seek. That's
+the design behind Bitcask (the Riak storage engine).
+
+The price: every key has to fit in RAM, and you can't ask "give me all keys between A and M" because the index isn't sorted. The next two structures fix that.
+
+<SDStorageEngineSim />
+
+## LSM-trees: write-optimized
+
+<GlossaryTerm
+  term="SSTable"
+  definition="Sorted String Table. An immutable file of key-value pairs, sorted by key. SSTables are the unit of storage in LSM-tree systems."
+>
+  SSTables
+</GlossaryTerm>
+are sorted, immutable files of key-value pairs. You can merge two sorted files in linear time (just
+like mergesort), and you can binary-search within one. Both are essential to the LSM-tree.
+
+<GlossaryTerm
+  term="LSM-tree"
+  definition="Log-Structured Merge tree. Writes go to an in-memory memtable, flush to immutable sorted SSTables on disk, and compaction merges SSTables in the background. Optimized for write throughput. Used by Cassandra, RocksDB, LevelDB, HBase."
+>
+  LSM-trees
+</GlossaryTerm>
+combine sorted files with the append-only-log idea. Writes hit a memtable (a sorted in-memory
+structure). When the memtable is full, it's flushed to disk as an immutable SSTable. Background
+compaction merges old SSTables together, throwing away superseded values.
+
+Reads check the memtable first, then each SSTable in age order until they find the key. Bloom filters cut the read amplification — they tell you quickly when a key is definitely _not_ in an SSTable, so you can skip it.
+
+Writes are sequential and fast. Reads pay for the layered lookup. This shape wins under heavy write workloads — time-series, telemetry, event ingestion.
+
+## B-trees: read-optimized
+
+<GlossaryTerm
+  term="B-tree"
+  definition="A balanced search tree of fixed-size pages stored on disk. Lookups, inserts, and range queries are O(log n). The default storage layout for traditional databases — PostgreSQL, MySQL InnoDB, SQLite, Oracle."
+>
+  B-trees
+</GlossaryTerm>
+are the older design. Disk is divided into fixed-size pages. Pages are arranged in a balanced tree,
+sorted by key. To find a key, walk from the root down through ~log n pages. To insert, find the
+right page, modify it in place; if the page is full, split it.
+
+Modifications happen _in place_. That's a difference from LSM-trees, and it has consequences:
+
+- If the database crashes mid-page-split, the tree is corrupt. Hence the write-ahead log: durable record of every change before it's applied.
+- Random writes pay seek cost. B-trees can be slower than LSM-trees on write-heavy workloads.
+- Reads are simple and predictable — one walk down the tree, no checking multiple files.
+
+<WorkedExample title="B-tree vs LSM-tree: which one wins?">
+
+**The problem.** You're storing 10,000 IoT sensor readings per second, each ~200 bytes. Reads are infrequent — analysts pull recent hours of data into dashboards.
+
+**The naive approach.** Use the database you know — PostgreSQL, a B-tree-based system. It works for a while, but writes start to feel sluggish at peak load. Index maintenance, page splits, and WAL pressure compound.
+
+**Why it breaks.** Every insert is a random write into a B-tree page (or several pages — primary key + secondary indexes). Sequential ingest patterns help, but you're still paying for in-place updates.
+
+**The real solution.** Switch to Cassandra or RocksDB. LSM-trees batch writes in memory and flush sequentially. The same 10k writes/sec workload runs comfortably on smaller hardware. Reads pay slightly more, but analysts don't care about millisecond differences.
+
+**The tradeoff.** LSM-trees give up read latency consistency for write throughput. They also need careful compaction tuning — bad settings can cause CPU spikes or write stalls. There's no free lunch; you're picking which axis to be best on.
+
+</WorkedExample>
+
+## OLTP vs OLAP
+
+<GlossaryTerm
+  term="OLTP"
+  definition="Online Transaction Processing. Application-facing workloads — many small queries against fresh data, latency-sensitive, correctness under concurrency. Row-oriented storage; B-tree or LSM-tree engines."
+>
+  OLTP
+</GlossaryTerm>
+serves the application. Each query touches few rows; latency must be low; concurrency is high;
+writes and reads are mixed.
+
+<GlossaryTerm
+  term="OLAP"
+  definition="Online Analytical Processing. Analytics workloads — fewer queries, each scanning millions of rows for aggregates. Latency budget in seconds. Column-oriented storage; ETL pipelines from OLTP."
+>
+  OLAP
+</GlossaryTerm>
+serves analytics. Queries are few but huge — aggregating across millions of rows. Latency tolerance
+is seconds. Data is mostly read, loaded in batches.
+
+The access patterns are so different that they want opposite storage layouts. The standard answer is to keep them separate: an OLTP database for the application, an ETL or change-data-capture pipeline that feeds an OLAP warehouse for analysts.
+
+## Column-oriented storage
+
+A row store keeps each row's fields next to each other on disk. A
+
+<GlossaryTerm
+  term="Column-oriented storage"
+  definition="A layout where each column is stored contiguously rather than each row. Reads only touch columns the query mentions, and within-column compression is dramatic. The default for analytics warehouses — Snowflake, BigQuery, Redshift, ClickHouse, DuckDB."
+>
+  column store
+</GlossaryTerm>
+keeps each column's values next to each other. For a query like `SELECT avg(price) FROM orders WHERE
+region = 'US'`, only two columns are read. The other 30 columns aren't touched.
+
+Column stores also compress brilliantly. Within a column, values are the same type and often repeat. Dictionary encoding + bit-packing + run-length encoding can shrink a column 10× or more. The combination of selective reads and aggressive compression is what gives column stores their 10–100× speedup on analytic queries.
+
+<AnalogyCallout>
+  A row store is a library where each book contains a single person's entire life — easy to read
+  about one person, awful to count how many people in town were born in March. A column store is a
+  library where each book is one field — "everyone's birthday" is its own book. Asking how many
+  March birthdays exist is now a single book scan.
+</AnalogyCallout>
+
+<InlineQuiz
+  question="Your team is choosing a database for a workload doing 10,000 writes per second of sensor data, with occasional analytical reads. Which storage shape is the better default?"
+  options={[
+    { text: "B-tree (PostgreSQL, MySQL) — reads will be faster." },
+    { text: "LSM-tree (Cassandra, RocksDB) — writes are the dominant cost.", correct: true },
+    { text: "Column store (ClickHouse) — to support the analytical reads." },
+    { text: "Hash index (Bitcask) — sensor IDs are small." },
+  ]}
+  explanation="The bottleneck is write throughput. LSM-trees turn random writes into sequential ones via memtables + SSTable flushes, which is exactly what you want at 10k writes/sec. B-trees would maintain indexes on every write, paying seek costs. Column stores are great for analytics but bad at point inserts. A hash index would need all keys in RAM forever — not a good fit for unbounded sensor IDs."
+/>
+
+<PitfallsCallout
+  items={[
+    "Assuming the database you know is the right tool. Write-heavy and analytics workloads often want different engines.",
+    "Forgetting that LSM-trees do background compaction work — capacity-plan for it.",
+    "Pointing analytic queries at the OLTP database. The CPU bill will arrive as a stalled checkout flow.",
+    "Reaching for column storage on a transactional app. Point updates will be miserable.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 3.

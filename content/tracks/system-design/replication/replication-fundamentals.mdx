@@ -1,0 +1,224 @@
+---
+title: "Replication: keeping copies in sync"
+description: "Leader-follower, multi-leader, leaderless. Why every approach to replication is a trade between latency, durability, and consistency."
+track: system-design
+trackLabel: "System Design Foundations"
+module: replication
+moduleLabel: "Module 5 · Replication"
+lesson: replication-fundamentals
+lessonCode: "S5.1"
+estMinutes: 55
+prereqs:
+  - "S4.1 Encoding and schema evolution"
+objectives:
+  - "Name the three reasons we replicate and pick the right replication topology for a workload."
+  - "Trace synchronous vs asynchronous replication and the durability/latency tradeoff."
+  - "Explain replication lag and the 'reading your own writes' anomaly with a concrete fix."
+  - "Compare multi-leader and leaderless replication on conflict handling."
+pitfalls:
+  - "Treating replication as a backup. It isn't — replicated writes can also be replicated mistakes."
+  - "Assuming a follower is up to date because the leader said the write committed."
+  - "Picking multi-leader because the diagrams look symmetric. Conflict resolution is genuinely hard."
+importantQuestions:
+  - question: "Why replicate at all?"
+    shortAnswer: "Three reasons: fault tolerance (a node can die), latency (put data near the user), and throughput (spread reads across copies). Different goals push you toward different topologies."
+    detailed: |
+      Fault tolerance: if you have one copy of the data and the disk fails, you've lost the data. Two copies — preferably in different failure domains — buys you survival.
+
+      Latency: a user in Singapore should not be reading from a US datacenter. Replicas near readers cut round-trip time.
+
+      Read throughput: a single node can only serve so many queries per second. With N read replicas, you have N× the read capacity.
+
+      Note what's missing: write throughput. Replication doesn't scale writes — every write still has to land on every replica. For write throughput you need partitioning, the next module.
+    pitfalls:
+      - "Replication helps reads, not writes."
+  - question: "What's the leader-follower replication model?"
+    shortAnswer: "One node is the leader; all writes go there. The leader streams its changes to followers. Reads can come from any replica. It's the simplest topology and the default for PostgreSQL, MySQL, MongoDB, and most managed databases."
+    detailed: |
+      Concretely: when a client writes, the leader applies the change to its local storage, logs the change, and ships it to followers. Followers apply the same changes in order, asynchronously.
+
+      Reads against the leader are always up to date. Reads against followers may lag. Choosing where to read is the central application-level decision.
+
+      Failure handling: if a follower dies, no problem — promote it later. If the leader dies, you need a *failover* — a new leader elected from the followers, with risk of split-brain if the old leader is still alive but unreachable.
+    pitfalls:
+      - "Failover is the dangerous moment. Two writeable leaders during a transition cause data divergence."
+  - question: "Synchronous vs asynchronous replication — what's the real tradeoff?"
+    shortAnswer: "Synchronous: the leader waits for followers to acknowledge before confirming the write. Strong durability, slower writes, vulnerable to a slow follower stalling the system. Asynchronous: the leader confirms immediately. Fast writes, but a leader crash can lose recent writes."
+    detailed: |
+      Synchronous replication makes a stronger promise — if the leader says the write committed, a copy is on the follower too. But every write pays for the slowest follower's round-trip, and a paused follower can stall all writes.
+
+      Asynchronous replication is the practical default. The leader confirms locally, ships changes in the background. If the leader crashes before the followers catch up, those last writes are lost — usually milliseconds of data, sometimes seconds.
+
+      Most production systems compromise: *semi-synchronous* — wait for at least one follower (any follower) before confirming. You get durability against single-node loss without the latency of waiting for all followers.
+    pitfalls:
+      - "Fully synchronous replication across many followers is usually a mistake. The slowest one becomes your latency floor."
+  - question: "What is 'reading your own writes' and how do you fix it?"
+    shortAnswer: "A user writes, then immediately reads — and the read goes to a follower that hasn't caught up. They see stale data and think the write failed. Fix: for that user, for a short window after writing, route reads to the leader (or a follower confirmed past the write's log position)."
+    detailed: |
+      The canonical example: user changes their profile picture, hits refresh, sees the old picture. The write succeeded. The read went to a lagging replica.
+
+      The cheap fix is read-after-write consistency: track the user's last write time, and for a short window (longer than typical replication lag) route their reads to the leader. After the window, allow reads from followers again.
+
+      More robust: track the leader's log sequence number (LSN) for the user's writes and only allow reads from followers that have caught up past that LSN. Some databases expose this natively.
+    pitfalls:
+      - "Routing all reads to the leader 'just to be safe' destroys the read scalability that was the point of replication."
+  - question: "Why is multi-leader replication so hard?"
+    shortAnswer: "Two leaders accepting writes for the same key can produce divergent histories. Resolving conflicts requires either complex merging logic, application-level decisions, or accepting that some writes get silently dropped."
+    detailed: |
+      Multi-leader is appealing — write to whichever datacenter is closest, replicate between datacenters in the background. Bad news: if two leaders accept conflicting writes for the same key (say, "name = Alice" and "name = Allison"), the system has to pick one.
+
+      Strategies: last-write-wins (uses clocks, which lie under clock skew — see Module 8). Conflict-free replicated data types (CRDTs) — clever data structures that merge automatically (sets, counters). Application callbacks — let the app decide what 'merge' means for its data.
+
+      None are universally satisfying. That's why most general-purpose databases stay leader-follower. Multi-leader is justified mainly for geo-distributed writes or offline-first apps.
+    pitfalls:
+      - "Last-write-wins is the default, the easiest to implement, and the most dangerous. It silently discards conflicting updates."
+---
+
+<TldrCallout>
+  Replication exists so a single node failure doesn't lose data, and so reads can scale. The
+  standard shape is *leader-follower*: one writer, several read-only copies, updates streamed from
+  leader to followers. The interesting decisions are about how long the leader waits before
+  confirming (synchronous vs async), how stale a follower read can be (replication lag), and what
+  happens when the leader dies (failover). Multi-leader and leaderless topologies trade simplicity
+  for availability under partition, but they import conflict resolution as a permanent problem.
+</TldrCallout>
+
+## Why we replicate
+
+Three reasons, each driving different decisions:
+
+1. **Fault tolerance.** One disk dies; the data survives because another node has a copy.
+2. **Latency.** Users in Sydney shouldn't be reading from London. Copies near the user cut round-trip time dramatically.
+3. **Read throughput.** N replicas means up to N× the read capacity. Writes don't scale this way — every write still hits every replica.
+
+The right replication topology depends on which of these matters most.
+
+## Leader-follower replication
+
+<GlossaryTerm
+  term="Leader-follower replication"
+  definition="One node accepts writes (the leader); changes are streamed to followers that serve reads. Also called master-replica or primary-secondary. The default for PostgreSQL, MySQL, MongoDB, SQL Server."
+>
+  Leader-follower replication
+</GlossaryTerm>
+is the workhorse shape. Writes go to one node. That node streams its change log to followers. Reads
+can come from any replica.
+
+It's the default because it's the simplest model that maintains a coherent global write order. There's no question about what 'happened first' — the leader's log decides.
+
+The risk is the leader. If it dies, the system needs a _failover_ — elect a new leader from the followers, redirect clients. During the transition, there's a real risk of split-brain (two writeable leaders, divergent data). Robust failover requires consensus, which we'll meet in Module 8.
+
+## Synchronous vs async replication
+
+<GlossaryTerm
+  term="Synchronous replication"
+  definition="The leader waits for one or more followers to acknowledge the write before confirming to the client. Stronger durability — the write is on at least two nodes when 'success' is returned. Latency is bounded by the slowest acknowledging follower."
+>
+  Synchronous replication
+</GlossaryTerm>
+makes a strong promise: when the leader says the write committed, it's on at least one follower too.
+The cost is latency — every write pays for a round-trip to a follower — and the operational risk
+that a slow follower stalls all writes.
+
+<GlossaryTerm
+  term="Asynchronous replication"
+  definition="The leader confirms the write immediately and ships it to followers in the background. Fast writes, but recent writes can be lost if the leader crashes before followers catch up."
+>
+  Asynchronous replication
+</GlossaryTerm>
+is faster and the practical default. The leader commits locally and acknowledges; followers catch up
+when they catch up. The risk: a leader crash can lose the most recent writes.
+
+The standard compromise is _semi-synchronous_ — wait for at least one follower, doesn't matter which, before confirming. You get single-node-failure durability without bounded waiting on all followers.
+
+## Replication lag and the 'reading your own writes' problem
+
+<GlossaryTerm
+  term="Replication lag"
+  definition="The delay between a write committing on the leader and that write being visible on a follower. Usually milliseconds, but can spike to seconds or minutes under load. Async replication has it by definition."
+>
+  Replication lag
+</GlossaryTerm>
+is the gap between leader and follower. Usually tiny. Sometimes seconds. Either way, it has
+consequences for the user experience.
+
+<WorkedExample title="The profile picture that won't change">
+
+**The problem.** Alice updates her profile picture. The write goes to the leader and succeeds. The page refreshes, and the new picture should appear.
+
+**The naive approach.** Reads go to any follower, round-robined for load balancing. Alice's refresh hits a follower that hasn't yet received the change.
+
+**Why it breaks.** Alice sees the old picture. She tries again — the page refresh might hit the leader this time, or another follower. The picture flickers between old and new. She thinks the app is broken.
+
+**The real solution.** Track when a user wrote last. For a window after writing (longer than typical replication lag, say 30 seconds), route their reads to the leader. After the window, reads can return to followers.
+
+**The tradeoff.** Routing recent-writers to the leader costs leader read throughput, but only for the user who just wrote. The alternative — guaranteeing reads from a sufficiently-up-to-date follower — requires the database to expose log positions, which not all do.
+
+</WorkedExample>
+
+<SDReplicationLag />
+
+## Multi-leader replication
+
+<GlossaryTerm
+  term="Multi-leader replication"
+  definition="Multiple nodes accept writes for the same data and replicate among themselves. Useful for multi-datacenter setups where local writes matter and for offline-first apps. The cost: write conflicts, which require explicit resolution."
+>
+  Multi-leader
+</GlossaryTerm>
+puts a writeable leader in each datacenter (or even on each user's device). Local writes feel
+snappy; cross-datacenter replication happens in the background.
+
+The cost is conflicts. If a user updates their name in datacenter A while another writer (or the same user on a different device) updates it in datacenter B, the system has two writes claiming to be authoritative. Strategies:
+
+- **Last-write-wins.** Compare timestamps; later one wins. Easy, but relies on clocks (Module 8 will explain why this is dangerous).
+- **CRDTs** (conflict-free replicated data types). Data structures that merge deterministically — counters, sets, OR-sets. Mathematically clean, restrict the operations available.
+- **Application callbacks.** Let the app decide what 'merge' means for a given object. The most flexible, the most error-prone.
+
+Multi-leader is the right answer for collaborative editing (Google Docs, Figma) and offline-first mobile apps, where local writes during disconnection are non-negotiable. It's the wrong answer for most server-side systems where a single coordinated leader is simpler.
+
+## Leaderless replication
+
+<GlossaryTerm
+  term="Leaderless replication"
+  definition="No designated leader. Clients write to many replicas in parallel and read from many, using quorums to decide what's current. Pioneered by Amazon's Dynamo, used in Cassandra and Riak."
+>
+  Leaderless replication
+</GlossaryTerm>
+removes the leader entirely. Writes go to multiple replicas in parallel. Reads also go to multiple
+replicas, and the freshest answer wins.
+
+With N replicas, you pick W (write quorum) and R (read quorum). If W + R > N, every read sees the latest write — that's the _quorum_ guarantee. Cassandra defaults to N=3, W=2, R=2.
+
+The appeal: no single point of failure, no failover dance, write-availability under node failure. The cost: eventual consistency by default (reads may see stale data if quorums aren't tight enough), and concurrent writes from different clients can conflict the same way multi-leader does — with the same resolution choices.
+
+## What this means in practice
+
+For most application backends, leader-follower with semi-sync replication and read-after-write routing is the right starting point. It's simple, well-understood, and the failure modes are documented.
+
+Multi-leader and leaderless are specialized — geo-distributed writes, collaborative editing, extremely high availability under partition. They're not 'better'; they're paying a different price.
+
+<InlineQuiz
+  question="Your system has one leader and three followers replicating asynchronously. The leader crashes. Which is the most accurate statement?"
+  options={[
+    { text: "No data is lost — followers always have everything." },
+    {
+      text: "Writes that hadn't reached any follower at crash time are lost. Synchronous replication trades latency to prevent this.",
+      correct: true,
+    },
+    { text: "The system is now consistent but unavailable." },
+    { text: "Followers vote to elect a new leader automatically." },
+  ]}
+  explanation="Asynchronous replication means the leader confirms writes locally before followers acknowledge — so the last few milliseconds (sometimes seconds) of writes may not have reached anyone else when the leader died. Those writes are gone unless you recover the leader's disk. Synchronous replication prevents this by waiting for at least one follower to ack each write; the cost is latency on every write. Automatic election requires explicit consensus (Raft, ZooKeeper) — it doesn't happen for free."
+/>
+
+<PitfallsCallout
+  items={[
+    "Treating replicas as backups. A bad write replicates to all of them.",
+    "Routing every read to the leader 'just to be safe' — defeats the throughput gain.",
+    "Choosing multi-leader because the topology looks elegant. Conflict resolution is the hard part.",
+    "Last-write-wins conflict resolution. It's the default and the most dangerous — relies on clocks that lie.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 5.

@@ -1,0 +1,205 @@
+---
+title: "Data models and query languages"
+description: "Relational, document, graph — three ways to shape the same data. The fit depends on the relationships, not the buzzwords."
+track: system-design
+trackLabel: "System Design Foundations"
+module: data-models
+moduleLabel: "Module 2 · Data Models & Query Languages"
+lesson: data-models-and-query-languages
+lessonCode: "S2.1"
+estMinutes: 50
+prereqs:
+  - "S1.1 Reliability, scalability, and maintainability"
+objectives:
+  - "Contrast the relational and document data models and explain the impedance mismatch."
+  - "Identify when many-to-one and many-to-many relationships push you out of the document model."
+  - "Describe when a graph model is the right answer and when it's overkill."
+  - "Distinguish declarative (SQL) from imperative (MapReduce) query languages."
+pitfalls:
+  - "Choosing 'NoSQL' as if it were one thing. Document, key-value, column-family, and graph DBs solve different problems."
+  - "Picking a document store for highly connected data and then reinventing joins in application code."
+  - "Believing relational schemas are inherently rigid. Modern PostgreSQL handles JSON, arrays, and ad-hoc fields well."
+importantQuestions:
+  - question: "What is the object-relational impedance mismatch?"
+    shortAnswer: "Applications model data as nested objects with lists and sub-objects. Relational schemas store it as flat tables with foreign keys. Translating between the two requires either an ORM or a lot of hand-written glue, and the seams leak."
+    detailed: |
+      Imagine a resume: one user, many jobs, each job with many bullet points, each user with many skills. Object-style, that's a tree. Relational-style, it's five tables with foreign keys and joins.
+
+      The ORM tries to hide the mismatch — but the abstractions leak. Eager-vs-lazy loading, N+1 query problems, dirty-checking semantics, transaction boundaries — every nontrivial app eventually drops into raw SQL when the ORM gets in the way.
+
+      Document models reduce the mismatch by storing the whole tree as one document. That works well when the access pattern matches (load one profile at a time) and badly when you need to query across documents.
+    pitfalls:
+      - "ORMs make impedance mismatch invisible, not absent. The bugs surface as performance problems."
+  - question: "When does a document model lose to a relational model?"
+    shortAnswer: "When you need many-to-one or many-to-many relationships across documents. Documents are good at trees, bad at graphs. The moment you start storing IDs that point at other documents, you've reinvented joins — but without the database's help."
+    detailed: |
+      Documents nest naturally — a resume contains its jobs, a blog post contains its comments. That's a one-to-many relationship within a single aggregate.
+
+      Many-to-one and many-to-many fight the model. Say every user lists a `region` as a string. To rename "Greater London" → "London", you'd have to update every user document. The relational answer is a `regions` table and a foreign key, so the name lives in one place. Without joins, you can't do that cleanly in a document store — you end up with either denormalized duplicates or application-side joins.
+
+      That's why "schemaless" document stores accumulate hidden coupling over time. Schema doesn't disappear; it migrates from the database to the application code, where it's harder to enforce.
+    pitfalls:
+      - "If you find yourself doing N+1 lookups to fill in references, the document model is the wrong fit."
+  - question: "When does a graph model earn its keep?"
+    shortAnswer: "When the natural questions are about traversal: 'find paths from A to B', 'people within N hops', 'shortest route through this network'. Relational DBs can answer these but the SQL is awkward and the query planner struggles past 2–3 hops."
+    detailed: |
+      Graph models — Neo4j, Datomic, RDF stores — treat nodes and edges as first-class. Friend-of-friend queries become single statements: `MATCH (me)-[:FRIEND*1..3]-(other) RETURN other` (Cypher).
+
+      The relational equivalent is a chain of self-joins, which the query planner doesn't optimize well. Worse, the number of joins is fixed in SQL — you can't write "1 to 3 hops" without UNIONing three queries.
+
+      The threshold is roughly: if your data is highly connected and traversal-shaped queries dominate, go graph. If your data is mostly tabular and only occasionally connected, stay relational with a few self-joins.
+    pitfalls:
+      - "Graph databases are also tricky operationally — they don't scale out as neatly as relational shards."
+  - question: "Declarative vs imperative query languages — what's the practical difference?"
+    shortAnswer: "Declarative (SQL) says what you want; the database figures out how. Imperative (MapReduce, application loops) says how to get it. Declarative wins because the planner can optimize and parallelize behind the scenes."
+    detailed: |
+      A SQL query is a description of the answer. The query optimizer decides whether to use an index, join order, hash vs merge join, and so on — and can change those decisions when the data changes shape, without you rewriting the query.
+
+      An imperative loop in application code locks in a strategy. You wrote a for-loop that scans one table; if a better algorithm exists, you'd have to rewrite. MapReduce is imperative in the same way — the user supplies the map and reduce functions, and shuffle/sort/locality is the only part the system controls.
+
+      That's why modern data-warehouse stacks (BigQuery, Snowflake, Spark SQL) re-converged on declarative SQL even after MapReduce became famous. Less code, more optimization, faster execution.
+    pitfalls:
+      - "Don't equate 'declarative' with 'always faster'. A bad query plan can be slower than a hand-written loop — but you can usually fix it with hints or indexes."
+  - question: "What's wrong with calling it all 'NoSQL'?"
+    shortAnswer: "'NoSQL' lumps together four very different families — document, key-value, column-family, and graph — that solve different problems and have different tradeoffs. The label tells you almost nothing."
+    detailed: |
+      MongoDB (document), Redis (key-value), Cassandra (wide-column), Neo4j (graph) all carry the NoSQL flag, but a Mongo-shaped problem and a Cassandra-shaped problem are barely related. Worse, NoSQL is sometimes treated as a synonym for "schemaless" or "scalable", which it isn't — many relational systems are schemaless at the column level (JSON columns) and many NoSQL systems require careful schema design.
+
+      The book prefers naming the data model directly. "Document store" tells you something. "NoSQL" is a marketing label.
+    pitfalls:
+      - "If a colleague says 'let's use NoSQL', the right follow-up is 'which kind, and why?'"
+---
+
+<TldrCallout>
+  Three big shapes of data model dominate: *relational* (tables + foreign keys + joins, great for
+  many-to-many), *document* (nested JSON aggregates, great when the unit of access is a whole tree),
+  and *graph* (nodes + edges, great when traversal is the dominant query). The fit is decided by the
+  shape of the *relationships* in your data, not by the database's marketing.
+</TldrCallout>
+
+## The relational model and what it does well
+
+<GlossaryTerm
+  term="Relational model"
+  definition="Data organized into tables (relations), each row a tuple, with relationships expressed via foreign keys and queried via joins. The 'NoSQL' wave didn't kill it — it sharpened it. Most production systems still pick relational by default."
+>
+  The relational model
+</GlossaryTerm>
+has been the default since the 1980s for good reason. Joins, foreign keys, and constraints capture
+the common case — data with many-to-many relationships, evolving requirements, and a need for ad-hoc
+queries the developer didn't predict.
+
+The strength is that SQL is _declarative_. You describe the answer; the optimizer figures out indexes, join order, and execution. The same query keeps working as the data grows and indexes change.
+
+## The object-relational mismatch
+
+Applications model data as objects with nested lists and sub-objects. Relational schemas store it as flat tables. The book calls the gap the
+
+<GlossaryTerm
+  term="Impedance mismatch"
+  definition="The friction of translating between application objects (nested, tree-shaped) and relational rows (flat, normalized). ORMs hide it but don't remove it — the leaks show up as N+1 queries, slow joins, and surprising lazy-loading behavior."
+>
+  impedance mismatch
+</GlossaryTerm>
+.
+
+Consider a resume: one person, many jobs, each with several responsibilities; many skills, several certifications. Object-style, it's a tree. Relational-style, it's a person table, jobs table, responsibilities table, skills table, certifications table — joined together every time you load a profile.
+
+<AnalogyCallout>
+  The impedance mismatch is like buying flat-pack furniture every time you sit down. The pieces are
+  the right pieces; assembly is just always there. The document model proposes you keep the chair
+  assembled in storage.
+</AnalogyCallout>
+
+## The document model
+
+<GlossaryTerm
+  term="Document model"
+  definition="Data stored as self-contained nested documents (typically JSON or BSON). Strong for one-to-many relationships within an aggregate; weak for many-to-many across aggregates. MongoDB, CouchDB, DynamoDB document mode."
+>
+  Document databases
+</GlossaryTerm>
+keep the whole tree assembled. A user profile is one document. Loading it is one read, no joins.
+Schema can vary per document — different users might have different fields.
+
+The document model shines when:
+
+- The natural unit of access is a whole document (load my profile, save my order)
+- Relationships are mostly contained within the document
+- The schema needs to evolve fluidly without coordinated migrations
+
+It fights you when:
+
+- You need many-to-one relationships (every user has a `region`, you want to rename the region in one place)
+- Queries cross documents (aggregate orders by region across all users)
+- Multiple consumers need different views of the same data
+
+The book's slogan: documents are great for _trees_ and bad for _graphs_.
+
+## The graph model
+
+<GlossaryTerm
+  term="Graph model"
+  definition="Data as a set of nodes connected by edges, with properties on both. Optimized for traversal queries — friend-of-friend, shortest path, transitive closure — that are painful in SQL."
+>
+  Graph databases
+</GlossaryTerm>
+treat connectedness as the first-class shape. Nodes are entities; edges are relationships, also with
+properties. Languages like Cypher (Neo4j) and SPARQL (RDF) make multi-hop traversal a single line.
+
+Use cases: social networks, recommendation engines, knowledge graphs, fraud detection. If your natural questions look like "find all people I'm connected to within 3 hops" or "what's the shortest path between these two entities", graph is the right model.
+
+The tradeoff: graph databases scale out less cleanly than partitioned relational systems, and their tooling is less mature. Don't reach for them unless the access pattern justifies it.
+
+## Pick the model
+
+<SDDataModelPicker />
+
+<WorkedExample title="A LinkedIn-style profile, three ways">
+
+**Relational.** Five tables — `users`, `jobs`, `skills`, `certifications`, `regions`. To load one profile, the application issues a query that joins all five. Region names live in one place; renaming "Greater London" is one row update.
+
+**Document.** One JSON blob per user. Loading is a single read. Renaming a region requires either denormalization (store `region_id`, look up the name elsewhere — which is reinventing the join) or updating every user document.
+
+**Graph.** Users as nodes, "worked at" and "has skill" as edges. Loading one profile is over-engineered. But "find people who worked at companies I worked at and share three of my skills" — that's two lines of Cypher and intractable SQL.
+
+**The tradeoff.** Relational wins for cross-cutting reports and consistency. Document wins for whole-profile loads and schema flexibility. Graph wins for connection-shaped queries. Real LinkedIn uses all three — relational for billing, document-flavored stores for profile reads, graph for recommendations.
+
+</WorkedExample>
+
+## Declarative vs imperative query languages
+
+<GlossaryTerm
+  term="Declarative query language"
+  definition="A language that says what answer you want; the database decides how to compute it. SQL is the canonical example. The query optimizer can change strategies as data grows without you rewriting the query."
+>
+  Declarative
+</GlossaryTerm>
+languages let the engine pick the execution plan — which index, which join order, which algorithm.
+Imperative (MapReduce, application loops) freezes the strategy at write time. Declarative wins more
+often than not, because the optimizer sees runtime statistics you don't, and because the same query
+can be parallelized without code changes.
+
+This is part of why MapReduce (the imperative API) was supplanted by SQL-on-Spark and BigQuery — same backing infrastructure, declarative interface, the planner does the work.
+
+<InlineQuiz
+  question="A startup stores user profiles where each user has a variable number of skills, jobs, and certifications. They want each profile loaded as one unit. Which data model fits best?"
+  options={[
+    { text: "Relational — they'll want joins eventually." },
+    { text: "Document — the aggregate matches the access pattern.", correct: true },
+    { text: "Graph — profiles are nodes." },
+    { text: "Key-value — store the profile under user_id." },
+  ]}
+  explanation="The dominant access pattern is 'load my profile' — one read, the whole tree. Document model maps directly. Relational works but introduces joins for what should be one read. Graph is overkill since profiles aren't deeply interconnected. Key-value is a degenerate document store with no querying — fine if you never need to ask 'all users with skill X', but document gives you that flexibility."
+/>
+
+<PitfallsCallout
+  items={[
+    "Reaching for a document store, then inventing application-side joins. That's a sign the model is wrong.",
+    "Picking a graph database for tabular data. The operational cost will outweigh the query convenience.",
+    "Treating 'NoSQL' as a single category. It's four families with different tradeoffs.",
+    "Underestimating the relational model. Modern Postgres handles JSON columns, arrays, and ad-hoc schemas gracefully.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 2.

@@ -1,0 +1,205 @@
+---
+title: "Reliability, scalability, and maintainability"
+description: "The three properties every data-intensive application is judged by. What they mean, where each one fails, and why averages lie about latency."
+track: system-design
+trackLabel: "System Design Foundations"
+module: reliability
+moduleLabel: "Module 1 · Reliability, Scalability & Maintainability"
+lesson: reliability-scalability-maintainability
+lessonCode: "S1.1"
+estMinutes: 50
+prereqs: []
+objectives:
+  - "Define data-intensive vs. compute-intensive applications and explain why the distinction matters."
+  - "Distinguish reliability, scalability, and maintainability and give a concrete failure mode for each."
+  - "Classify faults as hardware, software, or human and pick a mitigation that fits the category."
+  - "Read latency numbers correctly — p50 vs p95 vs p99 — and explain why averages are misleading."
+  - "Walk through Twitter's fan-out-on-write vs fan-out-on-read tradeoff and explain when each wins."
+pitfalls:
+  - "Treating 'reliability' and 'availability' as synonyms. Availability is one component of reliability."
+  - "Quoting average latency. The average is the metric no user actually experiences."
+  - "Assuming scaling means 'bigger machine'. Vertical scaling is rarely the answer at the scales the book targets."
+  - "Calling a system 'fault tolerant' without naming which faults it tolerates."
+importantQuestions:
+  - question: "What's the difference between a fault and a failure?"
+    shortAnswer: "A fault is a component deviating from spec — a disk corrupting a sector, a developer pushing a bad config. A failure is the whole system no longer providing its service. Fault tolerance means faults don't become failures."
+    detailed: |
+      Kleppmann is precise about this. A fault is local — one component misbehaving. A failure is global — users notice. A reliable system contains faults so they don't propagate into failures.
+
+      That framing changes what you build. You can't prevent every fault; you can engineer the system so faults are absorbed (replication, retries, idempotency) before they reach the user. Netflix's Chaos Monkey deliberately injects faults so the team is forced to design containment paths.
+    pitfalls:
+      - "Targeting 'zero faults' is the wrong goal. Faults are continuous; the goal is no user-visible failures."
+  - question: "Why do percentiles like p99 matter more than averages?"
+    shortAnswer: "The slowest 1% of requests is often the user experience that decides whether the product feels fast. Averages get pulled down by fast requests and hide a long tail."
+    detailed: |
+      Imagine 1000 requests, 990 take 5ms, 10 take 4000ms. Average is ~45ms. The 990 fast users feel a fast site. The 10 slow users feel a broken site — and on a logged-in customer page, they may also be your most valuable users (they have the most data, more rows to join, more shopping cart history).
+
+      Amazon's classic finding was that p99.9 latency improvements moved revenue measurably. p99.9 is the latency every customer eventually hits — even fast users get unlucky once in a thousand requests. Tail latency is also self-reinforcing under load: queues build, and slow becomes slower.
+    pitfalls:
+      - "Reporting average latency in dashboards is the single most common observability mistake."
+      - "Cutting p50 doesn't always cut p99 — they have different root causes."
+  - question: "Twitter's fan-out problem: what changed when they scaled?"
+    shortAnswer: "At small scale, computing each user's home timeline on read (joining tweets + follows) was cheap. At large scale, reads dominated writes by ~100×, so they precomputed timelines on write — until celebrities made write fan-out explode."
+    detailed: |
+      The naive approach (fan-out on read): when a user opens their feed, query 'all tweets by people I follow, ordered by time, limit 100'. Cheap to write a tweet (1 insert), expensive to read a feed (a big join).
+
+      The optimization (fan-out on write): when someone tweets, push that tweet into a precomputed feed for every follower. Now reads are cheap (one lookup), writes are expensive (write-amplification proportional to follower count).
+
+      At Twitter scale, reads outnumber writes ~100:1, so fan-out on write wins on aggregate — except for celebrities with 30M followers, where every tweet triggers 30M writes. Twitter ran a hybrid: fan-out on write for normal users, fan-out on read for celebrities, merged at read time.
+
+      This is the book's canonical example of describing load with the right parameter. 'Tweets per second' is the wrong number; 'follower fan-out distribution' is closer to what determines architecture.
+    pitfalls:
+      - "Don't pick fan-out on read or write as universally correct — the answer depends on read:write ratio and fan-out distribution."
+  - question: "What's the difference between scaling up and scaling out?"
+    shortAnswer: "Up = bigger single machine. Out = more machines in parallel. Beyond modest sizes, scaling up costs nonlinearly and hits hardware ceilings; scaling out forces the system to be distributed (which is hard, but unbounded)."
+    detailed: |
+      Vertical scaling is seductive because nothing about the application has to change — you swap in a beefier box. It works until you hit the largest box your vendor sells, or until the per-CPU cost grows faster than linear. Most data-intensive systems out-scale single boxes within their first few years.
+
+      Horizontal scaling is the inevitable destination, but it imports the distributed-systems tax: replication, partitioning, consensus, network partitions. The rest of this course is essentially about how to pay that tax cheaply.
+    pitfalls:
+      - "Reaching for distribution before measuring whether vertical scaling buys you another 12 months is a common over-engineering mistake."
+  - question: "What does 'maintainability' actually mean in practice?"
+    shortAnswer: "Three properties: operability (ops can do their job), simplicity (engineers can understand it), and evolvability (you can change it without rewriting). Most systems fail on evolvability first."
+    detailed: |
+      The book breaks maintainability into three sub-goals. Operability is everything that makes the system tractable to run — good monitoring, clear runbooks, predictable behavior under stress. Simplicity is fighting accidental complexity (the kind you didn't have to introduce). Evolvability is the ability to change the system as requirements change — schema migrations, deprecating endpoints, swapping storage engines.
+
+      Evolvability is what kills products silently. Code becomes so tangled that the team's velocity drops; small changes take weeks; new hires take months to be productive. Most legacy-rewrite projects are evolvability failures, not performance failures.
+    pitfalls:
+      - "Optimizing for performance at the cost of clarity is a long-term loss in nearly every case."
+---
+
+<TldrCallout>
+  Every data-intensive application is graded on three properties: *reliability* (does it keep
+  working when things go wrong?), *scalability* (does it keep working as load grows?), and
+  *maintainability* (can the team keep changing it without breaking it?). Each one has specific
+  failure modes and specific design moves. The next seven modules are essentially detailed playbooks
+  for the three.
+</TldrCallout>
+
+## What "data-intensive" means
+
+<GlossaryTerm
+  term="Data-intensive application"
+  definition="A system whose main challenges come from the amount, complexity, or rate of change of its data — not from raw CPU. Most modern applications are data-intensive: storing user data, replicating it, querying it, keeping it correct as it changes."
+>
+  Data-intensive applications
+</GlossaryTerm>
+are systems whose hardest problems are about *data* — storing it, fetching it, replicating it,
+keeping it correct under concurrent change. They're contrasted with *compute-intensive* systems
+(numerical simulations, video encoding) where CPU is the bottleneck. Almost every application you'll
+build in the 2020s is data-intensive.
+
+The implication: building one well doesn't mean writing tight loops. It means picking the right database, encoding, and replication strategy — and accepting that the hardest problems will surface at the boundaries between systems.
+
+## The three pillars
+
+### Reliability
+
+<GlossaryTerm
+  term="Reliability"
+  definition="The system continues to provide its service correctly, even when things go wrong. Not the same as availability — a reliable system tolerates faults so they don't become user-visible failures."
+>
+  Reliability
+</GlossaryTerm>
+is about surviving things going wrong. Kleppmann is precise about the vocabulary: a *fault* is a
+component deviating from spec; a *failure* is the system no longer providing its service. The goal
+isn't zero faults — those are inevitable. The goal is no failures.
+
+There are three flavors of fault the book asks you to budget for:
+
+- **Hardware faults.** Disks die. Memory corrupts. Power supplies fail. At small scale they're rare. At fleet scale you lose multiple components a day. The standard response is redundancy (replicated storage, multiple availability zones).
+- **Software errors.** A leap-second triggers a kernel bug. A memory leak slowly fills RAM. A runaway query monopolizes the database. These are nastier than hardware faults because they're _correlated_ — one trigger takes down many machines at once.
+- **Human errors.** A developer pushes the wrong config. A DBA runs a migration during business hours. The book is blunt: humans are the leading source of outages. Design systems where the easy path is the safe path.
+
+<SDFaultFinder />
+
+### Scalability
+
+<GlossaryTerm
+  term="Scalability"
+  definition="The ability of a system to cope with increased load. 'Scalable' is meaningless without naming the load parameter — is the system scaling to handle more users, more data, more requests per second, longer connections? Different parameters drive different architectures."
+>
+  Scalability
+</GlossaryTerm>
+is not a property a system has — it's a question you ask: *as some specific load parameter grows,
+how does the system's performance change?* "Scalable" without a load parameter is marketing.
+
+The book's classic load-description example is Twitter. Two operations dominate: posting a tweet (~5k writes/sec average, ~12k peak) and viewing the home timeline (~300k reads/sec). The right parameter to describe load isn't just throughput — it's the _fan-out distribution_: how many followers does each user have? That number drives the architectural choice.
+
+<WorkedExample title="Twitter's fan-out tradeoff">
+
+**The problem.** When a user opens their home timeline, they should see the most recent tweets from everyone they follow.
+
+**The naive approach (fan-out on read).** Store tweets in one table. When a user requests their feed, join tweets against follows: `SELECT * FROM tweets WHERE author IN (SELECT followee FROM follows WHERE follower = me) ORDER BY time DESC LIMIT 100`. Tweets are cheap to write. Feeds are expensive to read.
+
+**Why it breaks.** Reads happen 100× more than writes. Every feed load triggers a giant join. The database cracks under read load.
+
+**The real solution (fan-out on write).** When you tweet, push the tweet into a precomputed timeline for each of your followers. Now reads are a single lookup. Writes are expensive — write-amplification proportional to follower count.
+
+**The tradeoff.** Fan-out on write trades write cost for read cost, which is correct on average. But Justin Bieber has 30 million followers. Every tweet becomes 30 million writes, often clustered in seconds. Twitter ended up _hybrid_ — fan-out on write for normal users, fan-out on read for celebrities, merged at the timeline assembly step.
+
+</WorkedExample>
+
+### Maintainability
+
+<GlossaryTerm
+  term="Maintainability"
+  definition="The ability of the team to keep the system running, understandable, and modifiable as it ages. Made up of operability (running it), simplicity (understanding it), and evolvability (changing it)."
+>
+  Maintainability
+</GlossaryTerm>
+is the property that's hardest to feel until it's gone. The book splits it into three sub-goals:
+*operability* (the ops team can do their job — good monitoring, clear runbooks, predictable
+behavior), *simplicity* (you fight accidental complexity), and *evolvability* (you can change the
+system without rewriting it).
+
+Most legacy-rewrite projects are evolvability failures, not performance failures. The original team made local choices that, compounded, made the system rigid. The job of architecture is to keep changes cheap years later.
+
+## Percentiles: why averages lie
+
+<GlossaryTerm
+  term="Percentile (p99)"
+  definition="The value below which a given fraction of measurements fall. p99 latency = 99% of requests are faster than this; 1% are slower. p99.9 is the same with three nines. Percentiles describe tail behavior, which averages hide."
+>
+  Percentiles
+</GlossaryTerm>
+are the only honest way to talk about latency. Consider 1000 requests where 990 take 5ms and 10 take
+4000ms. The *average* latency is 45ms — a number no user experienced. The p50 (median) is 5ms
+(fast). The p99 is somewhere in the slow tail (broken-feeling). Different users live in different
+parts of the distribution.
+
+The book repeats Amazon's finding: improvements to p99.9 latency moved revenue measurably. p99.9 is the tail every customer eventually hits — even fast users get unlucky once in a thousand requests, and the slow requests are disproportionately important users (more data, more cart history, more joins). Always quote tail percentiles.
+
+<AnalogyCallout>
+  Latency is like rainfall. Saying "it rained an average of 4mm this month" is useless if all 120mm
+  fell in three hours one afternoon. The flood damage doesn't care about the average — it cares
+  about the peak.
+</AnalogyCallout>
+
+## What this means in practice
+
+When you read a postmortem, ask: which pillar failed? When you pick a database, ask: which load parameter dominates? When you set up monitoring, never plot the average — always plot p50, p95, and p99 together.
+
+The rest of this course is a tour through specific techniques the book uses to defend the three pillars: data models, storage engines, encoding, replication, partitioning, transactions, and distributed-systems primitives. Each one is a tool for buying back reliability, scalability, or maintainability at a different layer of the stack.
+
+<InlineQuiz
+  question="Your service has 5ms average latency over the last hour. Your p99 is 4,000ms. Which is the most reasonable next step?"
+  options={[
+    { text: "Celebrate — the average is excellent." },
+    { text: "Investigate what makes the slowest 1% of requests slow.", correct: true },
+    { text: "Switch to a faster programming language." },
+    { text: "Buy a bigger server." },
+  ]}
+  explanation="The average is dominated by the fast path; it hides a long tail. The p99 says one in a hundred requests is taking 4 seconds — that's almost certainly your most valuable customers having a broken experience. Tail latency rarely comes from CPU; it comes from queueing, lock contention, GC pauses, slow queries, or unfortunate cache misses. Profile the slow requests first."
+/>
+
+<PitfallsCallout
+  items={[
+    "Reporting average latency. Always quote p50, p95, p99.",
+    "Calling a system 'fault tolerant' without saying which faults it tolerates.",
+    "Optimizing fan-out on write for celebrities without checking the cost.",
+    "Treating maintainability as something you'll get to later. It's the property the team feels every day.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 1.

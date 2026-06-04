@@ -1,0 +1,190 @@
+---
+title: "Case study: Consistent hashing in Riak and Cassandra"
+description: "How Dynamo-derived systems make rebalancing cheap. The ring, virtual nodes, and why adding capacity doesn't require coordinated downtime."
+track: system-design
+trackLabel: "System Design Foundations"
+module: partitioning
+moduleLabel: "Module 6 · Partitioning"
+lesson: riak-consistent-hashing-case-study
+lessonCode: "S6.2"
+estMinutes: 30
+prereqs:
+  - "S6.1 Partitioning: splitting data across machines"
+objectives:
+  - "Explain the consistent-hashing ring and why it minimizes data movement on rebalancing."
+  - "Describe virtual nodes (vnodes) and how they fix load-balance asymmetries."
+  - "Compare consistent hashing with fixed-partition-count strategies."
+  - "Trace a request from the client to the owning partition through routing."
+pitfalls:
+  - "Confusing 'consistent hashing' with the consistency in CAP. Same word, different concept."
+  - "Skipping vnodes. A bare ring with N physical nodes has terrible load balance at small N."
+  - "Assuming consistent hashing eliminates hot spots. It doesn't — it spreads keys evenly but does nothing for a single hot key."
+importantQuestions:
+  - question: "What problem does consistent hashing solve?"
+    shortAnswer: "Naive `hash(key) mod N` partitioning moves nearly every key when N changes (adding or removing a node). Consistent hashing limits movement to only the keys near the changed boundary — typically 1/N of the data."
+    detailed: |
+      With `hash(key) mod N`, almost every key changes which shard it lands on when N changes. For a billion-key dataset, that means moving nearly a billion keys to add one node — operationally a non-starter.
+
+      Consistent hashing places both nodes and keys on a ring (the hash space, treated as a circle). Each key is owned by the next node clockwise. When you add a node, it claims its arc of the ring — only the keys in that arc move, from one neighbor.
+
+      The result: 1/N of keys move when N changes. Same when removing a node. Cluster size changes don't trigger global reshuffles.
+    pitfalls:
+      - "The 1/N guarantee is for keys, not for traffic. A hot key still creates a hot shard."
+  - question: "Why are virtual nodes (vnodes) necessary?"
+    shortAnswer: "With one ring position per physical node, the load balance is statistically uneven at small N — some nodes get much bigger arcs than others. vnodes give each physical node many positions on the ring, smoothing out the imbalance."
+    detailed: |
+      A bare ring with N=3 nodes might give one node 50% of the keys, another 30%, and the third 20% just by where their hash positions landed. That's miserable load balance.
+
+      vnodes fix this: each physical node owns, say, 256 ring positions. The law of large numbers takes over — across 256 random positions per node, each physical node ends up with very close to 1/N of the keys. Rebalancing is also smoother: adding a node now means migrating ~256 small arcs, each from a different existing node, spreading the migration cost.
+
+      Riak uses 64 vnodes per node by default; Cassandra uses 256 (configurable via `num_tokens`).
+    pitfalls:
+      - "Too many vnodes per node means more metadata and slower repair operations. Too few means worse balance. The defaults are reasonable starting points."
+  - question: "How does this compare to fixed partition count?"
+    shortAnswer: "Fixed-count systems (Riak's bucket option, Elasticsearch, Couchbase) create many more partitions than nodes upfront, then map partitions to nodes. Adding a node moves whole partitions between nodes; the key→partition map never changes. Simpler operationally but caps cluster size at the chosen partition count."
+    detailed: |
+      In a fixed-count system, you might create 1024 partitions on day one with 10 nodes. Each node owns 100 partitions or so. Adding an 11th node migrates ~100 whole partitions from existing nodes to the new one. The hash function (key → partition) is stable; only the partition → node assignment changes.
+
+      The simplicity: rebalancing is whole-partition migration, not per-key relocation. You can size partitions for the unit-of-migration you want.
+
+      The catch: you can't have more nodes than partitions. Set the count too low and growth is capped; too high and per-partition overhead bloats. Most systems pick a few thousand partitions, which supports decent growth.
+    pitfalls:
+      - "Picking 1024 partitions for a system that will grow to 10,000 nodes is a mistake you can't easily undo."
+  - question: "How does a client know which node owns a key?"
+    shortAnswer: "Three styles: smart client (the driver caches the partition map and routes directly), coordinator/proxy (the client talks to any node, which forwards to the owner), and gossip-based redirect (any node responds, redirecting if it doesn't own the key). Cassandra uses smart clients; HBase uses coordinators."
+    detailed: |
+      Smart-client routing minimizes hops: the driver knows the ring topology and sends each request directly to the owning replica. Cassandra's drivers maintain the topology via the gossip protocol.
+
+      Coordinator-style: the client picks any node; that node forwards. One extra hop but simpler clients. MongoDB's mongos, HBase's region servers.
+
+      Redirect: the client picks any node; if it's not the owner, it returns a redirect with the right address. Riak used to support this. Extra round trip, simple to implement.
+
+      The topology map is the critical piece — kept up to date via gossip or a central coordinator (ZooKeeper for HBase).
+    pitfalls:
+      - "Stale routing maps cause requests to bounce between nodes until they update. Cache invalidation matters."
+  - question: "What's the limit of consistent hashing — what doesn't it fix?"
+    shortAnswer: "Hot keys. Consistent hashing distributes keys evenly, but a single celebrity key still maps to one partition. The hot-shard problem requires application-level intervention (salting, caching, hybrid models) regardless of partitioning strategy."
+    detailed: |
+      Partitioning algorithms work on the key space; they don't know about traffic. A celebrity user's hash maps to one ring position, on one node. Even with perfect vnode distribution, that one user's traffic hammers their node.
+
+      Mitigations are application-level: salt the key (split one logical key into N partitions, fan out reads), cache aggressively, or change the data model (Twitter's hybrid fan-out, where celebrities take a different path entirely).
+
+      No partitioning scheme solves this. The book is explicit: hot spots from a single key are an application architecture problem, not a partitioning algorithm problem.
+    pitfalls:
+      - "Counting on a 'better hash function' to fix hot keys. No hash function can split one key across nodes."
+---
+
+<TldrCallout>
+  Naive sharding by `hash(key) mod N` moves nearly all the data when N changes. Consistent hashing —
+  a ring of hash positions with each key owned by the next node clockwise — limits movement to about
+  1/N of the data. Virtual nodes give each physical node many ring positions, smoothing load
+  balance. The combination is what makes Dynamo-style systems (Riak, Cassandra, DynamoDB) add
+  capacity without coordinated downtime. It doesn't solve hot keys — that's an architecture problem,
+  not an algorithm problem.
+</TldrCallout>
+
+## The naive problem
+
+`hash(key) mod N` is the obvious scheme. Take a key, hash it, modulo by the number of nodes, you have the owning node.
+
+It works perfectly until N changes. Add one node: nearly every key gets a new `mod N+1` value. The cluster has to reshuffle billions of keys. Network saturates. Service degrades. The migration takes hours or days.
+
+That's a non-starter at scale. Adding capacity has to be a routine, non-disruptive operation.
+
+## The ring
+
+<GlossaryTerm
+  term="Consistent hashing"
+  definition="A partitioning scheme that places nodes and keys on a hash ring (the hash space treated as a circle). Each key is owned by the next node clockwise. Adding or removing a node moves only the keys in the affected arc — about 1/N of the dataset — rather than reshuffling everything."
+>
+  Consistent hashing
+</GlossaryTerm>
+treats the hash space as a circle. Hash a node's identifier; that's its ring position. Hash a key;
+that's its position. The key is owned by the next node clockwise.
+
+Adding a node: it hashes to some position on the ring, and takes ownership of the arc between itself and the previous node clockwise. Only keys in that arc move — from one neighbor. Roughly 1/N of the data, not all of it.
+
+Removing a node: its arc passes to the next clockwise neighbor. Only the dead node's data has to be repaired — and replication has already placed it on adjacent nodes anyway.
+
+## Virtual nodes
+
+A bare ring has a problem: with three nodes positioned randomly, one might own 50% of the arc, another 30%, another 20%. Load balance is awful at small N.
+
+<GlossaryTerm
+  term="Virtual node (vnode)"
+  definition="A trick where each physical node owns many positions on the consistent-hashing ring (e.g., 256). The law of large numbers smooths out load distribution and spreads rebalancing across many small arcs. Used by Cassandra, Riak, and most production Dynamo derivatives."
+>
+  Virtual nodes
+</GlossaryTerm>
+fix this. Each physical node claims many ring positions — Cassandra's `num_tokens` defaults to 256.
+Each vnode owns a tiny arc. Across 256 random positions per node, the law of large numbers gives
+every physical node almost exactly 1/N of the keys.
+
+vnodes also smooth rebalancing. Adding a node now means inheriting 256 small arcs from 256 different vnodes (often on different existing physical nodes). The migration is parallel and incremental, not serialized.
+
+## Replication on the ring
+
+Replication overlays on partitioning. With N=3 replicas (the Dynamo default), a key is stored on the owning node _and_ the next two nodes clockwise. If one node dies, the data is still available on its neighbors.
+
+This is also what makes rebalancing safe: when a vnode moves, the new owner can serve reads as soon as it catches up from one of the replicas. There's no window where the data is unreachable.
+
+## Routing
+
+<WorkedExample title="A read from client to data, end to end">
+
+**The client.** A Cassandra Java driver. It maintains a cached topology of the cluster, including every node and its vnode positions.
+
+**The query.** `SELECT * FROM users WHERE id = 'abc'`.
+
+**The route.** The driver hashes 'abc', looks up the owning vnode in its topology cache, finds the three replicas (the owner + 2 clockwise neighbors). It picks one (often the closest by latency) and sends the request directly.
+
+**The path.** Single hop. No coordinator forwarding. If the chosen replica is slow or down, the driver tries the next one — speculative execution can even send to multiple in parallel.
+
+**The topology refresh.** Nodes gossip topology changes every few seconds. New nodes appear; failed nodes disappear. The driver's cached map is updated on a heartbeat. Stale-map requests get redirected and the cache is updated.
+
+**The point.** Smart routing makes per-request overhead minimal. The complexity is in the driver and the gossip protocol, not the data path.
+
+</WorkedExample>
+
+## The hot-key limit
+
+Consistent hashing distributes _keys_ evenly. It does nothing for traffic concentration on a single key. A celebrity user's identifier hashes to one ring position, owned by one node (and its replicas). That node carries the celebrity's traffic regardless of how perfectly the rest of the ring is balanced.
+
+This is a property of the _workload_, not the algorithm. No hashing scheme can split one key across nodes — by definition, two requests for the same key need to find the same data. Mitigations are application-level: salt the key (split logically into N sub-keys with fan-out on read), cache aggressively, or change the data model (the Twitter hybrid).
+
+Kleppmann is direct about this in Chapter 6: skewed workloads need skew-aware design, not algorithmic magic.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea   | How it shows up here                                                     |
+| --------------------- | ------------------------------------------------------------------------ |
+| Hash partitioning     | Consistent hashing is its production form                                |
+| Rebalancing cost      | Reduced from "move all keys" to "move 1/N keys"                          |
+| Hot spot problem      | Acknowledged and pushed to the application layer                         |
+| Routing options       | Smart client (Cassandra) vs coordinator (HBase) vs redirect (older Riak) |
+| Fixed partition count | An alternative architecture with different operational tradeoffs         |
+
+<InlineQuiz
+  question="A Cassandra cluster with 4 nodes uses `num_tokens = 256`. The operator adds a 5th node. Approximately how much data moves?"
+  options={[
+    { text: "All data — the partition function changed." },
+    {
+      text: "About 1/5 of the data, moving from the existing 4 nodes to the new one, spread across many small vnode migrations.",
+      correct: true,
+    },
+    { text: "About half the data." },
+    { text: "No data moves — vnodes prevent rebalancing." },
+  ]}
+  explanation="Consistent hashing ensures that adding a node moves only the keys in the arcs the new node claims — roughly 1/N (here 1/5) of the data. With 256 vnodes per physical node, the new node inherits 256 small arcs, each from a different existing vnode. That means the migration is parallel: 256 simultaneous small streams, not one big one. Per-node load impact is also smoothed, since every existing node contributes a little, instead of one neighbor giving up half its data. This is exactly the property that lets Dynamo-style clusters scale capacity online."
+/>
+
+<PitfallsCallout
+  items={[
+    "Confusing the 'consistency' in consistent hashing with the C in CAP. They're unrelated.",
+    "Using num_tokens = 1 (no vnodes). Cluster balance suffers and rebalancing serializes.",
+    "Expecting consistent hashing to fix hot keys. It distributes keys, not traffic.",
+    "Forgetting to redeploy clients when topology changes — stale topology maps cause request bouncing.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 6 (consistent hashing pp. 203–204; Dynamo-style partitioning pp. 203–207).

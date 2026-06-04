@@ -1,0 +1,177 @@
+---
+title: "Case study: LinkedIn profiles and Espresso"
+description: "The resume that drives Chapter 2. Why LinkedIn went from a relational profile store to a document-oriented one — and where they kept the joins."
+track: system-design
+trackLabel: "System Design Foundations"
+module: data-models
+moduleLabel: "Module 2 · Data Models & Query Languages"
+lesson: linkedin-profiles-case-study
+lessonCode: "S2.2"
+estMinutes: 30
+prereqs:
+  - "S2.1 Data models and query languages"
+objectives:
+  - "Trace the resume example from the book through three data models."
+  - "Explain why LinkedIn picked a document model for profiles and where they kept relational structure."
+  - "Name the operational pressures that pushed Espresso's design (read latency, schema evolution, scale)."
+  - "Identify which queries on a profile graph reveal the limits of the document model."
+pitfalls:
+  - "Assuming 'document' means 'everything goes in one document'. Real systems pick aggregate boundaries carefully."
+  - "Forgetting that LinkedIn also runs a graph database (for connections) alongside the document store."
+importantQuestions:
+  - question: "Why is a LinkedIn profile a textbook fit for a document model?"
+    shortAnswer: "The dominant access pattern is 'load one profile'. Profiles are self-contained trees — jobs, skills, certifications, education — that don't need to join across users for typical reads. Document model collapses the load into one read."
+    detailed: |
+      In a relational schema, a profile fans out across many tables: `users`, `positions`, `educations`, `skills`, `endorsements`. Loading the profile is a join of all of them, and that join happens on every page view.
+
+      In a document model, the whole profile is one nested JSON document. One key, one read, no join. Schema can vary per user — some have certifications, some don't — without sparse columns or join tables.
+
+      The fit only works because the access pattern is profile-centric. If LinkedIn's main query were "find everyone with skill X who worked at company Y", the document model would be a worse fit.
+    pitfalls:
+      - "If your access pattern is cross-document analytics, the document model becomes painful — that's why LinkedIn also runs a separate analytics warehouse."
+  - question: "What does LinkedIn use besides the document store?"
+    shortAnswer: "A graph database for the social connection graph (who's connected to whom), a search index (Galene/Elasticsearch-like) for full-text and faceted queries, and a data warehouse for analytics. Espresso is one component among several, each shaped by its access pattern."
+    detailed: |
+      The book's point isn't 'document model wins'. It's 'different access patterns want different stores, and a real product uses several'.
+
+      LinkedIn's profile reads → Espresso (document). 'People you may know' → graph traversal over the connection graph. 'Search for engineers in Seattle' → inverted index (search engine). 'How many users joined this week' → ETL into a warehouse like Pinot or Snowflake.
+
+      Each store is sized and tuned for its workload. They're kept in sync via Kafka — write to Espresso, emit a change event, fan out to the other systems.
+    pitfalls:
+      - "Treating one database as the answer for everything leads to bad performance on at least one access pattern."
+  - question: "How did schema evolution shape Espresso's design?"
+    shortAnswer: "Profile fields change constantly — new sections, deprecated fields, internationalization. The schema has to evolve without downtime or coordinated deploys. Espresso uses Avro with a schema registry, the same approach LinkedIn uses for its Kafka pipelines."
+    detailed: |
+      LinkedIn ships profile changes weekly. Adding a new section (skills assessments, video introductions) means new fields. Removing or renaming fields has to work while billions of older documents already exist.
+
+      Avro fits this beautifully — schema travels separately, readers tolerate unknown fields, optional fields get defaults. The schema registry enforces compatibility before a producer can publish a new schema version.
+
+      The same machinery powers the Kafka pipelines that fan profile changes out to other systems. One schema technology, end-to-end.
+    pitfalls:
+      - "Avro without a schema registry is a footgun — you need the registry to enforce compatibility rules."
+  - question: "Where does the document model start to feel rigid?"
+    shortAnswer: "Cross-profile queries. 'All users who worked at company X and have skill Y' touches every document. You either denormalize into a search index (LinkedIn does), maintain a separate graph (LinkedIn does), or accept slow scatter/gather (LinkedIn avoids)."
+    detailed: |
+      Document stores excel at single-aggregate reads. They struggle at queries that cross aggregates. Many-to-many relationships — who worked where, who endorsed whom — don't live nicely inside any single profile document.
+
+      LinkedIn's answer is to maintain those views separately: a search index for facet queries, a graph for connection traversals, derived stores fed by Kafka from the Espresso source-of-truth. The document store doesn't have to answer those queries; the right system does.
+    pitfalls:
+      - "Don't bolt scatter/gather onto a document store. Build the right index, even if it's a separate system."
+  - question: "What does this tell you about picking a data model in general?"
+    shortAnswer: "Pick by the dominant access pattern, accept that secondary patterns will need a different store, and use change-data-capture (Kafka) to keep them in sync. The polyglot persistence approach beats forcing one model to do everything."
+    detailed: |
+      The DDIA framing in Chapter 2 leads here. Each model has a sweet spot. Real systems land in *polyglot persistence* — a primary store optimized for the dominant write/read pattern, plus derived stores optimized for secondary queries, plus a streaming layer that propagates changes.
+
+      That sounds expensive. It is. The payoff is that every query is served by the system best suited to it, and the architecture stays comprehensible — each store has one job.
+    pitfalls:
+      - "Polyglot persistence is operational complexity. Smaller teams should resist it until forced by access-pattern pain."
+---
+
+<TldrCallout>
+  LinkedIn's profile system is the canonical document-model success story in Chapter 2. The resume —
+  many jobs, many skills, many certifications — was a textbook fit for an aggregate-shaped store.
+  But the *system* isn't just Espresso. The same data feeds a graph database (connections), a search
+  index (people search), and a warehouse (analytics), all kept in sync via Kafka. The lesson isn't
+  'use documents'; it's 'pick a store per access pattern and stream changes between them'.
+</TldrCallout>
+
+## The data, shaped three ways
+
+The book opens Chapter 2 with the resume. A profile has:
+
+- One user
+- Many positions (each with start/end dates, employer, description)
+- Many education entries
+- Many skills, with optional endorsements
+- One or more contact info entries
+- Possibly certifications, languages, recommendations
+
+**Relational:** ~7 tables. Loading a profile is a 7-table join. Schema is rigid — adding "language proficiency" needs a coordinated migration. Foreign keys give you referential integrity for things like the user's current employer ID.
+
+**Document:** one JSON document per user. Load = one read. New fields = just write them. Variability across users (some have publications, most don't) is natural.
+
+**Graph:** users and companies as nodes, "worked at" and "studied at" as edges. Wildly powerful for traversals ("paths between me and a target person"). Total overkill for "load my profile".
+
+LinkedIn chose the document model for profiles. They kept relational and graph systems for the queries each was best at.
+
+## Espresso
+
+<GlossaryTerm
+  term="Espresso"
+  definition="LinkedIn's document-oriented online data store. Built to serve user-facing reads of profile-shaped data at scale with low latency. Stores documents addressed by primary key; supports secondary indexes; uses Avro for schema with a registry."
+>
+  Espresso
+</GlossaryTerm>
+is the production system LinkedIn built when off-the-shelf options didn't fit. The constraints:
+
+- **Latency budget:** profile reads must complete well within a page-load budget. Single-digit milliseconds.
+- **Scale:** hundreds of millions of profiles, billions of reads per day.
+- **Evolution:** the schema changes constantly. New fields ship weekly.
+- **Source of truth:** other systems (search, graph, warehouse) derive from it.
+
+Espresso stores documents addressed by primary key (member ID). Reads are single-document. Writes are local; replication is asynchronous. Schemas are versioned via Avro and a schema registry.
+
+## The change-data-capture spine
+
+The single most important architectural choice isn't the document model — it's that _every write to Espresso emits a Kafka event_. That event is the contract between Espresso and every other system that needs the data.
+
+<WorkedExample title="A profile update flows through the system">
+
+**The write.** A user adds a new skill. The mobile app calls a profile-update service. The service writes the new skill to Espresso (one document update). Espresso commits and acknowledges.
+
+**The propagation.** Espresso emits a change event onto a Kafka topic. The schema is Avro, validated against the registry.
+
+**The consumers.**
+
+- The search-index pipeline consumes the event and updates its inverted index, so "people with skill X" now includes this user.
+- The graph store consumes the event and updates the user's skill edges.
+- The data warehouse consumes the event and lands a row for analytics.
+
+**The cost.** Each consumer is eventually consistent — it lags Espresso by milliseconds to seconds. That's a feature, not a bug: it lets each system size for its own load and recover independently without affecting the source of truth.
+
+**The lesson.** The document model is the front door. The streaming spine is what makes a single primary store viable in a complex product.
+
+</WorkedExample>
+
+## Where the document model starts to hurt
+
+Some questions don't naturally live in a single profile document:
+
+- "Everyone who worked at Stripe AND has the React skill." Cross-document, needs a search index.
+- "Shortest path between me and a target person." Cross-edge, needs a graph store.
+- "How many users updated their headline this week." Cross-time aggregation, needs a warehouse.
+
+LinkedIn's answer for each is a separate, derived system, fed by Kafka. They don't try to make Espresso answer these queries. That refusal is the architecture working as intended.
+
+## Mapping to the concept lesson
+
+| Concept lesson idea                        | How it shows up here                                                                                  |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Object-relational impedance mismatch       | Profiles are tree-shaped; documents collapse the impedance to zero                                    |
+| Many-to-one and many-to-many relationships | Connections and "worked at" relationships forced LinkedIn to _keep_ a graph store                     |
+| Pick by access pattern, not buzzword       | Espresso = profile loads. Galene = search. Graph DB = connections. Each picked for its access pattern |
+| Declarative query languages                | Espresso exposes a constrained query interface — the rich queries happen in the derived stores        |
+
+<InlineQuiz
+  question="LinkedIn stores profiles in a document store but maintains a separate graph database for connections and a search index for people search. Why not put everything in the document store?"
+  options={[
+    { text: "Document stores can't store user data." },
+    {
+      text: "Each access pattern (profile load, connection traversal, faceted search) wants a different storage shape; forcing one store to serve all of them would be slow on at least one.",
+      correct: true,
+    },
+    { text: "Avro doesn't support nested objects." },
+    { text: "The graph database is faster than the document store for everything." },
+  ]}
+  explanation="The DDIA Chapter 2 point: each data model excels at its native access pattern. A document store loads aggregates fast and answers cross-document queries badly. A graph store answers traversal queries fast and stores aggregates verbosely. A search index answers faceted queries fast and ignores everything else. LinkedIn uses all three — and Kafka in between — because that's cheaper than forcing one store to be mediocre at all three. The cost is operational complexity, paid in exchange for every query being served by the right tool."
+/>
+
+<PitfallsCallout
+  items={[
+    "Trying to make one store handle all access patterns. The slow path is what users notice.",
+    "Skipping the schema registry. Avro without one is a maintenance nightmare.",
+    "Treating Kafka as plumbing. It's the integration contract between systems.",
+  ]}
+/>
+
+> Source — Designing Data-Intensive Applications, Chapter 2 (the LinkedIn / Espresso example).
