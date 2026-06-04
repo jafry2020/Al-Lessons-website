@@ -213,7 +213,7 @@ For learning embeddings without labels (self-supervised learning, SSL), the mode
 
 For each anchor z_a in a batch, designate one positive z_p (same image under augmentation, paired image-text, etc.) and treat all other batch examples as negatives:
 
-L = -log [exp(sim(z_a, z_p) / τ) / Σ_{i in batch} exp(sim(z_a, z_i) / τ)]
+`L = -log [exp(sim(z_a, z_p) / τ) / Σ_{i in batch} exp(sim(z_a, z_i) / τ)]`
 
 τ is the temperature (typically 0.05-0.2). Lower τ sharpens the distribution; too low and gradients explode.
 

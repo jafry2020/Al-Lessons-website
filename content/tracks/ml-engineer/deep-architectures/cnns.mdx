@@ -134,7 +134,7 @@ importantQuestions:
 
 For input X ∈ ℝ^(C_in × H × W) and a learnable kernel K ∈ ℝ^(C_out × C_in × k × k):
 
-Y[c_out, h, w] = Σ\_{c_in, i, j} K[c_out, c_in, i, j] · X[c_in, h+i, w+j] + b[c_out]
+`Y[c_out, h, w] = Σ_{c_in, i, j} K[c_out, c_in, i, j] · X[c_in, h+i, w+j] + b[c_out]`
 
 That's a dot product between the kernel and a small patch of the input, summed over input channels. Slide the kernel across all positions; do that for each of C_out filters.
 

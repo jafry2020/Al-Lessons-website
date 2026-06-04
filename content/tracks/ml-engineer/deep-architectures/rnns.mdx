@@ -120,8 +120,8 @@ importantQuestions:
 A network that processes a sequence one element at a time, maintaining a hidden state that summarises history:
 
 ```
-h_t = f(h_{t-1}, x_t)
-y_t = g(h_t)
+`h_t = f(h_{t-1}, x_t)`
+`y_t = g(h_t)`
 ```
 
 Same weights at every time step. Backpropagation through time (BPTT) unrolls the network across the sequence and applies the chain rule.
@@ -136,13 +136,13 @@ In practice, vanilla RNNs lose dependencies beyond ~20 time steps. The hidden st
 
 LSTM (Hochreiter & Schmidhuber, 1997) fixed this with **gating**: a cell state c_t that flows mostly multiplication-free through time, with sigmoid gates controlling what to keep and add.
 
-| Gate            | What it controls                  |
-| --------------- | --------------------------------- |
-| Forget gate f_t | What fraction of c\_{t-1} to keep |
-| Input gate i_t  | How much new candidate to add     |
-| Output gate o_t | How much of c_t to expose as h_t  |
+| Gate              | What it controls                   |
+| ----------------- | ---------------------------------- |
+| Forget gate `f_t` | What fraction of `c_{t-1}` to keep |
+| Input gate i_t    | How much new candidate to add      |
+| Output gate o_t   | How much of c_t to expose as h_t   |
 
-The cell state update c*t = f_t ⊙ c*{t-1} + i_t ⊙ g_t is additive (mostly), so gradients don't compound multiplicatively. Sequences of hundreds of steps become trainable.
+The cell state update `c_t = f_t ⊙ c_{t-1} + i_t ⊙ g_t` is additive (mostly), so gradients don't compound multiplicatively. Sequences of hundreds of steps become trainable.
 
 GRU (Cho et al., 2014) simplifies LSTM into one fewer gate; similar performance with fewer parameters. They co-existed for years; LSTM is more common in published work.
 

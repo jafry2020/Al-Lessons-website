@@ -42,11 +42,76 @@ async function walkMdx(dir: string): Promise<string[]> {
 }
 
 async function main() {
-  // @mdx-js/mdx is pure ESM. Dynamic import from inside main() avoids tsx's
-  // top-level-ESM resolution issues from a .ts entry point.
-  const { compile: compileMdx } = (await import("@mdx-js/mdx")) as {
-    compile: (input: string) => Promise<unknown>;
+  // Force the production jsx-runtime. `next-mdx-remote/serialize` reads
+  // `process.env.NODE_ENV` to decide whether to emit `_jsx` or `_jsxDEV`
+  // calls; the `react/jsx-runtime` we provide below only has the production
+  // helpers. This matches what runs on Vercel. Cast through `string` because
+  // Next's ambient types lock `NODE_ENV` to a literal union.
+  (process.env as Record<string, string>).NODE_ENV = "production";
+
+  // ESM-only deps imported lazily inside main() to dodge tsx's top-level-ESM
+  // resolution quirks.
+  // `serialize` is what `next-mdx-remote/rsc`'s `MDXRemote` runs at request
+  // time in production. We replay that exact pipeline plus a real render so
+  // we catch the runtime failures that bare `compile` misses — specifically
+  // `{ident}` patterns that compile to a JS reference and only throw when the
+  // rendered tree is walked (e.g. `c_{t-1}` → `ReferenceError: t is not
+  // defined` in production, manifesting as a 500 on Vercel).
+  const { serialize } = (await import("next-mdx-remote/serialize")) as {
+    serialize: (
+      source: string,
+      options: { mdxOptions?: object; blockJS?: boolean },
+      rsc?: boolean
+    ) => Promise<{ compiledSource: string }>;
   };
+  const jsxRuntime = (await import("react/jsx-runtime")) as Record<string, unknown>;
+  const React = ((await import("react")) as { default: typeof import("react") }).default;
+  const { renderToStaticMarkup } = (await import("react-dom/server")) as {
+    renderToStaticMarkup: (el: unknown) => string;
+  };
+
+  // Components are stubbed with a no-op render fn. We don't care about the
+  // rendered output — we just need the function bodies to evaluate without
+  // throwing. Every component referenced from any lesson is listed here; if
+  // a new component is added to mdx-components.tsx, add it here too.
+  const NoopComponent = () => null;
+  const componentNames = [
+    "ActivationFunctions",
+    "AnalogyCallout",
+    "AttentionHeatmap",
+    "BaggingVariance",
+    "BayesCalculator",
+    "BoostingResiduals",
+    "CodeBlock",
+    "ConvolutionDemo",
+    "DecisionTreeSplit",
+    "DistributionExplorer",
+    "EntropyCalculator",
+    "FillInBlankCode",
+    "GlossaryTerm",
+    "GradientDescentHero",
+    "HintLadder",
+    "InlineQuiz",
+    "IsolationForestDemo",
+    "KMeansIterations",
+    "KnnRegions",
+    "LinearRegressionFit",
+    "LogisticBoundary",
+    "OptimizerRace",
+    "PCAProjection",
+    "PValueSimulator",
+    "PitfallsCallout",
+    "PolynomialFit",
+    "SimpsonsParadox",
+    "ThresholdSlider",
+    "TldrCallout",
+    "TokenizerDemo",
+    "WeightInitDemo",
+    "WorkedExample",
+  ];
+  const stubComponents = Object.fromEntries(
+    componentNames.map((n) => [n, NoopComponent])
+  ) as Record<string, () => null>;
 
   const files = await walkMdx(path.join(CONTENT_ROOT, "tracks"));
   if (files.length === 0) {
@@ -63,13 +128,18 @@ async function main() {
     const raw = await fs.readFile(file, "utf8");
     const { data, content: body } = matter(raw);
 
-    // Compile MDX body. Catches `<5`, unescaped `{x: y}` in prose, malformed
-    // JSX nesting — all of which compile cleanly via `next build` (which uses
-    // SSR / `force-dynamic`) but explode at runtime when MDXRemote runs in
-    // production. We compile here so CI fails before merge instead of letting
-    // these reach Vercel.
+    // Serialize + render the MDX body the way the runtime does. Catches:
+    //  - parse errors (`<5` parsed as JSX, malformed `<GlossaryTerm>` nesting)
+    //  - runtime errors (`{ident}` in prose → JS reference → ReferenceError)
+    // Both classes ship as a clean `next build` but explode at request time.
     try {
-      await compileMdx(body);
+      const { compiledSource } = await serialize(body, { mdxOptions: {}, blockJS: false }, true);
+      const fullScope = { opts: jsxRuntime, frontmatter: {} };
+      const fn = Reflect.construct(Function, Object.keys(fullScope).concat(compiledSource));
+      const Content = (fn.apply(fn, Object.values(fullScope)) as { default: unknown }).default as (
+        props: unknown
+      ) => unknown;
+      renderToStaticMarkup(React.createElement(Content as never, { components: stubComponents }));
     } catch (e: unknown) {
       const err = e as {
         message?: string;
@@ -82,7 +152,7 @@ async function main() {
         line !== undefined ? ` (~line ${line}${col !== undefined ? `:${col}` : ""})` : "";
       problems.push({
         file: rel,
-        message: `MDX compile error${where}: ${err.message?.slice(0, 240) ?? String(e)}`,
+        message: `MDX runtime error${where}: ${err.message?.slice(0, 240) ?? String(e)}`,
       });
     }
 
