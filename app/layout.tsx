@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
+import { Analytics } from "@vercel/analytics/next";
 import { TopNav } from "@/components/layout/TopNav";
 import { Footer } from "@/components/layout/Footer";
 import { UserMenu } from "@/components/layout/UserMenu";
@@ -70,6 +71,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <main className="flex-1">{children}</main>
           <Footer />
         </div>
+        <Analytics />
       </body>
     </html>
   );
